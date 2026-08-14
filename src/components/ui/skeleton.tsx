@@ -1,0 +1,12 @@
+import * as React from "react";
+import { cn } from "@/lib/utils";
+
+export function Skeleton({ className }: { className?: string }) {
+  return (
+    <div className={cn("animate-pulse rounded-md bg-muted", className)} aria-hidden />
+  );
+}
+
+export function SkeletonText({ className }: { className?: string }) {
+  return <Skeleton className={cn("h-3.5 w-24", className)} />;
+}
