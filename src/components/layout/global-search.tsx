@@ -7,6 +7,7 @@ import { Search } from "lucide-react";
 import { getClientServices } from "@/services";
 import type { SearchResult } from "@/types/domain";
 import { Spinner } from "@/components/ui/spinner";
+import { useSession } from "@/components/providers/session-provider";
 import { Badge } from "@/components/ui/badge";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { getErrorMessage } from "@/lib/utils";
@@ -28,6 +29,7 @@ export function GlobalSearch() {
   const [error, setError] = React.useState<string | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const router = useRouter();
+  const { business } = useSession();
   const debouncedQuery = useDebouncedValue(query, 200);
 
   React.useEffect(() => {
@@ -60,7 +62,9 @@ export function GlobalSearch() {
       setLoading(true);
       setError(null);
       try {
-        const data = await getClientServices().search.search(debouncedQuery);
+        const data = business
+          ? await getClientServices().search.search(business.id, debouncedQuery)
+          : [];
         if (active) setResults(data);
       } catch (err) {
         if (active) setError(getErrorMessage(err));
@@ -72,7 +76,7 @@ export function GlobalSearch() {
     return () => {
       active = false;
     };
-  }, [debouncedQuery]);
+  }, [debouncedQuery, business]);
 
   const grouped = React.useMemo(() => {
     const map = new Map<string, SearchResult[]>();

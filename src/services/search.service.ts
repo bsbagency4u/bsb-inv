@@ -1,87 +1,139 @@
-import type { SearchEntityType, SearchResult } from "@/types/domain";
+import type { Repositories } from "@/repositories/types";
+import type { SearchResult } from "@/types/domain";
 
-const DEMO_RECORDS: Omit<SearchResult, "href">[] = [
-  { id: "p-1", entityType: "product", title: "Cotton T-Shirt (White)", subtitle: "Garments", meta: "SKU-1001" },
-  { id: "p-2", entityType: "product", title: "Paracetamol 500mg", subtitle: "Pharmacy", meta: "SKU-1002" },
-  { id: "p-3", entityType: "product", title: "Stainless Steel Hammer", subtitle: "Hardware", meta: "SKU-1003" },
-  { id: "p-4", entityType: "product", title: "LED Monitor 24 inch", subtitle: "Electronics", meta: "SKU-1004" },
-  { id: "c-1", entityType: "customer", title: "Ramesh Traders", subtitle: "Customer", meta: "Acc #CT-001" },
-  { id: "c-2", entityType: "customer", title: "Sunrise Mart", subtitle: "Customer", meta: "Acc #CT-002" },
-  { id: "s-1", entityType: "supplier", title: "Nova Distributors", subtitle: "Supplier", meta: "Acc #SP-001" },
-  { id: "i-1", entityType: "invoice", title: "INV-1001", subtitle: "Sales invoice", meta: "₹1,250.00" },
-  { id: "i-2", entityType: "invoice", title: "INV-1002", subtitle: "Sales invoice", meta: "₹3,400.00" },
-  { id: "i-3", entityType: "purchase", title: "PO-2001", subtitle: "Purchase order", meta: "₹8,900.00" },
-  { id: "st-1", entityType: "stock", title: "Warehouse A — Cotton T-Shirt", subtitle: "Stock record", meta: "42 units" },
-];
+export interface SearchProvider {
+  entityType: SearchResult["entityType"];
+  label: string;
+  search(businessId: string, query: string): Promise<SearchResult[]>;
+}
 
 /**
- * Global search foundation. Phase 1 ships a searchable index + demo records.
- * Later phases plug real repository-backed search providers into the same
- * `SearchProvider` contract, and the command palette stays unchanged.
+ * Global search. Phase 2 wires repository-backed providers for products,
+ * customers, suppliers, invoices, purchase documents and stock. Providers are
+ * cheap filters over repository data — the command palette contract stays
+ * identical to Phase 1.
  */
-export interface SearchProvider {
-  entityType: SearchEntityType;
-  label: string;
-  search(query: string): Promise<SearchResult[]>;
-}
-
-export class DemoSearchProvider implements SearchProvider {
-  entityType: SearchEntityType;
-  label: string;
-
-  constructor(entityType: SearchEntityType, label: string) {
-    this.entityType = entityType;
-    this.label = label;
-  }
-
-  async search(query: string): Promise<SearchResult[]> {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return DEMO_RECORDS.filter((r) => r.entityType === this.entityType)
-      .filter(
-        (r) =>
-          r.title.toLowerCase().includes(q) ||
-          (r.subtitle?.toLowerCase().includes(q) ?? false) ||
-          (r.meta?.toLowerCase().includes(q) ?? false)
-      )
-      .map((r) => ({ ...r, href: buildHref(r.entityType, r.id) }));
+class ProductSearchProvider implements SearchProvider {
+  entityType = "product" as const;
+  label = "Products";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const products = await this.repos.products.listProductsForSearch(businessId, query);
+    return products.map((p) => ({
+      id: p.id,
+      entityType: "product",
+      title: p.name,
+      subtitle: p.sku ? `SKU ${p.sku}` : p.category ?? "Product",
+      meta: p.hsn ?? undefined,
+      href: `/inventory/products?highlight=${p.id}`,
+    }));
   }
 }
 
-function buildHref(entityType: SearchEntityType, id: string): string {
-  switch (entityType) {
-    case "product":
-      return `/inventory/products?highlight=${id}`;
-    case "customer":
-      return `/customers?highlight=${id}`;
-    case "supplier":
-      return `/suppliers?highlight=${id}`;
-    case "invoice":
-      return `/sales/invoices?highlight=${id}`;
-    case "purchase":
-      return `/purchase/invoices?highlight=${id}`;
-    case "stock":
-      return `/inventory/stock?highlight=${id}`;
-    default:
-      return "/dashboard";
+class CustomerSearchProvider implements SearchProvider {
+  entityType = "customer" as const;
+  label = "Customers";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const customers = await this.repos.parties.listCustomersForSearch(businessId, query);
+    return customers.map((c) => ({
+      id: c.id,
+      entityType: "customer",
+      title: c.name,
+      subtitle: "Customer",
+      meta: c.phone ?? undefined,
+      href: `/customers?highlight=${c.id}`,
+    }));
+  }
+}
+
+class SupplierSearchProvider implements SearchProvider {
+  entityType = "supplier" as const;
+  label = "Suppliers";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const suppliers = await this.repos.parties.listSuppliersForSearch(businessId, query);
+    return suppliers.map((s) => ({
+      id: s.id,
+      entityType: "supplier",
+      title: s.name,
+      subtitle: "Supplier",
+      meta: s.phone ?? undefined,
+      href: `/suppliers?highlight=${s.id}`,
+    }));
+  }
+}
+
+class InvoiceSearchProvider implements SearchProvider {
+  entityType = "invoice" as const;
+  label = "Invoices";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const invoices = await this.repos.transactions.listSalesInvoicesForSearch(businessId, query);
+    return invoices.map((i) => ({
+      id: i.id,
+      entityType: "invoice",
+      title: i.invoiceNo,
+      subtitle: "Sales invoice",
+      meta: i.customerName ?? undefined,
+      href: `/sales/invoices?highlight=${i.id}`,
+    }));
+  }
+}
+
+class PurchaseSearchProvider implements SearchProvider {
+  entityType = "purchase" as const;
+  label = "Purchase documents";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const documents = await this.repos.transactions.listPurchaseInvoicesForSearch(businessId, query);
+    return documents.map((d) => ({
+      id: d.id,
+      entityType: "purchase",
+      title: d.billNo,
+      subtitle: "Purchase invoice",
+      meta: d.supplierName ?? undefined,
+      href: `/purchase/invoices?highlight=${d.id}`,
+    }));
+  }
+}
+
+class StockSearchProvider implements SearchProvider {
+  entityType = "stock" as const;
+  label = "Stock records";
+  constructor(private repos: Repositories) {}
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
+    const records = await this.repos.products.listStockForSearch(businessId, query);
+    return records.map((r) => ({
+      id: r.productId,
+      entityType: "stock",
+      title: r.name,
+      subtitle: "Stock record",
+      meta: `${r.quantity} ${r.unit}`,
+      href: `/inventory/stock?highlight=${r.productId}`,
+    }));
   }
 }
 
 export class SearchService {
-  private providers: SearchProvider[] = [
-    new DemoSearchProvider("product", "Products"),
-    new DemoSearchProvider("customer", "Customers"),
-    new DemoSearchProvider("supplier", "Suppliers"),
-    new DemoSearchProvider("invoice", "Invoices"),
-    new DemoSearchProvider("purchase", "Purchase documents"),
-    new DemoSearchProvider("stock", "Stock records"),
-  ];
+  private providers: SearchProvider[];
 
-  async search(query: string): Promise<SearchResult[]> {
+  constructor(repos: Repositories) {
+    this.providers = [
+      new ProductSearchProvider(repos),
+      new CustomerSearchProvider(repos),
+      new SupplierSearchProvider(repos),
+      new InvoiceSearchProvider(repos),
+      new PurchaseSearchProvider(repos),
+      new StockSearchProvider(repos),
+    ];
+  }
+
+  async search(businessId: string, query: string): Promise<SearchResult[]> {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const results = await Promise.all(
-      this.providers.map((provider) => provider.search(q))
+      this.providers.map((provider) => provider.search(businessId, q))
     );
     return results.flat().slice(0, 20);
   }

@@ -2,14 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  CheckCircle2,
-  Circle,
-  LayoutDashboard,
-  Settings,
-  Store,
-  UserRound,
-} from "lucide-react";
+import { CheckCircle2, Circle, LayoutDashboard, Store } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -24,7 +17,7 @@ import { formatDate } from "@/lib/utils";
 import { getBusinessType } from "@/config/business-types";
 
 export default function DashboardPage() {
-  const { user, business, isDemo } = useSession();
+  const { business, isDemo } = useSession();
 
   const statsQuery = useQuery({
     queryKey: ["dashboard-stats", business?.id],
@@ -75,16 +68,16 @@ export default function DashboardPage() {
   const setupSteps = [
     { label: "Business profile", done: Boolean(business.name), href: "/settings/business", icon: Store },
     { label: "Business type configured", done: Boolean(business.type), href: "/settings/business", icon: Store },
-    { label: "User profile", done: Boolean(user?.fullName), href: "/profile", icon: UserRound },
-    { label: "Settings reviewed", done: true, href: "/settings", icon: Settings },
+    { label: "Products added", done: false, href: "/inventory/products", icon: Store },
+    { label: "Customers added", done: false, href: "/customers", icon: Store },
     { label: "Dashboard ready", done: true, href: "/dashboard", icon: LayoutDashboard },
   ];
 
-  const upcomingModules = [
-    { name: "Products & Inventory", phase: "Phase 2", href: "/inventory/products" },
-    { name: "Sales, Purchase & POS", phase: "Phase 3", href: "/sales/pos" },
-    { name: "GST, Reports & Permissions", phase: "Phase 4", href: "/reports" },
-    { name: "Offline, Sync & Backup", phase: "Phase 5", href: "/settings/backup" },
+  const nextSteps = [
+    { name: "Add products & stock", phase: "Inventory", href: "/inventory/products" },
+    { name: "Record your first sale", phase: "Sales", href: "/sales/invoices" },
+    { name: "Track a purchase", phase: "Purchase", href: "/purchase/invoices" },
+    { name: "Review reports", phase: "Insights", href: "/reports" },
   ];
 
   return (
@@ -100,16 +93,6 @@ export default function DashboardPage() {
       />
 
       <div className="space-y-6 p-6">
-        {stats.isDemo ? (
-          <Alert variant="info" title="Placeholder metrics">
-            <p>
-              These figures are demo placeholders so the dashboard layout is ready.
-              Real transaction data will connect here automatically in Phase 2/3 —
-              no redesign needed.
-            </p>
-          </Alert>
-        ) : null}
-
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {cards.map((card) => (
             <StatCard key={card.label} {...card} />
@@ -120,7 +103,7 @@ export default function DashboardPage() {
           <Card>
             <CardHeader>
               <CardTitle>Setup checklist</CardTitle>
-              <CardDescription>Phase 1 foundation status.</CardDescription>
+              <CardDescription>Get your workspace ready to sell.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-1">
               {setupSteps.map((step) => (
@@ -142,8 +125,8 @@ export default function DashboardPage() {
                     {step.label}
                   </span>
                   <span className="ml-auto">
-                    <Badge variant={step.done ? "success" : "warning"}>
-                      {step.done ? "Done" : "Action"}
+                    <Badge variant={step.done ? "success" : "secondary"}>
+                      {step.done ? "Done" : "Next"}
                     </Badge>
                   </span>
                 </a>
@@ -153,20 +136,20 @@ export default function DashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Coming in later phases</CardTitle>
+              <CardTitle>Get started</CardTitle>
               <CardDescription>
-                These modules appear in navigation but are not functional yet.
+                Jump into the modules that matter for your business.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-1">
-              {upcomingModules.map((module) => (
+              {nextSteps.map((step) => (
                 <a
-                  key={module.name}
-                  href={module.href}
+                  key={step.name}
+                  href={step.href}
                   className="flex items-center justify-between gap-3 rounded-md px-2 py-2 transition-colors hover:bg-accent"
                 >
-                  <span className="text-sm font-medium text-foreground">{module.name}</span>
-                  <Badge variant="secondary">{module.phase}</Badge>
+                  <span className="text-sm font-medium text-foreground">{step.name}</span>
+                  <Badge variant="secondary">{step.phase}</Badge>
                 </a>
               ))}
               <p className="px-2 pt-2 text-xs text-muted-foreground">

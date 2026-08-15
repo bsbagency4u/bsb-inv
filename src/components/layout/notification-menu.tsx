@@ -10,35 +10,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
+import { getClientServices } from "@/services";
+import { useSession } from "@/components/providers/session-provider";
 import type { NotificationItem } from "@/types/domain";
-import { cn, formatDateTime } from "@/lib/utils";
-
-const DEMO_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: "n-1",
-    title: "Low stock: Cotton T-Shirt (White)",
-    description: "Only 4 units remaining. Restock soon.",
-    type: "warning",
-    timestamp: new Date().toISOString(),
-    read: false,
-  },
-  {
-    id: "n-2",
-    title: "Business profile incomplete",
-    description: "Add your GSTIN to finish Phase 1 setup.",
-    type: "info",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-    read: false,
-  },
-  {
-    id: "n-3",
-    title: "Welcome to BSB StockFlow",
-    description: "Your workspace is ready.",
-    type: "success",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
-    read: true,
-  },
-];
+import { cn, formatDateTime, getErrorMessage } from "@/lib/utils";
 
 const TYPE_STYLES: Record<NotificationItem["type"], string> = {
   info: "text-info",
@@ -55,7 +31,32 @@ const TYPE_ICONS = {
 };
 
 export function NotificationMenu() {
-  const [notifications] = React.useState<NotificationItem[]>(DEMO_NOTIFICATIONS);
+  const { user, business } = useSession();
+  const [notifications, setNotifications] = React.useState<NotificationItem[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!user || !business) return;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await getClientServices().notifications.list(business.id, user.id);
+        if (active) setNotifications(data);
+      } catch (err) {
+        if (active) setError(getErrorMessage(err));
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [user, business]);
+
   const unread = notifications.filter((n) => !n.read).length;
 
   return (
@@ -78,7 +79,13 @@ export function NotificationMenu() {
         <DropdownMenuLabel>Notifications</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <div className="max-h-80 overflow-y-auto">
-          {notifications.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center px-3 py-6">
+              <Spinner className="size-5 text-muted-foreground" />
+            </div>
+          ) : error ? (
+            <p className="px-3 py-6 text-center text-sm text-destructive">{error}</p>
+          ) : notifications.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               You&apos;re all caught up.
             </p>

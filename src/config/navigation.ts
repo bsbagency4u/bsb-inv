@@ -59,29 +59,29 @@ export const NAVIGATION: NavSection[] = [
   {
     label: "Sales",
     items: [
-      { title: "POS", href: "/sales/pos", icon: ShoppingCart, phase: 3 },
-      { title: "Invoices", href: "/sales/invoices", icon: FileText, phase: 3 },
+      { title: "POS", href: "/sales/pos", icon: ShoppingCart, phase: 2 },
+      { title: "Invoices", href: "/sales/invoices", icon: FileText, phase: 2 },
       { title: "Returns", href: "/sales/returns", icon: Undo2, phase: 3 },
     ],
   },
   {
     label: "Purchase",
     items: [
-      { title: "Orders", href: "/purchase/orders", icon: ShoppingBag, phase: 3 },
-      { title: "Invoices", href: "/purchase/invoices", icon: Receipt, phase: 3 },
+      { title: "Orders", href: "/purchase/orders", icon: ShoppingBag, phase: 2 },
+      { title: "Invoices", href: "/purchase/invoices", icon: Receipt, phase: 2 },
       { title: "Returns", href: "/purchase/returns", icon: RotateCcw, phase: 3 },
     ],
   },
   {
     label: "People",
     items: [
-      { title: "Customers", href: "/customers", icon: Users, phase: 3 },
-      { title: "Suppliers", href: "/suppliers", icon: Truck, phase: 3 },
+      { title: "Customers", href: "/customers", icon: Users, phase: 2 },
+      { title: "Suppliers", href: "/suppliers", icon: Truck, phase: 2 },
     ],
   },
   {
     label: "Insights",
-    items: [{ title: "Reports", href: "/reports", icon: BarChart3, phase: 4 }],
+    items: [{ title: "Reports", href: "/reports", icon: BarChart3, phase: 2 }],
   },
   {
     label: "Account",
@@ -102,6 +102,7 @@ export const SETTINGS_NAVIGATION: NavItem[] = [
   { title: "Warehouses", href: "/settings/warehouses", icon: Warehouse },
   { title: "Notifications", href: "/settings/notifications", icon: Bell },
   { title: "Backup", href: "/settings/backup", icon: Archive },
+  { title: "Audit Log", href: "/settings/system/audit", icon: History },
   { title: "System", href: "/settings/system", icon: Settings },
 ];
 
@@ -110,4 +111,5 @@ import {
   Wallet,
   Monitor,
   Archive,
+  History,
 } from "lucide-react";

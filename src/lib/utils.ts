@@ -81,3 +81,7 @@ export function getErrorMessage(error: unknown): string {
   if (typeof error === "string") return error;
   return "An unexpected error occurred.";
 }
+
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

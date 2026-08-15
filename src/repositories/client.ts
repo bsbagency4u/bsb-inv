@@ -5,12 +5,30 @@ import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { SupabaseBusinessRepository } from "./business.repository";
 import { SupabaseProfileRepository } from "./profile.repository";
 import { SupabaseAuditRepository } from "./audit.repository";
+import { SupabaseProductRepository } from "./product.repository";
+import { SupabasePartyRepository } from "./party.repository";
+import { SupabaseTransactionRepository } from "./transaction.repository";
+import { SupabaseNotificationRepository } from "./notification.repository";
 import { LocalBusinessRepository } from "./local/business.repository";
 import { LocalProfileRepository } from "./local/profile.repository";
 import { LocalAuditRepository } from "./local/audit.repository";
+import { LocalProductRepository } from "./local/product.repository";
+import { LocalPartyRepository } from "./local/party.repository";
+import { LocalTransactionRepository } from "./local/transaction.repository";
+import { LocalNotificationRepository } from "./local/notification.repository";
 import type { Repositories } from "./types";
 
 let cached: Repositories | null = null;
+
+const buildLocal = (): Repositories => ({
+  businesses: new LocalBusinessRepository(),
+  profiles: new LocalProfileRepository(),
+  audits: new LocalAuditRepository(),
+  products: new LocalProductRepository(),
+  parties: new LocalPartyRepository(),
+  transactions: new LocalTransactionRepository(),
+  notifications: new LocalNotificationRepository(),
+});
 
 /**
  * Returns the repository set for the browser runtime.
@@ -25,21 +43,13 @@ export function getClientRepositories(): Repositories {
   if (cached) return cached;
 
   if (!isSupabaseConfigured()) {
-    cached = {
-      businesses: new LocalBusinessRepository(),
-      profiles: new LocalProfileRepository(),
-      audits: new LocalAuditRepository(),
-    };
+    cached = buildLocal();
     return cached;
   }
 
   const client = getBrowserClient();
   if (!client) {
-    cached = {
-      businesses: new LocalBusinessRepository(),
-      profiles: new LocalProfileRepository(),
-      audits: new LocalAuditRepository(),
-    };
+    cached = buildLocal();
     return cached;
   }
 
@@ -47,6 +57,10 @@ export function getClientRepositories(): Repositories {
     businesses: new SupabaseBusinessRepository(client),
     profiles: new SupabaseProfileRepository(client),
     audits: new SupabaseAuditRepository(client),
+    products: new SupabaseProductRepository(client),
+    parties: new SupabasePartyRepository(client),
+    transactions: new SupabaseTransactionRepository(client),
+    notifications: new SupabaseNotificationRepository(client),
   };
   return cached;
 }

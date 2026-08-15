@@ -123,3 +123,58 @@ export const userProfileSchema = z.object({
 });
 
 export type UserProfileValues = z.infer<typeof userProfileSchema>;
+
+export const productSchema = z.object({
+  name: z.string().trim().min(1, "Product name is required.").max(200),
+  sku: z.string().trim().optional().or(z.literal("")),
+  barcode: z.string().trim().optional().or(z.literal("")),
+  categoryId: z.string().optional().or(z.literal("")),
+  unit: z.string().trim().optional().or(z.literal("pcs")),
+  attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+  gstRate: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "GST rate cannot be negative.").max(100, "GST rate is too high."))
+    .optional(),
+  hsn: z.string().trim().optional().or(z.literal("")),
+  purchasePrice: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Purchase price cannot be negative."))
+    .optional(),
+  salePrice: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Sale price cannot be negative."))
+    .optional(),
+  mrp: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "MRP cannot be negative."))
+    .optional(),
+  lowStockThreshold: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().int().min(0, "Threshold must be a whole number."))
+    .optional(),
+});
+
+export type ProductValues = z.infer<typeof productSchema>;
+
+export const partySchema = z.object({
+  name: z.string().trim().min(1, "Name is required.").max(200),
+  phone: PHONE,
+  email: EMAIL.optional().or(z.literal("")),
+  gstin: GSTIN,
+  address: z.string().trim().optional().or(z.literal("")),
+  city: z.string().trim().optional().or(z.literal("")),
+  state: z.string().trim().optional().or(z.literal("")),
+  pincode: PINCODE,
+  openingBalance: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Opening balance cannot be negative."))
+    .optional(),
+});
+
+export type PartyValues = z.infer<typeof partySchema>;

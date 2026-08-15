@@ -10,21 +10,6 @@ export interface ModulePlaceholderConfig {
 }
 
 export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
-  "/inventory/products": {
-    title: "Products",
-    description: "The product catalogue with dynamic attributes per business type ships in Phase 2.",
-    phase: 2,
-  },
-  "/inventory/categories": {
-    title: "Categories",
-    description: "Product categories and tagging will be available with the product engine.",
-    phase: 2,
-  },
-  "/inventory/stock": {
-    title: "Stock",
-    description: "The stock engine, ledger and adjustments arrive in Phase 2.",
-    phase: 2,
-  },
   "/inventory/warehouses": {
     title: "Stores & Warehouses",
     description: "Multi-warehouse and location management ships with the stock engine.",
@@ -40,50 +25,15 @@ export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
     description: "Barcode generation and scanning support arrives in Phase 4.",
     phase: 4,
   },
-  "/sales/pos": {
-    title: "Point of Sale",
-    description: "Fast POS with counters and barcode support ships in Phase 3.",
-    phase: 3,
-  },
-  "/sales/invoices": {
-    title: "Sales Invoices",
-    description: "Invoices, GST and payment tracking arrive in Phase 3.",
-    phase: 3,
-  },
   "/sales/returns": {
     title: "Sales Returns",
     description: "Sales returns and credit notes arrive in Phase 3.",
-    phase: 3,
-  },
-  "/purchase/orders": {
-    title: "Purchase Orders",
-    description: "Purchase orders and vendor documents ship in Phase 3.",
-    phase: 3,
-  },
-  "/purchase/invoices": {
-    title: "Purchase Invoices",
-    description: "Purchase invoices and stock-in arrive in Phase 3.",
     phase: 3,
   },
   "/purchase/returns": {
     title: "Purchase Returns",
     description: "Purchase returns and debit notes arrive in Phase 3.",
     phase: 3,
-  },
-  "/customers": {
-    title: "Customers",
-    description: "Customer records, balances and history arrive in Phase 3.",
-    phase: 3,
-  },
-  "/suppliers": {
-    title: "Suppliers",
-    description: "Supplier records and purchase history arrive in Phase 3.",
-    phase: 3,
-  },
-  "/reports": {
-    title: "Reports",
-    description: "Advanced reports, GST filings and exports arrive in Phase 4.",
-    phase: 4,
   },
 };
 

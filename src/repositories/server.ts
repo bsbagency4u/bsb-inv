@@ -3,6 +3,10 @@ import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { SupabaseBusinessRepository } from "./business.repository";
 import { SupabaseProfileRepository } from "./profile.repository";
 import { SupabaseAuditRepository } from "./audit.repository";
+import { SupabaseProductRepository } from "./product.repository";
+import { SupabasePartyRepository } from "./party.repository";
+import { SupabaseTransactionRepository } from "./transaction.repository";
+import { SupabaseNotificationRepository } from "./notification.repository";
 import type { Repositories } from "./types";
 
 /**
@@ -21,5 +25,9 @@ export async function getServerRepositories(): Promise<Repositories> {
     businesses: new SupabaseBusinessRepository(client),
     profiles: new SupabaseProfileRepository(client),
     audits: new SupabaseAuditRepository(client),
+    products: new SupabaseProductRepository(client),
+    parties: new SupabasePartyRepository(client),
+    transactions: new SupabaseTransactionRepository(client),
+    notifications: new SupabaseNotificationRepository(client),
   };
 }
