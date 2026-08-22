@@ -126,9 +126,12 @@ export type UserProfileValues = z.infer<typeof userProfileSchema>;
 
 export const productSchema = z.object({
   name: z.string().trim().min(1, "Product name is required.").max(200),
+  description: z.string().trim().optional().or(z.literal("")),
   sku: z.string().trim().optional().or(z.literal("")),
   barcode: z.string().trim().optional().or(z.literal("")),
   categoryId: z.string().optional().or(z.literal("")),
+  brandId: z.string().optional().or(z.literal("")),
+  unitId: z.string().optional().or(z.literal("")),
   unit: z.string().trim().optional().or(z.literal("pcs")),
   attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   gstRate: z
@@ -157,6 +160,24 @@ export const productSchema = z.object({
     .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
     .pipe(z.number().int().min(0, "Threshold must be a whole number."))
     .optional(),
+  minStock: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().int().min(0, "Minimum stock must be a whole number."))
+    .optional(),
+  maxStock: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().int().min(0, "Maximum stock must be a whole number."))
+    .optional(),
+  reorderLevel: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().int().min(0, "Reorder level must be a whole number."))
+    .optional(),
+  trackInventory: z.boolean().optional(),
+  taxable: z.boolean().optional(),
+  productStatus: z.enum(["active", "inactive", "draft", "discontinued"]).optional(),
 });
 
 export type ProductValues = z.infer<typeof productSchema>;

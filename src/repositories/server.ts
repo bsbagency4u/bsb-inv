@@ -4,6 +4,7 @@ import { SupabaseBusinessRepository } from "./business.repository";
 import { SupabaseProfileRepository } from "./profile.repository";
 import { SupabaseAuditRepository } from "./audit.repository";
 import { SupabaseProductRepository } from "./product.repository";
+import { SupabaseInventoryRepository } from "./inventory.repository";
 import { SupabasePartyRepository } from "./party.repository";
 import { SupabaseTransactionRepository } from "./transaction.repository";
 import { SupabaseNotificationRepository } from "./notification.repository";
@@ -26,6 +27,7 @@ export async function getServerRepositories(): Promise<Repositories> {
     profiles: new SupabaseProfileRepository(client),
     audits: new SupabaseAuditRepository(client),
     products: new SupabaseProductRepository(client),
+    inventory: new SupabaseInventoryRepository(client),
     parties: new SupabasePartyRepository(client),
     transactions: new SupabaseTransactionRepository(client),
     notifications: new SupabaseNotificationRepository(client),

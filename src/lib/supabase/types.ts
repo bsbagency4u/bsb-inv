@@ -98,17 +98,92 @@ export type Category = {
   name: string;
   description: string | null;
   parent_id: string | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type Unit = {
+  id: string;
+  business_id: string;
+  name: string;
+  code: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type Brand = {
+  id: string;
+  business_id: string;
+  name: string;
+  description: string | null;
+  logo_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type Warehouse = {
+  id: string;
+  business_id: string;
+  name: string;
+  code: string;
+  address: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StockLocation = {
+  id: string;
+  business_id: string;
+  warehouse_id: string;
+  parent_id: string | null;
+  name: string;
+  code: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ProductVariant = {
+  id: string;
+  business_id: string;
+  product_id: string;
+  sku: string | null;
+  barcode: string | null;
+  attributes: Record<string, unknown>;
+  sale_price: number | null;
+  purchase_price: number | null;
+  mrp: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ProductImage = {
+  id: string;
+  business_id: string;
+  product_id: string;
+  variant_id: string | null;
+  storage_path: string;
+  url: string;
+  position: number;
+  is_primary: boolean;
+  created_at: string;
 }
 
 export type Product = {
   id: string;
   business_id: string;
   name: string;
+  description: string | null;
   sku: string | null;
   barcode: string | null;
   category_id: string | null;
+  brand_id: string | null;
+  unit_id: string | null;
   unit: string;
   attributes: Record<string, unknown>;
   gst_rate: number;
@@ -117,6 +192,12 @@ export type Product = {
   sale_price: number;
   mrp: number | null;
   low_stock_threshold: number;
+  min_stock: number;
+  max_stock: number | null;
+  reorder_level: number;
+  track_inventory: boolean;
+  taxable: boolean;
+  product_status: string;
   is_active: boolean;
   created_by: string | null;
   created_at: string;
@@ -174,8 +255,14 @@ export type StockLedger = {
   id: string;
   business_id: string;
   product_id: string;
+  variant_id: string | null;
   batch_id: string | null;
+  warehouse_id: string | null;
+  location_id: string | null;
+  to_warehouse_id: string | null;
+  to_location_id: string | null;
   change: number;
+  movement_type: string;
   reason: string;
   reference_type: string | null;
   reference_id: string | null;
@@ -187,6 +274,16 @@ export type StockLedger = {
 export type ProductStockView = {
   business_id: string;
   product_id: string;
+  quantity: number;
+  last_movement_at: string | null;
+}
+
+export type StockBalanceView = {
+  business_id: string;
+  product_id: string;
+  variant_id: string | null;
+  warehouse_id: string | null;
+  location_id: string | null;
   quantity: number;
   last_movement_at: string | null;
 }
@@ -371,6 +468,42 @@ export interface Database {
         Update: Partial<Category>;
         Relationships: [];
       };
+      units: {
+        Row: Unit;
+        Insert: Partial<Unit> & { business_id: string; name: string; code: string };
+        Update: Partial<Unit>;
+        Relationships: [];
+      };
+      brands: {
+        Row: Brand;
+        Insert: Partial<Brand> & { business_id: string; name: string };
+        Update: Partial<Brand>;
+        Relationships: [];
+      };
+      warehouses: {
+        Row: Warehouse;
+        Insert: Partial<Warehouse> & { business_id: string; name: string; code: string };
+        Update: Partial<Warehouse>;
+        Relationships: [];
+      };
+      stock_locations: {
+        Row: StockLocation;
+        Insert: Partial<StockLocation> & { business_id: string; warehouse_id: string; name: string; code: string };
+        Update: Partial<StockLocation>;
+        Relationships: [];
+      };
+      product_variants: {
+        Row: ProductVariant;
+        Insert: Partial<ProductVariant> & { business_id: string; product_id: string };
+        Update: Partial<ProductVariant>;
+        Relationships: [];
+      };
+      product_images: {
+        Row: ProductImage;
+        Insert: Partial<ProductImage> & { business_id: string; product_id: string; storage_path: string; url: string };
+        Update: Partial<ProductImage>;
+        Relationships: [];
+      };
       products: {
         Row: Product;
         Insert: Partial<Product> & { business_id: string; name: string };
@@ -453,6 +586,10 @@ export interface Database {
     Views: {
       product_stock: {
         Row: ProductStockView;
+        Relationships: [];
+      };
+      stock_balances: {
+        Row: StockBalanceView;
         Relationships: [];
       };
     };

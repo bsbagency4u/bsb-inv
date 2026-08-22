@@ -4,6 +4,8 @@ import {
   Boxes,
   Package,
   Tags,
+  Tag,
+  Scale,
   Warehouse,
   ShoppingCart,
   Receipt,
@@ -16,7 +18,6 @@ import {
   BarChart3,
   Settings,
   Store,
-  Box,
   ScanBarcode,
 } from "lucide-react";
 
@@ -45,12 +46,14 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { title: "Products", href: "/inventory/products", icon: Package, phase: 2 },
       { title: "Categories", href: "/inventory/categories", icon: Tags, phase: 2 },
+      { title: "Brands", href: "/inventory/brands", icon: Tag, phase: 2 },
+      { title: "Units", href: "/inventory/units", icon: Scale, phase: 2 },
       { title: "Stock", href: "/inventory/stock", icon: Warehouse, phase: 2 },
       {
         title: "Stores & Warehouses",
         href: "/inventory/warehouses",
-        icon: Box,
-        phase: 3,
+        icon: Store,
+        phase: 2,
       },
       { title: "Transfers", href: "/inventory/transfers", icon: Boxes, phase: 3 },
       { title: "Barcode", href: "/inventory/barcode", icon: ScanBarcode, phase: 4 },

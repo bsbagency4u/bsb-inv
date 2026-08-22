@@ -1,4 +1,5 @@
 import type {
+  Brand,
   Business,
   BusinessMember,
   Category,
@@ -7,14 +8,22 @@ import type {
   Payment,
   Product,
   ProductBatch,
+  ProductImage,
   ProductStockView,
+  ProductVariant,
   Profile,
   PurchaseInvoice,
   PurchaseOrder,
   SalesInvoice,
+  StockBalanceView,
+  StockLedger,
+  StockLocation,
   Supplier,
+  Unit,
+  Warehouse,
 } from "@/lib/supabase/types";
 import type {
+  Brand as BrandModel,
   BusinessMembership,
   BusinessProfile,
   Category as CategoryModel,
@@ -23,12 +32,19 @@ import type {
   Payment as PaymentModel,
   Product as ProductModel,
   ProductBatch as ProductBatchModel,
+  ProductImage as ProductImageModel,
   ProductStock,
+  ProductVariant as ProductVariantModel,
   PurchaseInvoice as PurchaseInvoiceModel,
   PurchaseOrder as PurchaseOrderModel,
   SalesInvoice as SalesInvoiceModel,
   SessionUser,
+  StockBalance,
+  StockLocation as StockLocationModel,
+  StockMovement,
   Supplier as SupplierModel,
+  Unit as UnitModel,
+  Warehouse as WarehouseModel,
 } from "@/types/domain";
 
 const asNumber = (value: unknown): number => {
@@ -46,8 +62,92 @@ export function mapCategory(row: Category): CategoryModel {
     name: row.name,
     description: row.description,
     parentId: row.parent_id,
+    isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function mapUnit(row: Unit): UnitModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    name: row.name,
+    code: row.code,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapBrand(row: Brand): BrandModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    name: row.name,
+    description: row.description,
+    logoUrl: row.logo_url,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapWarehouse(row: Warehouse): WarehouseModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    name: row.name,
+    code: row.code,
+    address: row.address,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapStockLocation(row: StockLocation): StockLocationModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    warehouseId: row.warehouse_id,
+    parentId: row.parent_id,
+    name: row.name,
+    code: row.code,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapProductVariant(row: ProductVariant): ProductVariantModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    productId: row.product_id,
+    sku: row.sku,
+    barcode: row.barcode,
+    attributes: (row.attributes ?? {}) as Record<string, string | number | boolean | null>,
+    salePrice: row.sale_price === null ? null : asNumber(row.sale_price),
+    purchasePrice: row.purchase_price === null ? null : asNumber(row.purchase_price),
+    mrp: row.mrp === null ? null : asNumber(row.mrp),
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapProductImage(row: ProductImage): ProductImageModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    storagePath: row.storage_path,
+    url: row.url,
+    position: asNumber(row.position),
+    isPrimary: row.is_primary,
+    createdAt: row.created_at,
   };
 }
 
@@ -56,9 +156,12 @@ export function mapProduct(row: Product): ProductModel {
     id: row.id,
     businessId: row.business_id,
     name: row.name,
+    description: row.description,
     sku: row.sku,
     barcode: row.barcode,
     categoryId: row.category_id,
+    brandId: row.brand_id,
+    unitId: row.unit_id,
     unit: row.unit,
     attributes: (row.attributes ?? {}) as Record<string, string | number | boolean | null>,
     gstRate: asNumber(row.gst_rate),
@@ -67,6 +170,12 @@ export function mapProduct(row: Product): ProductModel {
     salePrice: asNumber(row.sale_price),
     mrp: row.mrp === null ? null : asNumber(row.mrp),
     lowStockThreshold: asNumber(row.low_stock_threshold),
+    minStock: asNumber(row.min_stock),
+    maxStock: row.max_stock === null ? null : asNumber(row.max_stock),
+    reorderLevel: asNumber(row.reorder_level),
+    trackInventory: row.track_inventory,
+    taxable: row.taxable,
+    productStatus: (row.product_status ?? "active") as ProductModel["productStatus"],
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -91,6 +200,38 @@ export function mapProductStock(row: ProductStockView): ProductStock {
     productId: row.product_id,
     quantity: asNumber(row.quantity),
     lastMovementAt: row.last_movement_at,
+  };
+}
+
+export function mapStockBalance(row: StockBalanceView): StockBalance {
+  return {
+    productId: row.product_id,
+    variantId: row.variant_id,
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    quantity: asNumber(row.quantity),
+    lastMovementAt: row.last_movement_at,
+  };
+}
+
+export function mapStockMovement(row: StockLedger): StockMovement {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    batchId: row.batch_id,
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    toWarehouseId: row.to_warehouse_id,
+    toLocationId: row.to_location_id,
+    change: asNumber(row.change),
+    movementType: (row.movement_type ?? "ADJUSTMENT") as StockMovement["movementType"],
+    reason: row.reason,
+    referenceType: row.reference_type,
+    referenceId: row.reference_id,
+    notes: row.notes,
+    createdAt: row.created_at,
   };
 }
 

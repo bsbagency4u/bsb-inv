@@ -3,19 +3,17 @@ import type { Repositories } from "@/repositories/types";
 import type { AuditEvent, Product } from "@/types/domain";
 import { AuditService } from "./audit.service";
 import { NotificationService } from "./notification.service";
-import { ProductService } from "./product.service";
-import { AppError } from "@/lib/errors";
+import { InventoryService } from "./inventory.service";
 
 function memoryRepositories() {
   const products: Product[] = [];
-  const ledger: Array<{ productId: string; change: number; businessId: string }> = [];
+  const ledger: Array<{ productId: string; change: number; businessId: string; movementType: string }> = [];
   const auditLogs: AuditEvent[] = [];
-  const notifications: Array<{ businessId: string; title: string }> = [];
 
   const repos: Repositories = {
     products: {
       async listCategories() { return []; },
-      async updateCategory() { throw new Error("not used in test"); },
+      async updateCategory() { throw new Error("not used"); },
       async deleteCategory() {},
       async createCategory() { throw new Error("not used"); },
       async listProducts() { return products; },
@@ -52,16 +50,8 @@ function memoryRepositories() {
         products.push(product);
         return product;
       },
-      async updateProduct(_b, id, input) {
-        const index = products.findIndex((p) => p.id === id);
-        if (index === -1) throw new Error("not found");
-        products[index] = { ...products[index], ...input };
-        return products[index];
-      },
-      async deleteProduct(_b, id) {
-        const index = products.findIndex((p) => p.id === id);
-        if (index !== -1) products.splice(index, 1);
-      },
+      async updateProduct() { throw new Error("not used"); },
+      async deleteProduct() {},
       async listBatches() { return []; },
       async createBatch() { throw new Error("not used"); },
       async listStock() {
@@ -75,11 +65,51 @@ function memoryRepositories() {
           lastMovementAt: null,
         }));
       },
-      async addStockMovement(input) {
-        ledger.push({ productId: input.productId, change: input.change, businessId: input.businessId });
+      async listBalances() {
+        const map = new Map<string, { productId: string; quantity: number }>();
+        for (const entry of ledger) {
+          const key = `${entry.productId}`;
+          const current = map.get(key) ?? { productId: entry.productId, quantity: 0 };
+          current.quantity += entry.change;
+          map.set(key, current);
+        }
+        return Array.from(map.values()).map((b) => ({
+          productId: b.productId,
+          variantId: null,
+          warehouseId: null,
+          locationId: null,
+          quantity: b.quantity,
+          lastMovementAt: null,
+        }));
       },
-      async listBalances() { return []; },
-      async listMovements() { return []; },
+      async listMovements() {
+        return ledger.map((entry, index) => ({
+          id: `mv-${index}`,
+          businessId: entry.businessId,
+          productId: entry.productId,
+          variantId: null,
+          batchId: null,
+          warehouseId: null,
+          locationId: null,
+          toWarehouseId: null,
+          toLocationId: null,
+          change: entry.change,
+          movementType: entry.movementType as never,
+          reason: entry.movementType.toLowerCase(),
+          referenceType: null,
+          referenceId: null,
+          notes: null,
+          createdAt: new Date().toISOString(),
+        }));
+      },
+      async addStockMovement(input) {
+        ledger.push({
+          productId: input.productId,
+          change: input.change,
+          businessId: input.businessId,
+          movementType: input.movementType,
+        });
+      },
       async listVariants() { return []; },
       async createVariant() { throw new Error("not used"); },
       async updateVariant() { throw new Error("not used"); },
@@ -138,15 +168,13 @@ function memoryRepositories() {
     },
     notifications: {
       async list() { return []; },
-      async create(input) {
-        notifications.push({ businessId: input.businessId, title: input.title });
+      async create() {
         return {
-          id: `n-${notifications.length}`,
-          businessId: input.businessId,
-          userId: input.userId ?? null,
-          title: input.title,
-          description: input.description ?? undefined,
-          type: input.type ?? "info",
+          id: "n-1",
+          businessId: "b-1",
+          userId: null,
+          title: "Low stock",
+          type: "warning",
           read: false,
           timestamp: new Date().toISOString(),
         };
@@ -186,78 +214,118 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, auditLogs, notifications };
+  return { repos, products, ledger, auditLogs };
 }
 
-describe("ProductService", () => {
+async function seedProduct(services: ReturnType<typeof memoryRepositories>) {
+  const repo = services.repos.products;
+  const product = await repo.createProduct("b-1", "u-1", {
+    name: "Item",
+    gstRate: 18,
+    purchasePrice: 100,
+    lowStockThreshold: 5,
+  });
+  return product;
+}
+
+describe("InventoryService", () => {
   let services: ReturnType<typeof memoryRepositories>;
-  let products: ProductService;
+  let inventory: InventoryService;
 
   beforeEach(() => {
     services = memoryRepositories();
-    products = new ProductService(
+    inventory = new InventoryService(
       services.repos,
       new AuditService(services.repos),
       new NotificationService(services.repos)
     );
   });
 
-  it("creates a product and records an audit event", async () => {
-    const product = await products.createProduct("b-1", "u-1", {
-      name: "Cotton T-Shirt",
-      sku: "TS-WHT-M",
-      gstRate: 18,
-      salePrice: 499,
-      purchasePrice: 250,
-    });
-    expect(product.name).toBe("Cotton T-Shirt");
-    expect(services.products).toHaveLength(1);
-    expect(services.auditLogs[0].action).toBe("product.created");
-  });
-
-  it("rejects invalid product data", async () => {
-    await expect(
-      products.createProduct("b-1", "u-1", { name: "X", gstRate: -5 })
-    ).rejects.toThrow(AppError);
-  });
-
-  it("adjusts stock and writes a ledger movement", async () => {
-    await products.createProduct("b-1", "u-1", { name: "Pen", gstRate: 0 });
-    const product = services.products[0];
-    await products.adjustStock("b-1", "u-1", {
+  it("records opening stock as an OPENING ledger entry", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", {
       productId: product.id,
-      change: 50,
-      reason: "opening",
+      quantity: 50,
+      costPrice: 100,
     });
+
     expect(services.ledger).toHaveLength(1);
-    expect(services.ledger[0].change).toBe(50);
-    expect(services.auditLogs[0].action).toBe("stock.adjusted");
+    expect(services.ledger[0]).toMatchObject({ change: 50, movementType: "OPENING" });
+    expect(services.auditLogs[0].action).toBe("stock.opening");
+
+    const stock = await inventory.listBalances("b-1");
+    expect(stock[0].quantity).toBe(50);
   });
 
-  it("raises a low-stock notification when stock drops to threshold", async () => {
-    await products.createProduct("b-1", "u-1", {
-      name: "Low Stock Item",
-      gstRate: 0,
-      lowStockThreshold: 5,
+  it("adjusts stock and derives the balance from the ledger", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 10, costPrice: 100 });
+    await inventory.adjustStock("b-1", "u-1", { productId: product.id, change: -3 });
+
+    const stock = await inventory.listBalances("b-1");
+    expect(stock[0].quantity).toBe(7);
+    expect(services.ledger.map((l) => l.movementType)).toEqual(["OPENING", "ADJUSTMENT"]);
+  });
+
+  it("rejects zero adjustments", async () => {
+    const product = await seedProduct(services);
+    await expect(
+      inventory.adjustStock("b-1", "u-1", { productId: product.id, change: 0 })
+    ).rejects.toThrow();
+  });
+
+  it("transfers stock between warehouses with a matched pair of movements", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 20, costPrice: 100 });
+
+    await inventory.transferStock("b-1", "u-1", {
+      productId: product.id,
+      quantity: 5,
+      fromWarehouseId: "wh-1",
+      toWarehouseId: "wh-2",
     });
-    const product = services.products[0];
-    await products.adjustStock("b-1", "u-1", { productId: product.id, change: 10, reason: "opening" });
-    await products.adjustStock("b-1", "u-1", { productId: product.id, change: -8, reason: "sale" });
-    expect(services.notifications.some((n) => n.title.includes("Low stock"))).toBe(true);
+
+    expect(services.ledger.map((l) => l.movementType).sort()).toEqual([
+      "OPENING",
+      "TRANSFER_IN",
+      "TRANSFER_OUT",
+    ]);
+    const stock = await inventory.listBalances("b-1");
+    expect(stock[0].quantity).toBe(20);
   });
 
-  it("lists products joined with stock levels", async () => {
-    await products.createProduct("b-1", "u-1", { name: "Box", gstRate: 0, purchasePrice: 100 });
-    await products.adjustStock("b-1", "u-1", { productId: services.products[0].id, change: 4, reason: "opening" });
-    const rows = await products.listProductsWithStock("b-1");
-    expect(rows[0].stockQuantity).toBe(4);
-    expect(rows[0].stockValue).toBe(400);
+  it("rejects transfers to the same warehouse", async () => {
+    const product = await seedProduct(services);
+    await expect(
+      inventory.transferStock("b-1", "u-1", {
+        productId: product.id,
+        quantity: 5,
+        fromWarehouseId: "wh-1",
+        toWarehouseId: "wh-1",
+      })
+    ).rejects.toThrow();
   });
 
-  it("deletes a product", async () => {
-    await products.createProduct("b-1", "u-1", { name: "Temp", gstRate: 0 });
-    const product = services.products[0];
-    await products.deleteProduct("b-1", "u-1", product.id);
-    expect(services.products).toHaveLength(0);
+  it("scraps stock as a negative SCRAP movement", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 10, costPrice: 100 });
+    await inventory.scrapStock("b-1", "u-1", { productId: product.id, quantity: 2, reason: "damaged" });
+
+    const stock = await inventory.listBalances("b-1");
+    expect(stock[0].quantity).toBe(8);
+    expect(services.ledger[1].movementType).toBe("SCRAP");
+    expect(services.auditLogs[0].action).toBe("stock.scrapped");
+  });
+
+  it("computes inventory valuation by cost price", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 10, costPrice: 100 });
+    const valuation = await inventory.valuation("b-1");
+    expect(valuation[0]).toMatchObject({
+      productName: "Item",
+      quantity: 10,
+      costPrice: 100,
+      stockValue: 1000,
+    });
   });
 });

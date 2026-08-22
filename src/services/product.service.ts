@@ -11,6 +11,7 @@ import { AppError } from "@/lib/errors";
 import { productSchema, type ProductValues } from "@/lib/validation/schemas";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
+import { InventoryService } from "./inventory.service";
 
 export interface StockAdjustmentInput {
   productId: string;
@@ -18,23 +19,259 @@ export interface StockAdjustmentInput {
   reason: StockMovementReason;
   notes?: string | null;
   batchId?: string | null;
+  warehouseId?: string | null;
+  locationId?: string | null;
 }
 
 export class ProductService {
+  private inventory: InventoryService;
+
   constructor(
     private repos: Repositories,
     private audits: AuditService,
     private notifications: NotificationService
-  ) {}
+  ) {
+    this.inventory = new InventoryService(repos, audits, notifications);
+  }
 
   async listCategories(businessId: string): Promise<Category[]> {
     return this.repos.products.listCategories(businessId);
   }
 
+  async updateCategory(
+    businessId: string,
+    userId: string,
+    categoryId: string,
+    input: { name?: string; description?: string | null; parentId?: string | null; isActive?: boolean }
+  ): Promise<Category> {
+    const category = await this.repos.products.updateCategory(businessId, categoryId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "category.updated",
+      entityType: "category",
+      entityId: categoryId,
+      metadata: { name: category.name },
+    });
+    return category;
+  }
+
+  async deleteCategory(businessId: string, userId: string, categoryId: string): Promise<void> {
+    await this.repos.products.deleteCategory(businessId, categoryId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "category.deleted",
+      entityType: "category",
+      entityId: categoryId,
+    });
+  }
+
+  async listUnits(businessId: string) {
+    return this.repos.inventory.listUnits(businessId);
+  }
+
+  async createUnit(businessId: string, userId: string, input: { name: string; code: string }) {
+    const unit = await this.repos.inventory.createUnit(businessId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "unit.created",
+      entityType: "unit",
+      entityId: unit.id,
+      metadata: { name: unit.name, code: unit.code },
+    });
+    return unit;
+  }
+
+  async updateUnit(
+    businessId: string,
+    userId: string,
+    unitId: string,
+    input: { name?: string; code?: string; isActive?: boolean }
+  ) {
+    const unit = await this.repos.inventory.updateUnit(businessId, unitId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "unit.updated",
+      entityType: "unit",
+      entityId: unitId,
+      metadata: { name: unit.name },
+    });
+    return unit;
+  }
+
+  async deleteUnit(businessId: string, userId: string, unitId: string): Promise<void> {
+    await this.repos.inventory.deleteUnit(businessId, unitId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "unit.deleted",
+      entityType: "unit",
+      entityId: unitId,
+    });
+  }
+
+  async listBrands(businessId: string) {
+    return this.repos.inventory.listBrands(businessId);
+  }
+
+  async createBrand(
+    businessId: string,
+    userId: string,
+    input: { name: string; description?: string | null; logoUrl?: string | null }
+  ) {
+    const brand = await this.repos.inventory.createBrand(businessId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "brand.created",
+      entityType: "brand",
+      entityId: brand.id,
+      metadata: { name: brand.name },
+    });
+    return brand;
+  }
+
+  async updateBrand(
+    businessId: string,
+    userId: string,
+    brandId: string,
+    input: { name?: string; description?: string | null; logoUrl?: string | null; isActive?: boolean }
+  ) {
+    const brand = await this.repos.inventory.updateBrand(businessId, brandId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "brand.updated",
+      entityType: "brand",
+      entityId: brandId,
+      metadata: { name: brand.name },
+    });
+    return brand;
+  }
+
+  async deleteBrand(businessId: string, userId: string, brandId: string): Promise<void> {
+    await this.repos.inventory.deleteBrand(businessId, brandId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "brand.deleted",
+      entityType: "brand",
+      entityId: brandId,
+    });
+  }
+
+  async listVariants(businessId: string, productId?: string) {
+    return this.repos.products.listVariants(businessId, productId);
+  }
+
+  async createVariant(
+    businessId: string,
+    userId: string,
+    input: {
+      productId: string;
+      sku?: string | null;
+      barcode?: string | null;
+      attributes?: Record<string, string | number | boolean | null>;
+      salePrice?: number | null;
+      purchasePrice?: number | null;
+      mrp?: number | null;
+    }
+  ) {
+    const variant = await this.repos.products.createVariant(businessId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "variant.created",
+      entityType: "product_variant",
+      entityId: variant.id,
+      metadata: { productId: input.productId, sku: variant.sku },
+    });
+    return variant;
+  }
+
+  async updateVariant(
+    businessId: string,
+    userId: string,
+    variantId: string,
+    input: Partial<{
+      sku: string | null;
+      barcode: string | null;
+      attributes: Record<string, string | number | boolean | null>;
+      salePrice: number | null;
+      purchasePrice: number | null;
+      mrp: number | null;
+      isActive: boolean;
+    }>
+  ) {
+    const variant = await this.repos.products.updateVariant(businessId, variantId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "variant.updated",
+      entityType: "product_variant",
+      entityId: variantId,
+      metadata: { sku: variant.sku },
+    });
+    return variant;
+  }
+
+  async deleteVariant(businessId: string, userId: string, variantId: string): Promise<void> {
+    await this.repos.products.deleteVariant(businessId, variantId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "variant.deleted",
+      entityType: "product_variant",
+      entityId: variantId,
+    });
+  }
+
+  async listImages(businessId: string, productId?: string) {
+    return this.repos.products.listImages(businessId, productId);
+  }
+
+  async addImage(
+    businessId: string,
+    userId: string,
+    input: {
+      productId: string;
+      variantId?: string | null;
+      storagePath: string;
+      url: string;
+      position?: number;
+      isPrimary?: boolean;
+    }
+  ) {
+    const image = await this.repos.products.addImage(businessId, input);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "product_image.added",
+      entityType: "product_image",
+      entityId: image.id,
+      metadata: { productId: input.productId },
+    });
+    return image;
+  }
+
+  async removeImage(businessId: string, userId: string, imageId: string): Promise<void> {
+    await this.repos.products.removeImage(businessId, imageId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "product_image.removed",
+      entityType: "product_image",
+      entityId: imageId,
+    });
+  }
+
   async createCategory(
     businessId: string,
     userId: string,
-    input: { name: string; description?: string | null }
+    input: { name: string; description?: string | null; parentId?: string | null }
   ): Promise<Category> {
     if (!input.name.trim()) {
       throw AppError.validation("Category name is required.");
@@ -42,6 +279,7 @@ export class ProductService {
     const category = await this.repos.products.createCategory(businessId, {
       name: input.name.trim(),
       description: input.description || null,
+      parentId: input.parentId || null,
     });
     await this.audits.log({
       businessId,
@@ -95,9 +333,12 @@ export class ProductService {
     const data = parsed.data;
     const product = await this.repos.products.createProduct(businessId, userId, {
       name: data.name,
+      description: data.description || null,
       sku: data.sku || null,
       barcode: data.barcode || null,
       categoryId: data.categoryId || null,
+      brandId: data.brandId || null,
+      unitId: data.unitId || null,
       unit: data.unit || "pcs",
       attributes: data.attributes ?? {},
       gstRate: data.gstRate ?? 0,
@@ -106,6 +347,12 @@ export class ProductService {
       salePrice: data.salePrice ?? 0,
       mrp: data.mrp ?? null,
       lowStockThreshold: data.lowStockThreshold ?? 0,
+      minStock: data.minStock ?? 0,
+      maxStock: data.maxStock ?? null,
+      reorderLevel: data.reorderLevel ?? 0,
+      trackInventory: data.trackInventory ?? true,
+      taxable: data.taxable ?? true,
+      productStatus: data.productStatus ?? "active",
     });
 
     await this.audits.log({
@@ -135,9 +382,12 @@ export class ProductService {
     const data = parsed.data;
     const product = await this.repos.products.updateProduct(businessId, productId, {
       name: data.name,
+      description: data.description || null,
       sku: data.sku || null,
       barcode: data.barcode || null,
       categoryId: data.categoryId || null,
+      brandId: data.brandId || null,
+      unitId: data.unitId || null,
       unit: data.unit || "pcs",
       attributes: data.attributes ?? {},
       gstRate: data.gstRate ?? 0,
@@ -146,6 +396,12 @@ export class ProductService {
       salePrice: data.salePrice ?? 0,
       mrp: data.mrp ?? null,
       lowStockThreshold: data.lowStockThreshold ?? 0,
+      minStock: data.minStock ?? 0,
+      maxStock: data.maxStock ?? null,
+      reorderLevel: data.reorderLevel ?? 0,
+      trackInventory: data.trackInventory ?? true,
+      taxable: data.taxable ?? true,
+      productStatus: data.productStatus ?? "active",
     });
 
     await this.audits.log({
@@ -182,49 +438,17 @@ export class ProductService {
   }
 
   /**
-   * Records a stock movement. Changes are signed: positive = stock-in,
-   * negative = stock-out. After a negative adjustment that would drop a product
-   * at or below its low-stock threshold, a low-stock notification is raised.
+   * Records a stock movement. Delegates to the InventoryService so there is a
+   * single authoritative business-logic layer for stock calculations.
    */
   async adjustStock(businessId: string, userId: string, input: StockAdjustmentInput): Promise<void> {
-    const product = await this.repos.products.getProduct(businessId, input.productId);
-    if (!product) throw AppError.notFound("Product not found.");
-    if (!Number.isFinite(input.change) || input.change === 0) {
-      throw AppError.validation("Adjustment quantity must be non-zero.");
-    }
-
-    await this.repos.products.addStockMovement({
-      businessId,
+    await this.inventory.adjustStock(businessId, userId, {
       productId: input.productId,
-      batchId: input.batchId ?? null,
       change: input.change,
       reason: input.reason,
-      referenceType: "adjustment",
       notes: input.notes ?? null,
-      userId,
+      warehouseId: input.warehouseId ?? null,
+      locationId: input.locationId ?? null,
     });
-
-    await this.audits.log({
-      businessId,
-      userId,
-      action: "stock.adjusted",
-      entityType: "product",
-      entityId: input.productId,
-      metadata: { change: input.change, reason: input.reason, notes: input.notes },
-    });
-
-    if (input.change < 0) {
-      const stock = await this.repos.products.listStock(businessId);
-      const level = stock.find((s) => s.productId === input.productId);
-      const quantity = level?.quantity ?? 0;
-      if (product.lowStockThreshold > 0 && quantity <= product.lowStockThreshold) {
-        await this.notifications.create(businessId, {
-          title: `Low stock: ${product.name}`,
-          description: `Only ${quantity} ${product.unit} remaining (threshold ${product.lowStockThreshold}).`,
-          type: "warning",
-          href: "/inventory/stock",
-        });
-      }
-    }
   }
 }

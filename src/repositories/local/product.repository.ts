@@ -2,12 +2,18 @@ import type {
   Category,
   Product,
   ProductBatch,
+  ProductImage,
   ProductStock,
+  ProductVariant,
+  StockBalance,
+  StockMovement,
+  StockMovementType,
 } from "@/types/domain";
 import type {
   ProductCreateInput,
   ProductRepository,
   ProductUpdateInput,
+  StockMovementInput,
 } from "../product.repository";
 import { readStorage, writeStorage } from "./local-data";
 
@@ -15,12 +21,21 @@ const CATEGORIES_KEY = "demo-categories";
 const PRODUCTS_KEY = "demo-products";
 const BATCHES_KEY = "demo-batches";
 const LEDGER_KEY = "demo-stock-ledger";
+const VARIANTS_KEY = "demo-product-variants";
+const IMAGES_KEY = "demo-product-images";
 
 interface LedgerEntry {
+  id: string;
   businessId: string;
   productId: string;
+  variantId: string | null;
   batchId: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
+  toWarehouseId: string | null;
+  toLocationId: string | null;
   change: number;
+  movementType: StockMovementType;
   reason: string;
   referenceType: string | null;
   referenceId: string | null;
@@ -53,6 +68,18 @@ export class LocalProductRepository implements ProductRepository {
   private saveLedger(ledger: LedgerEntry[]): void {
     writeStorage(LEDGER_KEY, ledger);
   }
+  private readVariants(): ProductVariant[] {
+    return readStorage<ProductVariant[]>(VARIANTS_KEY, []);
+  }
+  private saveVariants(variants: ProductVariant[]): void {
+    writeStorage(VARIANTS_KEY, variants);
+  }
+  private readImages(): ProductImage[] {
+    return readStorage<ProductImage[]>(IMAGES_KEY, []);
+  }
+  private saveImages(images: ProductImage[]): void {
+    writeStorage(IMAGES_KEY, images);
+  }
 
   async listCategories(businessId: string): Promise<Category[]> {
     return this.readCategories().filter((c) => c.businessId === businessId);
@@ -69,6 +96,7 @@ export class LocalProductRepository implements ProductRepository {
       name: input.name,
       description: input.description ?? null,
       parentId: input.parentId ?? null,
+      isActive: true,
       createdAt: now,
       updatedAt: now,
     };
@@ -76,6 +104,32 @@ export class LocalProductRepository implements ProductRepository {
     all.push(category);
     this.saveCategories(all);
     return category;
+  }
+
+  async updateCategory(
+    businessId: string,
+    categoryId: string,
+    input: { name?: string; description?: string | null; parentId?: string | null; isActive?: boolean }
+  ): Promise<Category> {
+    const all = this.readCategories();
+    const index = all.findIndex((c) => c.businessId === businessId && c.id === categoryId);
+    if (index === -1) throw new Error("Category not found.");
+    all[index] = {
+      ...all[index],
+      name: input.name ?? all[index].name,
+      description: input.description === undefined ? all[index].description : input.description,
+      parentId: input.parentId === undefined ? all[index].parentId : input.parentId,
+      isActive: input.isActive ?? all[index].isActive,
+      updatedAt: new Date().toISOString(),
+    };
+    this.saveCategories(all);
+    return all[index];
+  }
+
+  async deleteCategory(businessId: string, categoryId: string): Promise<void> {
+    this.saveCategories(
+      this.readCategories().filter((c) => !(c.businessId === businessId && c.id === categoryId))
+    );
   }
 
   async listProducts(businessId: string): Promise<Product[]> {
@@ -99,9 +153,12 @@ export class LocalProductRepository implements ProductRepository {
       id: `prod-${crypto.randomUUID()}`,
       businessId,
       name: input.name,
+      description: input.description ?? null,
       sku: input.sku ?? null,
       barcode: input.barcode ?? null,
       categoryId: input.categoryId ?? null,
+      brandId: input.brandId ?? null,
+      unitId: input.unitId ?? null,
       unit: input.unit ?? "pcs",
       attributes: input.attributes ?? {},
       gstRate: input.gstRate ?? 0,
@@ -110,6 +167,12 @@ export class LocalProductRepository implements ProductRepository {
       salePrice: input.salePrice ?? 0,
       mrp: input.mrp ?? null,
       lowStockThreshold: input.lowStockThreshold ?? 0,
+      minStock: input.minStock ?? 0,
+      maxStock: input.maxStock ?? null,
+      reorderLevel: input.reorderLevel ?? 0,
+      trackInventory: input.trackInventory ?? true,
+      taxable: input.taxable ?? true,
+      productStatus: input.productStatus ?? "active",
       isActive: input.isActive ?? true,
       createdAt: now,
       updatedAt: now,
@@ -136,6 +199,9 @@ export class LocalProductRepository implements ProductRepository {
   async deleteProduct(businessId: string, productId: string): Promise<void> {
     this.saveProducts(
       this.readProducts().filter((p) => !(p.businessId === businessId && p.id === productId))
+    );
+    this.saveVariants(
+      this.readVariants().filter((v) => !(v.businessId === businessId && v.productId === productId))
     );
   }
 
@@ -182,30 +248,164 @@ export class LocalProductRepository implements ProductRepository {
     }));
   }
 
-  async addStockMovement(input: {
-    businessId: string;
-    productId: string;
-    batchId?: string | null;
-    change: number;
-    reason: string;
-    referenceType?: string | null;
-    referenceId?: string | null;
-    notes?: string | null;
-    userId?: string | null;
-  }): Promise<void> {
+  async listBalances(businessId: string, productId?: string): Promise<StockBalance[]> {
+    const balances = new Map<string, StockBalance>();
+    for (const entry of this.readLedger()) {
+      if (entry.businessId !== businessId) continue;
+      if (productId && entry.productId !== productId) continue;
+      const key = `${entry.productId}|${entry.variantId ?? ""}|${entry.warehouseId ?? ""}|${entry.locationId ?? ""}`;
+      const current = balances.get(key) ?? {
+        productId: entry.productId,
+        variantId: entry.variantId,
+        warehouseId: entry.warehouseId,
+        locationId: entry.locationId,
+        quantity: 0,
+        lastMovementAt: null,
+      };
+      current.quantity += entry.change;
+      if (!current.lastMovementAt || entry.createdAt > current.lastMovementAt) {
+        current.lastMovementAt = entry.createdAt;
+      }
+      balances.set(key, current);
+    }
+    return Array.from(balances.values());
+  }
+
+  async listMovements(businessId: string, productId?: string, limit = 100): Promise<StockMovement[]> {
+    return this.readLedger()
+      .filter((entry) => entry.businessId === businessId && (!productId || entry.productId === productId))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit)
+      .map((entry) => ({ ...entry, id: entry.id }));
+  }
+
+  async addStockMovement(input: StockMovementInput): Promise<void> {
     const ledger = this.readLedger();
     ledger.push({
+      id: `mv-${crypto.randomUUID()}`,
       businessId: input.businessId,
       productId: input.productId,
+      variantId: input.variantId ?? null,
       batchId: input.batchId ?? null,
+      warehouseId: input.warehouseId ?? null,
+      locationId: input.locationId ?? null,
+      toWarehouseId: input.toWarehouseId ?? null,
+      toLocationId: input.toLocationId ?? null,
       change: input.change,
-      reason: input.reason,
+      movementType: input.movementType,
+      reason: input.reason ?? input.movementType.toLowerCase(),
       referenceType: input.referenceType ?? null,
       referenceId: input.referenceId ?? null,
       notes: input.notes ?? null,
       createdAt: new Date().toISOString(),
     });
     this.saveLedger(ledger);
+  }
+
+  async listVariants(businessId: string, productId?: string): Promise<ProductVariant[]> {
+    return this.readVariants().filter(
+      (v) => v.businessId === businessId && (!productId || v.productId === productId)
+    );
+  }
+
+  async createVariant(
+    businessId: string,
+    input: {
+      productId: string;
+      sku?: string | null;
+      barcode?: string | null;
+      attributes?: Record<string, string | number | boolean | null>;
+      salePrice?: number | null;
+      purchasePrice?: number | null;
+      mrp?: number | null;
+    }
+  ): Promise<ProductVariant> {
+    const now = new Date().toISOString();
+    const variant: ProductVariant = {
+      id: `var-${crypto.randomUUID()}`,
+      businessId,
+      productId: input.productId,
+      sku: input.sku ?? null,
+      barcode: input.barcode ?? null,
+      attributes: input.attributes ?? {},
+      salePrice: input.salePrice ?? null,
+      purchasePrice: input.purchasePrice ?? null,
+      mrp: input.mrp ?? null,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const all = this.readVariants();
+    all.push(variant);
+    this.saveVariants(all);
+    return variant;
+  }
+
+  async updateVariant(
+    businessId: string,
+    variantId: string,
+    input: Partial<{
+      sku: string | null;
+      barcode: string | null;
+      attributes: Record<string, string | number | boolean | null>;
+      salePrice: number | null;
+      purchasePrice: number | null;
+      mrp: number | null;
+      isActive: boolean;
+    }>
+  ): Promise<ProductVariant> {
+    const all = this.readVariants();
+    const index = all.findIndex((v) => v.businessId === businessId && v.id === variantId);
+    if (index === -1) throw new Error("Variant not found.");
+    all[index] = { ...all[index], ...input, updatedAt: new Date().toISOString() };
+    this.saveVariants(all);
+    return all[index];
+  }
+
+  async deleteVariant(businessId: string, variantId: string): Promise<void> {
+    this.saveVariants(
+      this.readVariants().filter((v) => !(v.businessId === businessId && v.id === variantId))
+    );
+  }
+
+  async listImages(businessId: string, productId?: string): Promise<ProductImage[]> {
+    return this.readImages().filter(
+      (i) => i.businessId === businessId && (!productId || i.productId === productId)
+    );
+  }
+
+  async addImage(
+    businessId: string,
+    input: {
+      productId: string;
+      variantId?: string | null;
+      storagePath: string;
+      url: string;
+      position?: number;
+      isPrimary?: boolean;
+    }
+  ): Promise<ProductImage> {
+    const image: ProductImage = {
+      id: `img-${crypto.randomUUID()}`,
+      businessId,
+      productId: input.productId,
+      variantId: input.variantId ?? null,
+      storagePath: input.storagePath,
+      url: input.url,
+      position: input.position ?? 0,
+      isPrimary: input.isPrimary ?? false,
+      createdAt: new Date().toISOString(),
+    };
+    const all = this.readImages();
+    all.push(image);
+    this.saveImages(all);
+    return image;
+  }
+
+  async removeImage(businessId: string, imageId: string): Promise<void> {
+    this.saveImages(
+      this.readImages().filter((i) => !(i.businessId === businessId && i.id === imageId))
+    );
   }
 
   async listProductsForSearch(

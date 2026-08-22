@@ -7,10 +7,12 @@ import { ProfileService } from "./profile.service";
 import { DashboardService } from "./dashboard.service";
 import { SearchService } from "./search.service";
 import { ProductService } from "./product.service";
+import { InventoryService } from "./inventory.service";
 import { PartyService } from "./party.service";
 import { TransactionService } from "./transaction.service";
 import { ReportService } from "./report.service";
 import { NotificationService } from "./notification.service";
+import { StorageService } from "./storage.service";
 import { GstEngine } from "./gst.service";
 
 export interface Services {
@@ -22,6 +24,8 @@ export interface Services {
   dashboard: DashboardService;
   search: SearchService;
   products: ProductService;
+  inventory: InventoryService;
+  storage: StorageService;
   parties: PartyService;
   transactions: TransactionService;
   reports: ReportService;
@@ -35,6 +39,7 @@ function buildServices(repos: Repositories): Services {
   const profiles = new ProfileService(repos, audits);
   const notifications = new NotificationService(repos);
   const products = new ProductService(repos, audits, notifications);
+  const inventory = new InventoryService(repos, audits, notifications);
   const parties = new PartyService(repos, audits);
   const transactions = new TransactionService(repos, audits, notifications);
   return {
@@ -46,6 +51,8 @@ function buildServices(repos: Repositories): Services {
     dashboard: new DashboardService(repos),
     search: new SearchService(repos),
     products,
+    inventory,
+    storage: new StorageService(),
     parties,
     transactions,
     reports: new ReportService(repos),

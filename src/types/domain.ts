@@ -111,17 +111,92 @@ export interface Category {
   name: string;
   description: string | null;
   parentId: string | null;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Unit {
+  id: string;
+  businessId: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Brand {
+  id: string;
+  businessId: string;
+  name: string;
+  description: string | null;
+  logoUrl: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Warehouse {
+  id: string;
+  businessId: string;
+  name: string;
+  code: string;
+  address: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StockLocation {
+  id: string;
+  businessId: string;
+  warehouseId: string;
+  parentId: string | null;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductVariant {
+  id: string;
+  businessId: string;
+  productId: string;
+  sku: string | null;
+  barcode: string | null;
+  attributes: Record<string, string | number | boolean | null>;
+  salePrice: number | null;
+  purchasePrice: number | null;
+  mrp: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductImage {
+  id: string;
+  businessId: string;
+  productId: string;
+  variantId: string | null;
+  storagePath: string;
+  url: string;
+  position: number;
+  isPrimary: boolean;
+  createdAt: string;
 }
 
 export interface Product {
   id: string;
   businessId: string;
   name: string;
+  description: string | null;
   sku: string | null;
   barcode: string | null;
   categoryId: string | null;
+  brandId: string | null;
+  unitId: string | null;
   unit: string;
   /** Dynamic attributes resolved from the business-type attribute registry. */
   attributes: Record<string, string | number | boolean | null>;
@@ -131,6 +206,12 @@ export interface Product {
   salePrice: number;
   mrp: number | null;
   lowStockThreshold: number;
+  minStock: number;
+  maxStock: number | null;
+  reorderLevel: number;
+  trackInventory: boolean;
+  taxable: boolean;
+  productStatus: "active" | "inactive" | "draft" | "discontinued";
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -138,6 +219,15 @@ export interface Product {
 
 export interface ProductStock {
   productId: string;
+  quantity: number;
+  lastMovementAt: string | null;
+}
+
+export interface StockBalance {
+  productId: string;
+  variantId: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
   quantity: number;
   lastMovementAt: string | null;
 }
@@ -158,6 +248,17 @@ export interface ProductBatch {
   updatedAt: string;
 }
 
+export type StockMovementType =
+  | "OPENING"
+  | "PURCHASE"
+  | "SALE"
+  | "PURCHASE_RETURN"
+  | "SALE_RETURN"
+  | "ADJUSTMENT"
+  | "TRANSFER_IN"
+  | "TRANSFER_OUT"
+  | "SCRAP";
+
 export type StockMovementReason =
   | "opening"
   | "purchase"
@@ -170,9 +271,15 @@ export interface StockMovement {
   id: string;
   businessId: string;
   productId: string;
+  variantId: string | null;
   batchId: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
+  toWarehouseId: string | null;
+  toLocationId: string | null;
   change: number;
-  reason: StockMovementReason;
+  movementType: StockMovementType;
+  reason: string;
   referenceType: string | null;
   referenceId: string | null;
   notes: string | null;

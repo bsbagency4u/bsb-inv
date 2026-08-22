@@ -10,11 +10,6 @@ export interface ModulePlaceholderConfig {
 }
 
 export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
-  "/inventory/warehouses": {
-    title: "Stores & Warehouses",
-    description: "Multi-warehouse and location management ships with the stock engine.",
-    phase: 3,
-  },
   "/inventory/transfers": {
     title: "Stock Transfers",
     description: "Transfer stock between warehouses and locations in Phase 3.",
