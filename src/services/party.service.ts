@@ -32,10 +32,15 @@ export class PartyService {
       phone: data.phone || null,
       email: data.email || null,
       gstin: data.gstin || null,
+      pan: data.pan || null,
+      customerType: data.customerType ?? "regular",
+      creditLimit: data.creditLimit ?? null,
       address: data.address || null,
       city: data.city || null,
       state: data.state || null,
       pincode: data.pincode || null,
+      country: data.country || null,
+      notes: data.notes || null,
       openingBalance: data.openingBalance ?? 0,
     });
     await this.audits.log({
@@ -68,10 +73,15 @@ export class PartyService {
       phone: data.phone || null,
       email: data.email || null,
       gstin: data.gstin || null,
+      pan: data.pan || null,
+      customerType: data.customerType ?? "regular",
+      creditLimit: data.creditLimit ?? null,
       address: data.address || null,
       city: data.city || null,
       state: data.state || null,
       pincode: data.pincode || null,
+      country: data.country || null,
+      notes: data.notes || null,
       openingBalance: data.openingBalance ?? 0,
     });
     await this.audits.log({
@@ -118,10 +128,14 @@ export class PartyService {
       phone: data.phone || null,
       email: data.email || null,
       gstin: data.gstin || null,
+      pan: data.pan || null,
       address: data.address || null,
       city: data.city || null,
       state: data.state || null,
       pincode: data.pincode || null,
+      country: data.country || null,
+      paymentTerms: data.paymentTerms || null,
+      notes: data.notes || null,
       openingBalance: data.openingBalance ?? 0,
     });
     await this.audits.log({
@@ -154,10 +168,14 @@ export class PartyService {
       phone: data.phone || null,
       email: data.email || null,
       gstin: data.gstin || null,
+      pan: data.pan || null,
       address: data.address || null,
       city: data.city || null,
       state: data.state || null,
       pincode: data.pincode || null,
+      country: data.country || null,
+      paymentTerms: data.paymentTerms || null,
+      notes: data.notes || null,
       openingBalance: data.openingBalance ?? 0,
     });
     await this.audits.log({

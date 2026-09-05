@@ -5,11 +5,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShoppingCart } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
+import { GstEngine } from "@/services/gst.service";
 import { PageHeader } from "@/components/layout/page-header";
 import { TransactionBuilder, type CartLine } from "@/components/transactions/transaction-builder";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/states/empty-state";
@@ -31,6 +33,7 @@ export default function PosPage() {
   const [lines, setLines] = React.useState<CartLine[]>([]);
   const [notes, setNotes] = React.useState<string | null>(null);
   const [paymentMode, setPaymentMode] = React.useState<string>("cash");
+  const [paymentAmount, setPaymentAmount] = React.useState<string>("");
 
   const { data: customers } = useQuery({
     queryKey: ["customers", business?.id],
@@ -50,6 +53,28 @@ export default function PosPage() {
     enabled: Boolean(business),
   });
 
+  const { data: paymentModes } = useQuery({
+    queryKey: ["payment-modes", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().transactions.listPaymentModes(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const cartTotal = React.useMemo(() => {
+    const engine = new GstEngine();
+    return engine.computeTotals(
+      lines.map((line) => ({
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        gstRate: line.gstRate,
+      })),
+      { intraState }
+    ).total;
+  }, [lines, intraState]);
+  const effectivePayment = paymentAmount === "" ? cartTotal : Number(paymentAmount);
+
   const checkout = async () => {
     if (!business || !user) return;
     if (lines.length === 0) {
@@ -62,7 +87,6 @@ export default function PosPage() {
       const invoiceNo = await services.transactions.nextDocumentNo(
         business.id,
         business.invoicePrefix || "INV",
-        business.invoiceStartNumber ?? 1001,
         "sales"
       );
       const { totals } = await services.transactions.createSalesInvoice(
@@ -72,7 +96,6 @@ export default function PosPage() {
         {
           customerId,
           invoiceDate: date,
-          paymentMode,
           notes,
           items: lines.map((line) => ({
             productId: line.productId,
@@ -81,6 +104,7 @@ export default function PosPage() {
             gstRate: line.gstRate,
           })),
           intraState,
+          payments: [{ mode: paymentMode, amount: Math.max(0, effectivePayment) }],
         }
       );
       toastSuccess(
@@ -143,12 +167,23 @@ export default function PosPage() {
                     onChange={(event) => setPaymentMode(event.target.value)}
                     className="min-w-40"
                   >
-                    {["cash", "card", "upi", "bank transfer", "credit"].map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode}
+                    {(paymentModes ?? []).map((mode) => (
+                      <option key={mode.id} value={mode.code}>
+                        {mode.name}
                       </option>
                     ))}
                   </Select>
+                </Field>
+                <Field label="Amount paid" hint="Leave empty to charge the full total.">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={paymentAmount}
+                    onChange={(event) => setPaymentAmount(event.target.value)}
+                    className="w-40"
+                    placeholder="Full amount"
+                  />
                 </Field>
                 <Field label="Tax treatment">
                   <Select

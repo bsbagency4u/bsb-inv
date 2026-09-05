@@ -70,8 +70,8 @@ export const NAVIGATION: NavSection[] = [
   {
     label: "Purchase",
     items: [
-      { title: "Orders", href: "/purchase/orders", icon: ShoppingBag, phase: 2 },
-      { title: "Invoices", href: "/purchase/invoices", icon: Receipt, phase: 2 },
+      { title: "Orders", href: "/purchase/orders", icon: ShoppingBag, phase: 3 },
+      { title: "Invoices", href: "/purchase/invoices", icon: Receipt, phase: 3 },
       { title: "Returns", href: "/purchase/returns", icon: RotateCcw, phase: 3 },
     ],
   },

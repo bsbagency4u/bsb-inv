@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { partySchema, type PartyValues } from "@/lib/validation/schemas";
@@ -17,10 +18,16 @@ function toFormValues(party?: Customer | Supplier | null): PartyValues {
     phone: party?.phone ?? "",
     email: party?.email ?? "",
     gstin: party?.gstin ?? "",
+    pan: party?.pan ?? "",
+    customerType: party && "customerType" in party ? party.customerType : "regular",
+    creditLimit: party && "creditLimit" in party ? (party.creditLimit ?? undefined) : undefined,
     address: party?.address ?? "",
     city: party?.city ?? "",
     state: party?.state ?? "",
     pincode: party?.pincode ?? "",
+    country: party?.country ?? "",
+    paymentTerms: party && "paymentTerms" in party ? (party.paymentTerms ?? "") : "",
+    notes: party?.notes ?? "",
     openingBalance: party?.openingBalance ?? 0,
   };
 }
@@ -39,6 +46,7 @@ export function PartyForm({
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<z.input<typeof partySchema>, unknown, z.output<typeof partySchema>>({
     resolver: zodResolver(partySchema),
@@ -65,9 +73,40 @@ export function PartyForm({
         </Field>
       </div>
 
-      <Field label="GSTIN" htmlFor={`${partyType}-gstin`} error={errors.gstin?.message}>
-        <Input id={`${partyType}-gstin`} placeholder="22AAAAA0000A1Z5" {...register("gstin")} />
-      </Field>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="GSTIN" htmlFor={`${partyType}-gstin`} error={errors.gstin?.message}>
+          <Input id={`${partyType}-gstin`} placeholder="22AAAAA0000A1Z5" {...register("gstin")} />
+        </Field>
+        <Field label="PAN" htmlFor={`${partyType}-pan`} error={errors.pan?.message}>
+          <Input id={`${partyType}-pan`} placeholder="ABCDE1234F" {...register("pan")} />
+        </Field>
+      </div>
+
+      {partyType === "customer" ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Customer type" htmlFor="customer-type">
+            <Select
+              id="customer-type"
+              defaultValue={party && "customerType" in party ? party.customerType : "regular"}
+              onChange={(event) => setValue("customerType", event.target.value as "walkin" | "regular" | "business")}
+            >
+              <option value="walkin">Walk-in</option>
+              <option value="regular">Regular</option>
+              <option value="business">Business</option>
+            </Select>
+          </Field>
+          <Field label="Credit limit" htmlFor="customer-credit" error={errors.creditLimit?.message}>
+            <Input
+              id="customer-credit"
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={party && "creditLimit" in party ? (party.creditLimit ?? "") : ""}
+              {...register("creditLimit")}
+            />
+          </Field>
+        </div>
+      ) : null}
 
       <Field label="Address" htmlFor={`${partyType}-address`} error={errors.address?.message}>
         <Textarea id={`${partyType}-address`} placeholder="Street, area, landmark" {...register("address")} />
@@ -84,6 +123,25 @@ export function PartyForm({
           <Input id={`${partyType}-pincode`} {...register("pincode")} />
         </Field>
       </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Country" htmlFor={`${partyType}-country`} error={errors.country?.message}>
+          <Input id={`${partyType}-country`} placeholder="India" {...register("country")} />
+        </Field>
+        {partyType === "supplier" ? (
+          <Field label="Payment terms" htmlFor="supplier-terms" error={errors.paymentTerms?.message}>
+            <Input
+              id="supplier-terms"
+              placeholder="e.g. Net 30"
+              {...register("paymentTerms")}
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      <Field label="Notes" htmlFor={`${partyType}-notes`} error={errors.notes?.message}>
+        <Input id={`${partyType}-notes`} placeholder="Optional notes" {...register("notes")} />
+      </Field>
 
       <Field
         label="Opening balance"

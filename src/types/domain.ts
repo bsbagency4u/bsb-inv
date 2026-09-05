@@ -293,10 +293,15 @@ export interface Customer {
   phone: string | null;
   email: string | null;
   gstin: string | null;
+  pan: string | null;
+  customerType: "walkin" | "regular" | "business";
+  creditLimit: number | null;
   address: string | null;
   city: string | null;
   state: string | null;
   pincode: string | null;
+  country: string | null;
+  notes: string | null;
   openingBalance: number;
   isActive: boolean;
   createdAt: string;
@@ -310,14 +315,70 @@ export interface Supplier {
   phone: string | null;
   email: string | null;
   gstin: string | null;
+  pan: string | null;
   address: string | null;
   city: string | null;
   state: string | null;
   pincode: string | null;
+  country: string | null;
+  paymentTerms: string | null;
+  notes: string | null;
   openingBalance: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PaymentMode {
+  id: string;
+  businessId: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PurchaseReceipt {
+  id: string;
+  businessId: string;
+  purchaseOrderId: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
+  receiptNo: string;
+  receivedAt: string;
+  notes: string | null;
+  items: Array<{ productId: string; variantId: string | null; quantity: number; unitCost: number }>;
+  createdAt: string;
+}
+
+export interface PurchaseReturn {
+  id: string;
+  businessId: string;
+  purchaseInvoiceId: string | null;
+  supplierId: string | null;
+  returnNo: string;
+  returnDate: string;
+  reason: string | null;
+  total: number;
+  notes: string | null;
+  items: Array<{ productId: string; variantId: string | null; quantity: number; unitCost: number }>;
+  createdAt: string;
+}
+
+export interface SalesReturn {
+  id: string;
+  businessId: string;
+  salesInvoiceId: string | null;
+  customerId: string | null;
+  returnNo: string;
+  returnDate: string;
+  reason: string | null;
+  total: number;
+  notes: string | null;
+  items: Array<{ productId: string; variantId: string | null; quantity: number; unitPrice: number }>;
+  createdAt: string;
 }
 
 export interface LineItem {
@@ -336,6 +397,7 @@ export interface PurchaseOrder {
   businessId: string;
   orderNo: string;
   supplierId: string | null;
+  warehouseId: string | null;
   orderDate: string;
   expectedDate: string | null;
   status: string;
@@ -371,10 +433,11 @@ export interface PurchaseInvoice {
 
 export type SalesInvoiceStatus =
   | "draft"
-  | "finalized"
+  | "completed"
   | "paid"
   | "partial"
-  | "cancelled";
+  | "cancelled"
+  | "returned";
 
 export interface SalesInvoice {
   id: string;

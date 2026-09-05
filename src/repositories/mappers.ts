@@ -6,6 +6,7 @@ import type {
   Customer,
   Notification,
   Payment,
+  PaymentMode,
   Product,
   ProductBatch,
   ProductImage,
@@ -14,7 +15,13 @@ import type {
   Profile,
   PurchaseInvoice,
   PurchaseOrder,
+  PurchaseReceipt,
+  PurchaseReceiptItem,
+  PurchaseReturn,
+  PurchaseReturnItem,
   SalesInvoice,
+  SalesReturn,
+  SalesReturnItem,
   StockBalanceView,
   StockLedger,
   StockLocation,
@@ -30,6 +37,7 @@ import type {
   Customer as CustomerModel,
   NotificationItem,
   Payment as PaymentModel,
+  PaymentMode as PaymentModeModel,
   Product as ProductModel,
   ProductBatch as ProductBatchModel,
   ProductImage as ProductImageModel,
@@ -37,7 +45,10 @@ import type {
   ProductVariant as ProductVariantModel,
   PurchaseInvoice as PurchaseInvoiceModel,
   PurchaseOrder as PurchaseOrderModel,
+  PurchaseReceipt as PurchaseReceiptModel,
+  PurchaseReturn as PurchaseReturnModel,
   SalesInvoice as SalesInvoiceModel,
+  SalesReturn as SalesReturnModel,
   SessionUser,
   StockBalance,
   StockLocation as StockLocationModel,
@@ -243,10 +254,15 @@ export function mapCustomer(row: Customer): CustomerModel {
     phone: row.phone,
     email: row.email,
     gstin: row.gstin,
+    pan: row.pan,
+    customerType: (row.customer_type ?? "regular") as CustomerModel["customerType"],
+    creditLimit: row.credit_limit === null ? null : asNumber(row.credit_limit),
     address: row.address,
     city: row.city,
     state: row.state,
     pincode: row.pincode,
+    country: row.country,
+    notes: row.notes,
     openingBalance: asNumber(row.opening_balance),
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -262,14 +278,111 @@ export function mapSupplier(row: Supplier): SupplierModel {
     phone: row.phone,
     email: row.email,
     gstin: row.gstin,
+    pan: row.pan,
     address: row.address,
     city: row.city,
     state: row.state,
     pincode: row.pincode,
+    country: row.country,
+    paymentTerms: row.payment_terms,
+    notes: row.notes,
     openingBalance: asNumber(row.opening_balance),
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function mapPaymentMode(row: PaymentMode): PaymentModeModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    code: row.code,
+    name: row.name,
+    isActive: row.is_active,
+    sortOrder: asNumber(row.sort_order),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapPurchaseReceipt(row: PurchaseReceipt): PurchaseReceiptModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    purchaseOrderId: row.purchase_order_id,
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    receiptNo: row.receipt_no,
+    receivedAt: row.received_at,
+    notes: row.notes,
+    items: [],
+    createdAt: row.created_at,
+  };
+}
+
+export function mapPurchaseReceiptItem(
+  row: PurchaseReceiptItem
+): PurchaseReceiptModel["items"][number] {
+  return {
+    productId: row.product_id ?? "",
+    variantId: row.variant_id,
+    quantity: asNumber(row.quantity),
+    unitCost: asNumber(row.unit_cost),
+  };
+}
+
+export function mapPurchaseReturn(row: PurchaseReturn): PurchaseReturnModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    purchaseInvoiceId: row.purchase_invoice_id,
+    supplierId: row.supplier_id,
+    returnNo: row.return_no,
+    returnDate: row.return_date,
+    reason: row.reason,
+    total: asNumber(row.total),
+    notes: row.notes,
+    items: [],
+    createdAt: row.created_at,
+  };
+}
+
+export function mapPurchaseReturnItem(
+  row: PurchaseReturnItem
+): PurchaseReturnModel["items"][number] {
+  return {
+    productId: row.product_id ?? "",
+    variantId: row.variant_id,
+    quantity: asNumber(row.quantity),
+    unitCost: asNumber(row.unit_cost),
+  };
+}
+
+export function mapSalesReturn(row: SalesReturn): SalesReturnModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    salesInvoiceId: row.sales_invoice_id,
+    customerId: row.customer_id,
+    returnNo: row.return_no,
+    returnDate: row.return_date,
+    reason: row.reason,
+    total: asNumber(row.total),
+    notes: row.notes,
+    items: [],
+    createdAt: row.created_at,
+  };
+}
+
+export function mapSalesReturnItem(
+  row: SalesReturnItem
+): SalesReturnModel["items"][number] {
+  return {
+    productId: row.product_id ?? "",
+    variantId: row.variant_id,
+    quantity: asNumber(row.quantity),
+    unitPrice: asNumber(row.unit_price),
   };
 }
 
@@ -301,6 +414,7 @@ export function mapPurchaseOrder(row: PurchaseOrder): PurchaseOrderModel {
     businessId: row.business_id,
     orderNo: row.order_no,
     supplierId: row.supplier_id,
+    warehouseId: row.warehouse_id,
     orderDate: row.order_date,
     expectedDate: row.expected_date,
     status: row.status,

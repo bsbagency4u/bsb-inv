@@ -20,16 +20,6 @@ export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
     description: "Barcode generation and scanning support arrives in Phase 4.",
     phase: 4,
   },
-  "/sales/returns": {
-    title: "Sales Returns",
-    description: "Sales returns and credit notes arrive in Phase 3.",
-    phase: 3,
-  },
-  "/purchase/returns": {
-    title: "Purchase Returns",
-    description: "Purchase returns and debit notes arrive in Phase 3.",
-    phase: 3,
-  },
 };
 
 export const SETTINGS_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
@@ -61,11 +51,6 @@ export const SETTINGS_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
   "/settings/purchase": {
     title: "Purchase",
     description: "Purchase defaults and vendor payment terms in Phase 3.",
-    phase: 3,
-  },
-  "/settings/payments": {
-    title: "Payments",
-    description: "Payment modes and collection configuration in Phase 3.",
     phase: 3,
   },
   "/settings/counters": {

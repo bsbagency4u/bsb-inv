@@ -3,12 +3,28 @@ import type { Database } from "@/lib/supabase/types";
 import type {
   LineItem,
   Payment,
+  PaymentMode,
   PurchaseInvoice,
   PurchaseOrder,
+  PurchaseReceipt,
+  PurchaseReturn,
   SalesInvoice,
   SalesInvoiceStatus,
+  SalesReturn,
 } from "@/types/domain";
-import { mapPayment, mapPurchaseInvoice, mapPurchaseOrder, mapSalesInvoice } from "./mappers";
+import {
+  mapPayment,
+  mapPaymentMode,
+  mapPurchaseInvoice,
+  mapPurchaseOrder,
+  mapPurchaseReceipt,
+  mapPurchaseReceiptItem,
+  mapPurchaseReturn,
+  mapPurchaseReturnItem,
+  mapSalesInvoice,
+  mapSalesReturn,
+  mapSalesReturnItem,
+} from "./mappers";
 
 export interface LineItemInput {
   productId: string;
@@ -36,6 +52,7 @@ export interface SalesHeaderInput {
 export interface PurchaseOrderHeaderInput {
   orderNo: string;
   supplierId?: string | null;
+  warehouseId?: string | null;
   orderDate: string;
   expectedDate?: string | null;
   status: string;
@@ -74,6 +91,20 @@ export interface PaymentInput {
   notes?: string | null;
 }
 
+export interface ReceiptItemInput {
+  productId: string;
+  variantId?: string | null;
+  quantity: number;
+  unitCost: number;
+}
+
+export interface ReturnItemInput {
+  productId: string;
+  variantId?: string | null;
+  quantity: number;
+  unitPrice: number;
+}
+
 export interface TransactionRepository {
   listSalesInvoices(businessId: string): Promise<SalesInvoice[]>;
   getSalesInvoice(businessId: string, invoiceId: string): Promise<SalesInvoice | null>;
@@ -82,9 +113,21 @@ export interface TransactionRepository {
   listPurchaseOrders(businessId: string): Promise<PurchaseOrder[]>;
   createPurchaseOrder(businessId: string, userId: string, header: PurchaseOrderHeaderInput, items: LineItemInput[]): Promise<PurchaseOrder>;
   listPurchaseInvoices(businessId: string): Promise<PurchaseInvoice[]>;
+  getPurchaseInvoice(businessId: string, invoiceId: string): Promise<PurchaseInvoice | null>;
   createPurchaseInvoice(businessId: string, userId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
+  updatePurchaseInvoiceStatus(businessId: string, invoiceId: string, status: string): Promise<void>;
   listPayments(businessId: string): Promise<Payment[]>;
   createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment>;
+  listPaymentModes(businessId: string): Promise<PaymentMode[]>;
+  createPaymentMode(businessId: string, input: { code: string; name: string; sortOrder?: number }): Promise<PaymentMode>;
+  updatePaymentMode(businessId: string, modeId: string, input: { name?: string; isActive?: boolean }): Promise<PaymentMode>;
+  nextDocumentNumber(businessId: string, kind: string, prefix: string): Promise<string>;
+  createPurchaseReceipt(businessId: string, userId: string, input: { purchaseOrderId?: string | null; warehouseId?: string | null; locationId?: string | null; receiptNo: string; receivedAt: string; notes?: string | null }, items: ReceiptItemInput[]): Promise<PurchaseReceipt>;
+  listPurchaseReceipts(businessId: string): Promise<PurchaseReceipt[]>;
+  createPurchaseReturn(businessId: string, userId: string, input: { purchaseInvoiceId?: string | null; supplierId?: string | null; returnNo: string; returnDate: string; reason?: string | null; total: number; notes?: string | null }, items: ReturnItemInput[]): Promise<PurchaseReturn>;
+  listPurchaseReturns(businessId: string): Promise<PurchaseReturn[]>;
+  createSalesReturn(businessId: string, userId: string, input: { salesInvoiceId?: string | null; customerId?: string | null; returnNo: string; returnDate: string; reason?: string | null; total: number; notes?: string | null }, items: ReturnItemInput[]): Promise<SalesReturn>;
+  listSalesReturns(businessId: string): Promise<SalesReturn[]>;
   listSalesInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; invoiceNo: string; customerName: string | null }>>;
   listPurchaseInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; billNo: string; supplierName: string | null }>>;
 }
@@ -264,6 +307,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         business_id: businessId,
         order_no: header.orderNo,
         supplier_id: header.supplierId ?? null,
+        warehouse_id: header.warehouseId ?? null,
         order_date: header.orderDate,
         expected_date: header.expectedDate ?? null,
         status: header.status,
@@ -394,6 +438,296 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       .single();
     if (error) throw error;
     return mapPayment(data);
+  }
+
+  async listPaymentModes(businessId: string): Promise<PaymentMode[]> {
+    const { data, error } = await this.client
+      .from("payment_modes")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map(mapPaymentMode);
+  }
+
+  async createPaymentMode(
+    businessId: string,
+    input: { code: string; name: string; sortOrder?: number }
+  ): Promise<PaymentMode> {
+    const { data, error } = await this.client
+      .from("payment_modes")
+      .insert({
+        business_id: businessId,
+        code: input.code,
+        name: input.name,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return mapPaymentMode(data);
+  }
+
+  async updatePaymentMode(
+    businessId: string,
+    modeId: string,
+    input: { name?: string; isActive?: boolean }
+  ): Promise<PaymentMode> {
+    const { data, error } = await this.client
+      .from("payment_modes")
+      .update({ name: input.name, is_active: input.isActive })
+      .eq("business_id", businessId)
+      .eq("id", modeId)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapPaymentMode(data);
+  }
+
+  async nextDocumentNumber(businessId: string, kind: string, prefix: string): Promise<string> {
+    const { data, error } = await this.client.rpc("next_document_number", {
+      p_business: businessId,
+      p_kind: kind,
+      p_prefix: prefix,
+    });
+    if (error) throw error;
+    return data as string;
+  }
+
+  private async fetchReceiptItems(receiptId: string): Promise<PurchaseReceipt["items"]> {
+    const { data, error } = await this.client
+      .from("purchase_receipt_items")
+      .select("*")
+      .eq("receipt_id", receiptId);
+    if (error) throw error;
+    return (data ?? []).map(mapPurchaseReceiptItem);
+  }
+
+  async createPurchaseReceipt(
+    businessId: string,
+    userId: string,
+    input: {
+      purchaseOrderId?: string | null;
+      warehouseId?: string | null;
+      locationId?: string | null;
+      receiptNo: string;
+      receivedAt: string;
+      notes?: string | null;
+    },
+    items: ReceiptItemInput[]
+  ): Promise<PurchaseReceipt> {
+    const { data, error } = await this.client
+      .from("purchase_receipts")
+      .insert({
+        business_id: businessId,
+        purchase_order_id: input.purchaseOrderId ?? null,
+        warehouse_id: input.warehouseId ?? null,
+        location_id: input.locationId ?? null,
+        receipt_no: input.receiptNo,
+        received_at: input.receivedAt,
+        notes: input.notes ?? null,
+        created_by: userId,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (items.length > 0) {
+      const { error: itemError } = await this.client.from("purchase_receipt_items").insert(
+        items.map((item) => ({
+          receipt_id: data.id,
+          product_id: item.productId,
+          variant_id: item.variantId ?? null,
+          quantity: item.quantity,
+          unit_cost: item.unitCost,
+        }))
+      );
+      if (itemError) throw itemError;
+    }
+
+    return { ...mapPurchaseReceipt(data), items: await this.fetchReceiptItems(data.id) };
+  }
+
+  async listPurchaseReceipts(businessId: string): Promise<PurchaseReceipt[]> {
+    const { data, error } = await this.client
+      .from("purchase_receipts")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("received_at", { ascending: false });
+    if (error) throw error;
+    const rows = data ?? [];
+    const receipts: PurchaseReceipt[] = [];
+    for (const row of rows) {
+      receipts.push({ ...mapPurchaseReceipt(row), items: await this.fetchReceiptItems(row.id) });
+    }
+    return receipts;
+  }
+
+  private async fetchPurchaseReturnItems(returnId: string): Promise<PurchaseReturn["items"]> {
+    const { data, error } = await this.client
+      .from("purchase_return_items")
+      .select("*")
+      .eq("return_id", returnId);
+    if (error) throw error;
+    return (data ?? []).map(mapPurchaseReturnItem);
+  }
+
+  async createPurchaseReturn(
+    businessId: string,
+    userId: string,
+    input: {
+      purchaseInvoiceId?: string | null;
+      supplierId?: string | null;
+      returnNo: string;
+      returnDate: string;
+      reason?: string | null;
+      total: number;
+      notes?: string | null;
+    },
+    items: ReturnItemInput[]
+  ): Promise<PurchaseReturn> {
+    const { data, error } = await this.client
+      .from("purchase_returns")
+      .insert({
+        business_id: businessId,
+        purchase_invoice_id: input.purchaseInvoiceId ?? null,
+        supplier_id: input.supplierId ?? null,
+        return_no: input.returnNo,
+        return_date: input.returnDate,
+        reason: input.reason ?? null,
+        total: input.total,
+        notes: input.notes ?? null,
+        created_by: userId,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (items.length > 0) {
+      const { error: itemError } = await this.client.from("purchase_return_items").insert(
+        items.map((item) => ({
+          return_id: data.id,
+          product_id: item.productId,
+          variant_id: item.variantId ?? null,
+          quantity: item.quantity,
+          unit_cost: item.unitPrice,
+        }))
+      );
+      if (itemError) throw itemError;
+    }
+
+    return { ...mapPurchaseReturn(data), items: await this.fetchPurchaseReturnItems(data.id) };
+  }
+
+  async listPurchaseReturns(businessId: string): Promise<PurchaseReturn[]> {
+    const { data, error } = await this.client
+      .from("purchase_returns")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("return_date", { ascending: false });
+    if (error) throw error;
+    const rows = data ?? [];
+    const returns: PurchaseReturn[] = [];
+    for (const row of rows) {
+      returns.push({ ...mapPurchaseReturn(row), items: await this.fetchPurchaseReturnItems(row.id) });
+    }
+    return returns;
+  }
+
+  private async fetchSalesReturnItems(returnId: string): Promise<SalesReturn["items"]> {
+    const { data, error } = await this.client
+      .from("sales_return_items")
+      .select("*")
+      .eq("return_id", returnId);
+    if (error) throw error;
+    return (data ?? []).map(mapSalesReturnItem);
+  }
+
+  async createSalesReturn(
+    businessId: string,
+    userId: string,
+    input: {
+      salesInvoiceId?: string | null;
+      customerId?: string | null;
+      returnNo: string;
+      returnDate: string;
+      reason?: string | null;
+      total: number;
+      notes?: string | null;
+    },
+    items: ReturnItemInput[]
+  ): Promise<SalesReturn> {
+    const { data, error } = await this.client
+      .from("sales_returns")
+      .insert({
+        business_id: businessId,
+        sales_invoice_id: input.salesInvoiceId ?? null,
+        customer_id: input.customerId ?? null,
+        return_no: input.returnNo,
+        return_date: input.returnDate,
+        reason: input.reason ?? null,
+        total: input.total,
+        notes: input.notes ?? null,
+        created_by: userId,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (items.length > 0) {
+      const { error: itemError } = await this.client.from("sales_return_items").insert(
+        items.map((item) => ({
+          return_id: data.id,
+          product_id: item.productId,
+          variant_id: item.variantId ?? null,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+        }))
+      );
+      if (itemError) throw itemError;
+    }
+
+    return { ...mapSalesReturn(data), items: await this.fetchSalesReturnItems(data.id) };
+  }
+
+  async listSalesReturns(businessId: string): Promise<SalesReturn[]> {
+    const { data, error } = await this.client
+      .from("sales_returns")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("return_date", { ascending: false });
+    if (error) throw error;
+    const rows = data ?? [];
+    const returns: SalesReturn[] = [];
+    for (const row of rows) {
+      returns.push({ ...mapSalesReturn(row), items: await this.fetchSalesReturnItems(row.id) });
+    }
+    return returns;
+  }
+
+  async getPurchaseInvoice(businessId: string, invoiceId: string): Promise<PurchaseInvoice | null> {
+    const { data, error } = await this.client
+      .from("purchase_invoices")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", invoiceId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { ...mapPurchaseInvoice(data), items: await this.fetchPurchaseItems(data.id) };
+  }
+
+  async updatePurchaseInvoiceStatus(
+    businessId: string,
+    invoiceId: string,
+    status: string
+  ): Promise<void> {
+    const { error } = await this.client
+      .from("purchase_invoices")
+      .update({ status })
+      .eq("business_id", businessId)
+      .eq("id", invoiceId);
+    if (error) throw error;
   }
 
   async listSalesInvoicesForSearch(

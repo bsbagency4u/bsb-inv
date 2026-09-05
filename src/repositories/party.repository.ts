@@ -8,10 +8,16 @@ export interface PartyInput {
   phone?: string | null;
   email?: string | null;
   gstin?: string | null;
+  pan?: string | null;
   address?: string | null;
   city?: string | null;
   state?: string | null;
   pincode?: string | null;
+  country?: string | null;
+  customerType?: Customer["customerType"];
+  creditLimit?: number | null;
+  paymentTerms?: string | null;
+  notes?: string | null;
   openingBalance?: number;
   isActive?: boolean;
 }
@@ -64,10 +70,15 @@ export class SupabasePartyRepository implements PartyRepository {
         phone: input.phone ?? null,
         email: input.email ?? null,
         gstin: input.gstin ?? null,
+        pan: input.pan ?? null,
+        customer_type: input.customerType ?? "regular",
+        credit_limit: input.creditLimit ?? null,
         address: input.address ?? null,
         city: input.city ?? null,
         state: input.state ?? null,
         pincode: input.pincode ?? null,
+        country: input.country ?? null,
+        notes: input.notes ?? null,
         opening_balance: input.openingBalance ?? 0,
         is_active: input.isActive ?? true,
         created_by: userId,
@@ -86,10 +97,15 @@ export class SupabasePartyRepository implements PartyRepository {
         phone: input.phone === undefined ? undefined : input.phone,
         email: input.email === undefined ? undefined : input.email,
         gstin: input.gstin === undefined ? undefined : input.gstin,
+        pan: input.pan === undefined ? undefined : input.pan,
+        customer_type: input.customerType,
+        credit_limit: input.creditLimit === undefined ? undefined : input.creditLimit,
         address: input.address === undefined ? undefined : input.address,
         city: input.city === undefined ? undefined : input.city,
         state: input.state === undefined ? undefined : input.state,
         pincode: input.pincode === undefined ? undefined : input.pincode,
+        country: input.country === undefined ? undefined : input.country,
+        notes: input.notes === undefined ? undefined : input.notes,
         opening_balance: input.openingBalance,
         is_active: input.isActive,
       })
@@ -140,10 +156,14 @@ export class SupabasePartyRepository implements PartyRepository {
         phone: input.phone ?? null,
         email: input.email ?? null,
         gstin: input.gstin ?? null,
+        pan: input.pan ?? null,
         address: input.address ?? null,
         city: input.city ?? null,
         state: input.state ?? null,
         pincode: input.pincode ?? null,
+        country: input.country ?? null,
+        payment_terms: input.paymentTerms ?? null,
+        notes: input.notes ?? null,
         opening_balance: input.openingBalance ?? 0,
         is_active: input.isActive ?? true,
         created_by: userId,
@@ -162,10 +182,14 @@ export class SupabasePartyRepository implements PartyRepository {
         phone: input.phone === undefined ? undefined : input.phone,
         email: input.email === undefined ? undefined : input.email,
         gstin: input.gstin === undefined ? undefined : input.gstin,
+        pan: input.pan === undefined ? undefined : input.pan,
         address: input.address === undefined ? undefined : input.address,
         city: input.city === undefined ? undefined : input.city,
         state: input.state === undefined ? undefined : input.state,
         pincode: input.pincode === undefined ? undefined : input.pincode,
+        country: input.country === undefined ? undefined : input.country,
+        payment_terms: input.paymentTerms === undefined ? undefined : input.paymentTerms,
+        notes: input.notes === undefined ? undefined : input.notes,
         opening_balance: input.openingBalance,
         is_active: input.isActive,
       })

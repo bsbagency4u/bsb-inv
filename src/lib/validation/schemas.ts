@@ -187,10 +187,20 @@ export const partySchema = z.object({
   phone: PHONE,
   email: EMAIL.optional().or(z.literal("")),
   gstin: GSTIN,
+  pan: PAN,
+  customerType: z.enum(["walkin", "regular", "business"]).optional(),
+  creditLimit: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Credit limit cannot be negative."))
+    .optional(),
   address: z.string().trim().optional().or(z.literal("")),
   city: z.string().trim().optional().or(z.literal("")),
   state: z.string().trim().optional().or(z.literal("")),
   pincode: PINCODE,
+  country: z.string().trim().optional().or(z.literal("")),
+  paymentTerms: z.string().trim().optional().or(z.literal("")),
+  notes: z.string().trim().optional().or(z.literal("")),
   openingBalance: z
     .union([z.number(), z.string().trim()])
     .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))

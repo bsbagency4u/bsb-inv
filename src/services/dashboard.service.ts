@@ -46,10 +46,10 @@ export class DashboardService {
 
     const outstanding =
       invoices
-        .filter((i) => i.status !== "cancelled")
+        .filter((i) => i.status !== "cancelled" && i.status !== "returned")
         .reduce((sum, i) => sum + (i.total - i.paidAmount), 0) +
       purchases
-        .filter((i) => i.status === "pending")
+        .filter((i) => i.status === "unpaid" || i.status === "partial")
         .reduce((sum, i) => sum + (i.total - i.paidAmount), 0);
 
     return {

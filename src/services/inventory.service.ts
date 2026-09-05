@@ -422,4 +422,76 @@ export class InventoryService {
       });
     }
   }
+
+  /** Stock OUT on a completed sale (SALE movement). */
+  async recordSaleMovement(
+    businessId: string,
+    userId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    referenceId?: string | null
+  ): Promise<void> {
+    await this.repos.products.addStockMovement({
+      businessId,
+      productId,
+      variantId,
+      change: -quantity,
+      movementType: "SALE",
+      reason: "sale",
+      referenceType: "sales_invoice",
+      referenceId: referenceId ?? null,
+      userId,
+    });
+    await this.notifyIfLow(businessId, productId);
+  }
+
+  /** Stock IN when goods are received / a purchase bill is recorded. */
+  async recordPurchaseMovement(
+    businessId: string,
+    userId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    referenceId?: string | null,
+    referenceType?: "purchase_receipt" | "purchase_invoice"
+  ): Promise<void> {
+    await this.repos.products.addStockMovement({
+      businessId,
+      productId,
+      variantId,
+      change: quantity,
+      movementType: "PURCHASE",
+      reason: "purchase",
+      referenceType: referenceType ?? "purchase_invoice",
+      referenceId: referenceId ?? null,
+      userId,
+    });
+  }
+
+  /** Stock movement for returns: +quantity restores stock, -quantity removes it. */
+  async recordReturnMovement(
+    businessId: string,
+    userId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    referenceId?: string | null
+  ): Promise<void> {
+    // Sale returns and cancelled sales restore stock (+), purchase returns
+    // send stock back to the supplier (-). The sign is decided by the caller
+    // through the sign of quantity.
+    await this.repos.products.addStockMovement({
+      businessId,
+      productId,
+      variantId,
+      change: quantity,
+      movementType: quantity < 0 ? "PURCHASE_RETURN" : "SALE_RETURN",
+      reason: "return",
+      referenceType: "return",
+      referenceId: referenceId ?? null,
+      userId,
+    });
+    await this.notifyIfLow(businessId, productId);
+  }
 }

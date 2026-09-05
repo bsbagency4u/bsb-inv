@@ -222,10 +222,15 @@ export type Customer = {
   phone: string | null;
   email: string | null;
   gstin: string | null;
+  pan: string | null;
+  customer_type: string;
+  credit_limit: number | null;
   address: string | null;
   city: string | null;
   state: string | null;
   pincode: string | null;
+  country: string | null;
+  notes: string | null;
   opening_balance: number;
   is_active: boolean;
   created_by: string | null;
@@ -240,15 +245,105 @@ export type Supplier = {
   phone: string | null;
   email: string | null;
   gstin: string | null;
+  pan: string | null;
   address: string | null;
   city: string | null;
   state: string | null;
   pincode: string | null;
+  country: string | null;
+  payment_terms: string | null;
+  notes: string | null;
   opening_balance: number;
   is_active: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type PaymentMode = {
+  id: string;
+  business_id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DocumentSequence = {
+  business_id: string;
+  kind: string;
+  prefix: string;
+  last_number: number;
+}
+
+export type PurchaseReceipt = {
+  id: string;
+  business_id: string;
+  purchase_order_id: string | null;
+  warehouse_id: string | null;
+  location_id: string | null;
+  receipt_no: string;
+  received_at: string;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export type PurchaseReceiptItem = {
+  id: string;
+  receipt_id: string;
+  product_id: string | null;
+  variant_id: string | null;
+  quantity: number;
+  unit_cost: number;
+}
+
+export type PurchaseReturn = {
+  id: string;
+  business_id: string;
+  purchase_invoice_id: string | null;
+  supplier_id: string | null;
+  return_no: string;
+  return_date: string;
+  reason: string | null;
+  total: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export type PurchaseReturnItem = {
+  id: string;
+  return_id: string;
+  product_id: string | null;
+  variant_id: string | null;
+  quantity: number;
+  unit_cost: number;
+}
+
+export type SalesReturn = {
+  id: string;
+  business_id: string;
+  sales_invoice_id: string | null;
+  customer_id: string | null;
+  return_no: string;
+  return_date: string;
+  reason: string | null;
+  total: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export type SalesReturnItem = {
+  id: string;
+  return_id: string;
+  product_id: string | null;
+  variant_id: string | null;
+  quantity: number;
+  unit_price: number;
 }
 
 export type StockLedger = {
@@ -293,6 +388,7 @@ export type PurchaseOrder = {
   business_id: string;
   order_no: string;
   supplier_id: string | null;
+  warehouse_id: string | null;
   order_date: string;
   expected_date: string | null;
   status: string;
@@ -582,6 +678,54 @@ export interface Database {
         Update: Partial<Notification>;
         Relationships: [];
       };
+      payment_modes: {
+        Row: PaymentMode;
+        Insert: Partial<PaymentMode> & { business_id: string; code: string; name: string };
+        Update: Partial<PaymentMode>;
+        Relationships: [];
+      };
+      document_sequences: {
+        Row: DocumentSequence;
+        Insert: DocumentSequence;
+        Update: Partial<DocumentSequence>;
+        Relationships: [];
+      };
+      purchase_receipts: {
+        Row: PurchaseReceipt;
+        Insert: Partial<PurchaseReceipt> & { business_id: string; receipt_no: string };
+        Update: Partial<PurchaseReceipt>;
+        Relationships: [];
+      };
+      purchase_receipt_items: {
+        Row: PurchaseReceiptItem;
+        Insert: Partial<PurchaseReceiptItem> & { receipt_id: string };
+        Update: Partial<PurchaseReceiptItem>;
+        Relationships: [];
+      };
+      purchase_returns: {
+        Row: PurchaseReturn;
+        Insert: Partial<PurchaseReturn> & { business_id: string; return_no: string };
+        Update: Partial<PurchaseReturn>;
+        Relationships: [];
+      };
+      purchase_return_items: {
+        Row: PurchaseReturnItem;
+        Insert: Partial<PurchaseReturnItem> & { return_id: string };
+        Update: Partial<PurchaseReturnItem>;
+        Relationships: [];
+      };
+      sales_returns: {
+        Row: SalesReturn;
+        Insert: Partial<SalesReturn> & { business_id: string; return_no: string };
+        Update: Partial<SalesReturn>;
+        Relationships: [];
+      };
+      sales_return_items: {
+        Row: SalesReturnItem;
+        Insert: Partial<SalesReturnItem> & { return_id: string };
+        Update: Partial<SalesReturnItem>;
+        Relationships: [];
+      };
     };
     Views: {
       product_stock: {
@@ -593,7 +737,12 @@ export interface Database {
         Relationships: [];
       };
     };
-    Functions: Record<never, never>;
+    Functions: {
+      next_document_number: {
+        Args: { p_business: string; p_kind: string; p_prefix: string };
+        Returns: string;
+      };
+    };
     Enums: Record<never, never>;
     CompositeTypes: Record<never, never>;
   };
