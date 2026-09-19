@@ -12,6 +12,7 @@ import { productSchema, type ProductValues } from "@/lib/validation/schemas";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
 import { InventoryService } from "./inventory.service";
+import { AuthorizationService } from "./authorization.service";
 
 export interface StockAdjustmentInput {
   productId: string;
@@ -25,13 +26,20 @@ export interface StockAdjustmentInput {
 
 export class ProductService {
   private inventory: InventoryService;
+  private auth: AuthorizationService;
 
   constructor(
     private repos: Repositories,
     private audits: AuditService,
-    private notifications: NotificationService
+    private notifications: NotificationService,
+    auth?: AuthorizationService
   ) {
-    this.inventory = new InventoryService(repos, audits, notifications);
+    this.auth = auth ?? new AuthorizationService(repos);
+    this.inventory = new InventoryService(repos, audits, notifications, this.auth);
+  }
+
+  private requireProductManage(businessId: string, userId: string): Promise<void> {
+    return this.auth.requirePermission(businessId, userId, "product.manage");
   }
 
   async listCategories(businessId: string): Promise<Category[]> {
@@ -44,6 +52,7 @@ export class ProductService {
     categoryId: string,
     input: { name?: string; description?: string | null; parentId?: string | null; isActive?: boolean }
   ): Promise<Category> {
+    await this.requireProductManage(businessId, userId);
     const category = await this.repos.products.updateCategory(businessId, categoryId, input);
     await this.audits.log({
       businessId,
@@ -57,6 +66,7 @@ export class ProductService {
   }
 
   async deleteCategory(businessId: string, userId: string, categoryId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     await this.repos.products.deleteCategory(businessId, categoryId);
     await this.audits.log({
       businessId,
@@ -72,6 +82,7 @@ export class ProductService {
   }
 
   async createUnit(businessId: string, userId: string, input: { name: string; code: string }) {
+    await this.requireProductManage(businessId, userId);
     const unit = await this.repos.inventory.createUnit(businessId, input);
     await this.audits.log({
       businessId,
@@ -90,6 +101,7 @@ export class ProductService {
     unitId: string,
     input: { name?: string; code?: string; isActive?: boolean }
   ) {
+    await this.requireProductManage(businessId, userId);
     const unit = await this.repos.inventory.updateUnit(businessId, unitId, input);
     await this.audits.log({
       businessId,
@@ -103,6 +115,7 @@ export class ProductService {
   }
 
   async deleteUnit(businessId: string, userId: string, unitId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     await this.repos.inventory.deleteUnit(businessId, unitId);
     await this.audits.log({
       businessId,
@@ -122,6 +135,7 @@ export class ProductService {
     userId: string,
     input: { name: string; description?: string | null; logoUrl?: string | null }
   ) {
+    await this.requireProductManage(businessId, userId);
     const brand = await this.repos.inventory.createBrand(businessId, input);
     await this.audits.log({
       businessId,
@@ -140,6 +154,7 @@ export class ProductService {
     brandId: string,
     input: { name?: string; description?: string | null; logoUrl?: string | null; isActive?: boolean }
   ) {
+    await this.requireProductManage(businessId, userId);
     const brand = await this.repos.inventory.updateBrand(businessId, brandId, input);
     await this.audits.log({
       businessId,
@@ -153,6 +168,7 @@ export class ProductService {
   }
 
   async deleteBrand(businessId: string, userId: string, brandId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     await this.repos.inventory.deleteBrand(businessId, brandId);
     await this.audits.log({
       businessId,
@@ -180,6 +196,7 @@ export class ProductService {
       mrp?: number | null;
     }
   ) {
+    await this.requireProductManage(businessId, userId);
     const variant = await this.repos.products.createVariant(businessId, input);
     await this.audits.log({
       businessId,
@@ -206,6 +223,7 @@ export class ProductService {
       isActive: boolean;
     }>
   ) {
+    await this.requireProductManage(businessId, userId);
     const variant = await this.repos.products.updateVariant(businessId, variantId, input);
     await this.audits.log({
       businessId,
@@ -219,6 +237,7 @@ export class ProductService {
   }
 
   async deleteVariant(businessId: string, userId: string, variantId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     await this.repos.products.deleteVariant(businessId, variantId);
     await this.audits.log({
       businessId,
@@ -245,6 +264,7 @@ export class ProductService {
       isPrimary?: boolean;
     }
   ) {
+    await this.requireProductManage(businessId, userId);
     const image = await this.repos.products.addImage(businessId, input);
     await this.audits.log({
       businessId,
@@ -258,6 +278,7 @@ export class ProductService {
   }
 
   async removeImage(businessId: string, userId: string, imageId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     await this.repos.products.removeImage(businessId, imageId);
     await this.audits.log({
       businessId,
@@ -273,6 +294,7 @@ export class ProductService {
     userId: string,
     input: { name: string; description?: string | null; parentId?: string | null }
   ): Promise<Category> {
+    await this.requireProductManage(businessId, userId);
     if (!input.name.trim()) {
       throw AppError.validation("Category name is required.");
     }
@@ -323,6 +345,7 @@ export class ProductService {
     userId: string,
     input: ProductValues
   ): Promise<Product> {
+    await this.requireProductManage(businessId, userId);
     const parsed = productSchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -372,6 +395,7 @@ export class ProductService {
     productId: string,
     input: ProductValues
   ): Promise<Product> {
+    await this.requireProductManage(businessId, userId);
     const parsed = productSchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -416,6 +440,7 @@ export class ProductService {
   }
 
   async deleteProduct(businessId: string, userId: string, productId: string): Promise<void> {
+    await this.requireProductManage(businessId, userId);
     const product = await this.repos.products.getProduct(businessId, productId);
     if (!product) throw AppError.notFound("Product not found.");
     await this.repos.products.deleteProduct(businessId, productId);

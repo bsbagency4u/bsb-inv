@@ -14,6 +14,8 @@ import { ReportService } from "./report.service";
 import { NotificationService } from "./notification.service";
 import { StorageService } from "./storage.service";
 import { GstEngine } from "./gst.service";
+import { TeamService } from "./team.service";
+import { AuthorizationService } from "./authorization.service";
 
 export interface Services {
   repos: Repositories;
@@ -31,20 +33,23 @@ export interface Services {
   reports: ReportService;
   notifications: NotificationService;
   gst: GstEngine;
+  team: TeamService;
+  authorization: AuthorizationService;
 }
 
 function buildServices(repos: Repositories): Services {
   const audits = new AuditService(repos);
-  const businesses = new BusinessService(repos, audits);
+  const authorization = new AuthorizationService(repos);
+  const businesses = new BusinessService(repos, audits, authorization);
   const profiles = new ProfileService(repos, audits);
   const notifications = new NotificationService(repos);
-  const products = new ProductService(repos, audits, notifications);
-  const inventory = new InventoryService(repos, audits, notifications);
-  const parties = new PartyService(repos, audits);
-  const transactions = new TransactionService(repos, audits, notifications);
+  const products = new ProductService(repos, audits, notifications, authorization);
+  const inventory = new InventoryService(repos, audits, notifications, authorization);
+  const parties = new PartyService(repos, audits, authorization);
+  const transactions = new TransactionService(repos, audits, notifications, authorization);
   return {
     repos,
-    auth: new AuthService(),
+    auth: new AuthService(repos.profiles),
     audits,
     businesses,
     profiles,
@@ -58,6 +63,8 @@ function buildServices(repos: Repositories): Services {
     reports: new ReportService(repos),
     notifications,
     gst: new GstEngine(),
+    team: new TeamService(repos, audits),
+    authorization,
   };
 }
 

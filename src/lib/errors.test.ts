@@ -40,6 +40,12 @@ describe("normalizeError", () => {
     expect(result.code).toBe("DATABASE");
   });
 
+  it("maps Postgres RLS denial 42501 to AUTHORIZATION", () => {
+    const result = normalizeError({ code: "42501", message: "permission denied for table businesses" });
+    expect(result.code).toBe("AUTHORIZATION");
+    expect(result.userMessage).toContain("permission");
+  });
+
   it("maps network-like messages to NETWORK", () => {
     const result = normalizeError({ message: "Failed to fetch" });
     expect(result.code).toBe("NETWORK");

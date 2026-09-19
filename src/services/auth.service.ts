@@ -1,7 +1,18 @@
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { getBrowserClient } from "@/lib/supabase/client";
 import { AppError } from "@/lib/errors";
-import { loginSchema, type LoginValues } from "@/lib/validation/schemas";
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  resetPasswordSchema,
+  signupSchema,
+  type ChangePasswordValues,
+  type ForgotPasswordValues,
+  type LoginValues,
+  type ResetPasswordValues,
+  type SignupValues,
+} from "@/lib/validation/schemas";
 import type { SessionUser } from "@/types/domain";
 import {
   clearDemoSession,
@@ -10,17 +21,53 @@ import {
   setDemoSession,
 } from "@/lib/session/demo-session";
 import { DEMO_USER } from "@/repositories/local/local-data";
+import type { ProfileRepository } from "@/repositories/profile.repository";
+
+function mapAuthUser(
+  user: {
+    id: string;
+    email?: string | null;
+    user_metadata?: Record<string, unknown>;
+  },
+  extras: Partial<SessionUser> = {}
+): SessionUser {
+  return {
+    id: user.id,
+    email: user.email ?? extras.email ?? "",
+    fullName: extras.fullName ?? (user.user_metadata?.full_name as string) ?? "",
+    username: extras.username ?? (user.user_metadata?.username as string) ?? null,
+    phone: extras.phone ?? null,
+    avatarUrl: extras.avatarUrl ?? (user.user_metadata?.avatar_url as string) ?? null,
+    role: extras.role ?? null,
+    isOwner: extras.isOwner ?? false,
+    isDemo: extras.isDemo ?? false,
+  };
+}
+
+function friendlyAuthError(error: { message: string; status?: number }): never {
+  if (error.status === 400 || /invalid login credentials/i.test(error.message)) {
+    throw AppError.auth("Invalid email or password.");
+  }
+  if (/already registered|user already exists/i.test(error.message)) {
+    throw AppError.conflict("An account with this email already exists.");
+  }
+  if (/password/i.test(error.message) && (error.status === 422 || error.status === 400)) {
+    throw AppError.unprocessable("Choose a stronger password (at least 8 characters).");
+  }
+  if (/rate limit|too many/i.test(error.message)) {
+    throw AppError.unprocessable("Too many attempts. Please wait a moment and try again.");
+  }
+  throw AppError.auth("Could not complete that request. Please try again.");
+}
 
 /**
  * Authentication service. The only place that talks to the Supabase Auth API
- * from the client. In demo mode (no Supabase) it manages a clearly-marked
- * local demo session.
+ * from the client. Passwords are never stored, hashed, logged or returned.
+ * In demo mode (no Supabase) it manages a clearly-marked local demo session.
  */
 export class AuthService {
-  /**
-   * Validates credentials and signs the user in.
-   * Returns the authenticated session user.
-   */
+  constructor(private profiles?: ProfileRepository) {}
+
   async signIn(input: LoginValues): Promise<SessionUser> {
     const parsed = loginSchema.safeParse(input);
     if (!parsed.success) {
@@ -39,62 +86,36 @@ export class AuthService {
     }
 
     const client = getBrowserClient();
-    if (!client) {
-      throw AppError.internal("Supabase client unavailable.");
-    }
+    if (!client) throw AppError.internal("Supabase client unavailable.");
 
-    const { data, error } = await client.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      if (error.status === 400 || /invalid login credentials/i.test(error.message)) {
-        throw AppError.auth("Invalid email or password.");
-      }
-      if (/email.*not.*confirmed|confirm/i.test(error.message)) {
-        throw AppError.auth("Please confirm your email before signing in.");
-      }
-      throw new AppError(error.message, { code: "AUTH", status: error.status ?? 401 });
-    }
-
-    const authUser = data.user;
-    if (!authUser) throw AppError.auth("Sign-in did not return a user.");
-
-    return {
-      id: authUser.id,
-      email: authUser.email ?? "",
-      fullName: (authUser.user_metadata?.full_name as string) ?? "",
-      phone: null,
-      avatarUrl: (authUser.user_metadata?.avatar_url as string) ?? null,
-      role: null,
-      isOwner: false,
-      isDemo: false,
-    };
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) friendlyAuthError(error);
+    if (!data.user) throw AppError.auth("Sign-in did not return a user.");
+    return mapAuthUser(data.user);
   }
 
-  /**
-   * Registers a new account. In demo mode this behaves like sign-in.
-   */
-  async signUp(input: {
-    email: string;
-    password: string;
-    fullName: string;
-  }): Promise<SessionUser> {
-    const email = input.email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw AppError.validation("Enter a valid email address.");
+  async signUp(input: SignupValues): Promise<SessionUser> {
+    const parsed = signupSchema.safeParse(input);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      throw AppError.validation(first?.message ?? "Please fix the highlighted fields.");
     }
-    if (input.password.length < 8) {
-      throw AppError.validation("Password must be at least 8 characters.");
-    }
-    if (input.fullName.trim().length < 2) {
-      throw AppError.validation("Full name is required.");
+    const { email, password, fullName, username } = parsed.data;
+
+    if (this.profiles && !(await this.profiles.isUsernameAvailable(username))) {
+      throw AppError.conflict("That username is already taken.");
     }
 
     if (!isSupabaseConfigured()) {
+      if (this.profiles) {
+        await this.profiles.upsertOwnProfile(DEMO_USER.id, {
+          fullName,
+          email,
+          username,
+        });
+      }
       setDemoSession({ userId: DEMO_USER.id, email, signedInAt: new Date().toISOString() });
-      return { ...DEMO_USER, email, fullName: input.fullName.trim() };
+      return { ...DEMO_USER, email, fullName, username };
     }
 
     const client = getBrowserClient();
@@ -102,34 +123,92 @@ export class AuthService {
 
     const { data, error } = await client.auth.signUp({
       email,
-      password: input.password,
+      password,
       options: {
-        data: { full_name: input.fullName.trim() },
+        data: { full_name: fullName, username },
+        emailRedirectTo: `${window.location.origin}/dashboard`,
       },
     });
 
-    if (error) {
-      if (/already registered/i.test(error.message)) {
-        throw AppError.conflict("An account with this email already exists.");
-      }
-      if (error.status === 422 || /password/i.test(error.message)) {
-        throw AppError.unprocessable(error.message);
-      }
-      throw new AppError(error.message, { code: "UNPROCESSABLE", status: error.status ?? 422 });
-    }
-
+    if (error) friendlyAuthError(error);
     if (!data.user) throw AppError.unprocessable("Sign-up did not return a user.");
 
-    return {
-      id: data.user.id,
-      email: data.user.email ?? "",
-      fullName: input.fullName.trim(),
-      phone: null,
-      avatarUrl: null,
-      role: null,
-      isOwner: false,
-      isDemo: false,
-    };
+    if (!data.session) {
+      throw AppError.auth(
+        "Account created, but no session was returned. Confirm email is still enabled in Supabase Auth."
+      );
+    }
+
+    if (this.profiles) {
+      try {
+        await this.profiles.upsertOwnProfile(data.user.id, {
+          fullName,
+          email: data.user.email ?? email,
+          username,
+        });
+      } catch (profileError) {
+        const message = profileError instanceof Error ? profileError.message : "";
+        if (/duplicate|unique/i.test(message)) {
+          throw AppError.conflict("That username is already taken.");
+        }
+        throw AppError.internal("Account created, but the profile could not be saved. Please try again.");
+      }
+    }
+
+    return mapAuthUser(data.user, { fullName, username, email });
+  }
+
+  async requestPasswordReset(input: ForgotPasswordValues): Promise<void> {
+    const parsed = forgotPasswordSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(parsed.error.issues[0]?.message ?? "Enter a valid email address.");
+    }
+    if (!isSupabaseConfigured()) {
+      return;
+    }
+    const client = getBrowserClient();
+    if (!client) throw AppError.internal("Supabase client unavailable.");
+    const { error } = await client.auth.resetPasswordForEmail(parsed.data.email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    });
+    if (error) friendlyAuthError(error);
+  }
+
+  async updatePassword(input: ResetPasswordValues): Promise<void> {
+    const parsed = resetPasswordSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(parsed.error.issues[0]?.message ?? "Please fix the highlighted fields.");
+    }
+    if (!isSupabaseConfigured()) {
+      throw AppError.unprocessable("Password reset is not available in demo mode.");
+    }
+    const client = getBrowserClient();
+    if (!client) throw AppError.internal("Supabase client unavailable.");
+    const { error } = await client.auth.updateUser({ password: parsed.data.password });
+    if (error) friendlyAuthError(error);
+  }
+
+  async changePassword(input: ChangePasswordValues): Promise<void> {
+    const parsed = changePasswordSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(parsed.error.issues[0]?.message ?? "Please fix the highlighted fields.");
+    }
+    if (!isSupabaseConfigured()) {
+      throw AppError.unprocessable("Password change is not available in demo mode.");
+    }
+    const client = getBrowserClient();
+    if (!client) throw AppError.internal("Supabase client unavailable.");
+    const {
+      data: { user },
+    } = await client.auth.getUser();
+    if (!user?.email) throw AppError.auth("You need to be signed in to change your password.");
+    const { error: reauthError } = await client.auth.signInWithPassword({
+      email: user.email,
+      password: parsed.data.currentPassword,
+    });
+    if (reauthError) throw AppError.auth("Current password is incorrect.");
+    const { error } = await client.auth.updateUser({ password: parsed.data.password });
+    if (error) friendlyAuthError(error);
   }
 
   async signOut(): Promise<void> {
@@ -142,13 +221,8 @@ export class AuthService {
     await client.auth.signOut();
   }
 
-  /**
-   * Detects whether a session exists (Supabase auth session or demo session).
-   */
   async hasSession(): Promise<boolean> {
-    if (!isSupabaseConfigured()) {
-      return hasDemoSession();
-    }
+    if (!isSupabaseConfigured()) return hasDemoSession();
     const client = getBrowserClient();
     if (!client) return false;
     const {
@@ -169,16 +243,7 @@ export class AuthService {
       data: { user },
     } = await client.auth.getUser();
     if (!user) return null;
-    return {
-      id: user.id,
-      email: user.email ?? "",
-      fullName: (user.user_metadata?.full_name as string) ?? "",
-      phone: null,
-      avatarUrl: (user.user_metadata?.avatar_url as string) ?? null,
-      role: null,
-      isOwner: false,
-      isDemo: false,
-    };
+    return mapAuthUser(user);
   }
 }
 

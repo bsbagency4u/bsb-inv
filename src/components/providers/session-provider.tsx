@@ -46,6 +46,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         id: userId,
         email: authUser.email ?? "",
         fullName: (authUser.user_metadata?.full_name as string) ?? "",
+        username: (authUser.user_metadata?.username as string) ?? null,
         phone: null,
         avatarUrl: (authUser.user_metadata?.avatar_url as string) ?? null,
         role: null,
@@ -62,6 +63,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const user: SessionUser = {
         ...authSessionUser,
         fullName: profile?.fullName || authSessionUser.fullName,
+        username: profile?.username || authSessionUser.username,
+        email: profile?.email || authSessionUser.email,
         phone: profile?.phone ?? null,
         avatarUrl: profile?.avatarUrl ?? null,
       };

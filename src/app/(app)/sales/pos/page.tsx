@@ -29,10 +29,10 @@ export default function PosPage() {
 
   const [customerId, setCustomerId] = React.useState<string | null>(null);
   const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [intraState, setIntraState] = React.useState(true);
+  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [lines, setLines] = React.useState<CartLine[]>([]);
   const [notes, setNotes] = React.useState<string | null>(null);
-  const [paymentMode, setPaymentMode] = React.useState<string>("cash");
+  const [paymentModeOverride, setPaymentModeOverride] = React.useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = React.useState<string>("");
 
   const { data: customers } = useQuery({
@@ -62,6 +62,24 @@ export default function PosPage() {
     enabled: Boolean(business),
   });
 
+  const { data: salesDefaults } = useQuery({
+    queryKey: ["sales-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getSalesDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const paymentMode = paymentModeOverride ?? salesDefaults?.defaultPaymentMode ?? "cash";
+  const intraState = intraStateOverride ?? salesDefaults?.defaultIntraState ?? true;
+
+  const documentDiscount = React.useMemo(() => {
+    if (!salesDefaults || salesDefaults.defaultDiscountPercent <= 0) return 0;
+    const taxable = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
+    return (taxable * salesDefaults.defaultDiscountPercent) / 100;
+  }, [lines, salesDefaults]);
+
   const cartTotal = React.useMemo(() => {
     const engine = new GstEngine();
     return engine.computeTotals(
@@ -70,9 +88,9 @@ export default function PosPage() {
         unitPrice: line.unitPrice,
         gstRate: line.gstRate,
       })),
-      { intraState }
+      { intraState, discount: documentDiscount }
     ).total;
-  }, [lines, intraState]);
+  }, [lines, intraState, documentDiscount]);
   const effectivePayment = paymentAmount === "" ? cartTotal : Number(paymentAmount);
 
   const checkout = async () => {
@@ -105,6 +123,7 @@ export default function PosPage() {
           })),
           intraState,
           payments: [{ mode: paymentMode, amount: Math.max(0, effectivePayment) }],
+          discount: documentDiscount,
         }
       );
       toastSuccess(
@@ -114,6 +133,9 @@ export default function PosPage() {
       setLines([]);
       setCustomerId(null);
       setNotes(null);
+      setPaymentModeOverride(null);
+      setIntraStateOverride(null);
+      setPaymentAmount("");
       setShowBuilder(false);
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
       await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
@@ -164,7 +186,7 @@ export default function PosPage() {
                 <Field label="Payment mode">
                   <Select
                     value={paymentMode}
-                    onChange={(event) => setPaymentMode(event.target.value)}
+                    onChange={(event) => setPaymentModeOverride(event.target.value)}
                     className="min-w-40"
                   >
                     {(paymentModes ?? []).map((mode) => (
@@ -188,7 +210,7 @@ export default function PosPage() {
                 <Field label="Tax treatment">
                   <Select
                     value={intraState ? "intra" : "inter"}
-                    onChange={(event) => setIntraState(event.target.value === "intra")}
+                    onChange={(event) => setIntraStateOverride(event.target.value === "intra")}
                     className="min-w-56"
                   >
                     <option value="intra">Intra-state (CGST + SGST)</option>
@@ -206,7 +228,7 @@ export default function PosPage() {
                 partyValue={customerId}
                 onPartyChange={setCustomerId}
                 intraState={intraState}
-                onIntraStateChange={setIntraState}
+                onIntraStateChange={setIntraStateOverride}
                 lines={lines}
                 onLinesChange={setLines}
                 notes={notes}
@@ -262,7 +284,7 @@ export default function PosPage() {
           partyValue={customerId}
           onPartyChange={setCustomerId}
           intraState={intraState}
-          onIntraStateChange={setIntraState}
+          onIntraStateChange={setIntraStateOverride}
           lines={lines}
           onLinesChange={setLines}
           notes={notes}

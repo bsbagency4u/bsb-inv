@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -8,9 +9,10 @@ import { Boxes } from "lucide-react";
 import { getClientServices } from "@/services";
 import { useSession } from "@/components/providers/session-provider";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
-import { loginSchema, type LoginValues } from "@/lib/validation/schemas";
+import { loginSchema, signupSchema, type LoginValues, type SignupValues } from "@/lib/validation/schemas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Field } from "@/components/ui/field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
@@ -20,44 +22,51 @@ import { SITE } from "@/config/site";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { status } = useSession();
+  const { status, refresh, business } = useSession();
   const [mode, setMode] = React.useState<"login" | "signup">("login");
   const [serverError, setServerError] = React.useState<string | null>(null);
-  const demoMode = !isSupabaseConfigured();
+  const demoMode = React.useSyncExternalStore(
+    () => () => {},
+    () => !isSupabaseConfigured(),
+    () => false
+  );
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<LoginValues & { fullName?: string }>({
+  const loginForm = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
+  });
+  const signupForm = useForm<SignupValues>({
+    resolver: zodResolver(signupSchema),
+    defaultValues: { fullName: "", email: "", username: "", password: "", confirmPassword: "" },
   });
 
   React.useEffect(() => {
     if (status === "authenticated") {
-      router.replace("/dashboard");
+      router.replace(business ? "/dashboard" : "/onboarding");
     }
-  }, [status, router]);
+  }, [status, business, router]);
 
-  const submit = async (values: LoginValues & { fullName?: string }) => {
+  const submitLogin = async (values: LoginValues) => {
     setServerError(null);
-    const services = getClientServices();
     try {
-      if (mode === "login") {
-        await services.auth.signIn({ email: values.email, password: values.password });
-      } else {
-        await services.auth.signUp({
-          email: values.email,
-          password: values.password,
-          fullName: values.fullName ?? "",
-        });
-      }
+      await getClientServices().auth.signIn(values);
+      await refresh();
       router.push("/dashboard");
       router.refresh();
     } catch (error) {
-      const normalized = normalizeError(error);
-      setServerError(normalized.userMessage);
+      setServerError(normalizeError(error).userMessage);
+    }
+  };
+
+  const submitSignup = async (values: SignupValues) => {
+    setServerError(null);
+    try {
+      await getClientServices().auth.signUp(values);
+      await refresh();
+      router.push("/onboarding");
+      router.refresh();
+    } catch (error) {
+      setServerError(normalizeError(error).userMessage);
     }
   };
 
@@ -96,7 +105,7 @@ export default function LoginPage() {
             </CardTitle>
             <CardDescription>
               {mode === "login"
-                ? "Sign in to your workspace."
+                ? "Sign in with your email and password."
                 : "Register to start managing your business."}
             </CardDescription>
           </CardHeader>
@@ -114,28 +123,112 @@ export default function LoginPage() {
 
             {serverError ? (
               <div className="mb-4">
-                <Alert variant="error" title="Could not sign in">
+                <Alert variant="error" title={mode === "signup" ? "Could not create account" : "Could not sign in"}>
                   <p>{serverError}</p>
                 </Alert>
               </div>
             ) : null}
 
-            <form onSubmit={handleSubmit(submit)} className="space-y-4" noValidate>
-              {mode === "signup" ? (
-                <Field label="Full name" htmlFor="fullName" required error={errors.fullName?.message}>
-                  <Input id="fullName" placeholder="Your name" {...register("fullName")} invalid={Boolean(errors.fullName)} />
+            {mode === "login" ? (
+              <form onSubmit={loginForm.handleSubmit(submitLogin)} className="space-y-4" noValidate>
+                <Field label="Email" htmlFor="email" required error={loginForm.formState.errors.email?.message}>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    {...loginForm.register("email")}
+                    invalid={Boolean(loginForm.formState.errors.email)}
+                  />
                 </Field>
-              ) : null}
-              <Field label="Email" htmlFor="email" required error={errors.email?.message}>
-                <Input id="email" type="email" autoComplete="email" placeholder="you@example.com" {...register("email")} invalid={Boolean(errors.email)} />
-              </Field>
-              <Field label="Password" htmlFor="password" required error={errors.password?.message}>
-                <Input id="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="••••••••" {...register("password")} invalid={Boolean(errors.password)} />
-              </Field>
-              <Button type="submit" className="w-full" loading={isSubmitting}>
-                {mode === "login" ? "Sign in" : "Create account"}
-              </Button>
-            </form>
+                <Field label="Password" htmlFor="password" required error={loginForm.formState.errors.password?.message}>
+                  <PasswordInput
+                    id="password"
+                    autoComplete="current-password"
+                    placeholder="••••••••"
+                    {...loginForm.register("password")}
+                    invalid={Boolean(loginForm.formState.errors.password)}
+                  />
+                </Field>
+                <div className="flex justify-end">
+                  <Link href="/forgot-password" className="text-xs font-medium text-primary hover:underline">
+                    Forgot password?
+                  </Link>
+                </div>
+                <Button type="submit" className="w-full" loading={loginForm.formState.isSubmitting}>
+                  Sign in
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={signupForm.handleSubmit(submitSignup)} className="space-y-4" noValidate>
+                <Field label="Full name" htmlFor="fullName" required error={signupForm.formState.errors.fullName?.message}>
+                  <Input
+                    id="fullName"
+                    placeholder="Your name"
+                    autoComplete="name"
+                    {...signupForm.register("fullName")}
+                    invalid={Boolean(signupForm.formState.errors.fullName)}
+                  />
+                </Field>
+                <Field label="Email" htmlFor="signup-email" required error={signupForm.formState.errors.email?.message}>
+                  <Input
+                    id="signup-email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    {...signupForm.register("email")}
+                    invalid={Boolean(signupForm.formState.errors.email)}
+                  />
+                </Field>
+                <Field
+                  label="Username"
+                  htmlFor="username"
+                  required
+                  error={signupForm.formState.errors.username?.message}
+                  hint="3–24 characters. Letters, numbers and underscores."
+                >
+                  <Input
+                    id="username"
+                    autoComplete="username"
+                    placeholder="yourname"
+                    {...signupForm.register("username")}
+                    invalid={Boolean(signupForm.formState.errors.username)}
+                  />
+                </Field>
+                <Field
+                  label="Password"
+                  htmlFor="signup-password"
+                  required
+                  error={signupForm.formState.errors.password?.message}
+                  hint="At least 8 characters."
+                >
+                  <PasswordInput
+                    id="signup-password"
+                    autoComplete="new-password"
+                    placeholder="••••••••"
+                    {...signupForm.register("password")}
+                    invalid={Boolean(signupForm.formState.errors.password)}
+                  />
+                </Field>
+                <Field
+                  label="Confirm password"
+                  htmlFor="confirm-password"
+                  required
+                  error={signupForm.formState.errors.confirmPassword?.message}
+                >
+                  <PasswordInput
+                    id="confirm-password"
+                    autoComplete="new-password"
+                    placeholder="••••••••"
+                    {...signupForm.register("confirmPassword")}
+                    invalid={Boolean(signupForm.formState.errors.confirmPassword)}
+                  />
+                </Field>
+                <Button type="submit" className="w-full" loading={signupForm.formState.isSubmitting}>
+                  Create account
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
 

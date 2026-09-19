@@ -1,5 +1,8 @@
 import type { GstLine, InvoiceTotals, LineItem } from "@/types/domain";
 
+/** Standard Indian GST slabs selectable in settings and product forms. */
+export const GST_RATE_OPTIONS = [0, 5, 12, 18, 28] as const;
+
 export interface GstItemInput {
   quantity: number;
   unitPrice: number;

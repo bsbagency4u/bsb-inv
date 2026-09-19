@@ -10,11 +10,6 @@ export interface ModulePlaceholderConfig {
 }
 
 export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
-  "/inventory/transfers": {
-    title: "Stock Transfers",
-    description: "Transfer stock between warehouses and locations in Phase 3.",
-    phase: 3,
-  },
   "/inventory/barcode": {
     title: "Barcode",
     description: "Barcode generation and scanning support arrives in Phase 4.",
@@ -23,35 +18,10 @@ export const MODULE_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
 };
 
 export const SETTINGS_PLACEHOLDERS: Record<string, ModulePlaceholderConfig> = {
-  "/settings/users": {
-    title: "Users & Roles",
-    description: "Invite team members, assign roles and manage permissions in Phase 4.",
-    phase: 4,
-  },
-  "/settings/tax": {
-    title: "Tax",
-    description: "GST and tax configuration arrives with the GST engine in Phase 4.",
-    phase: 4,
-  },
-  "/settings/invoice": {
-    title: "Invoice",
-    description: "Invoice templates, numbering and GST layout in Phase 4.",
-    phase: 4,
-  },
   "/settings/inventory": {
     title: "Inventory",
     description: "Stock rules, low-stock thresholds and units in Phase 2/4.",
     phase: 4,
-  },
-  "/settings/sales": {
-    title: "Sales",
-    description: "Sales defaults, discount and payment rules in Phase 3.",
-    phase: 3,
-  },
-  "/settings/purchase": {
-    title: "Purchase",
-    description: "Purchase defaults and vendor payment terms in Phase 3.",
-    phase: 3,
   },
   "/settings/counters": {
     title: "Counters",

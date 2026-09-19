@@ -26,8 +26,12 @@ export class ProfileService {
       );
     }
     const data = parsed.data;
+    if (!(await this.repos.profiles.isUsernameAvailable(data.username, userId))) {
+      throw AppError.conflict("That username is already taken.");
+    }
     const profile = await this.repos.profiles.update(userId, {
       fullName: data.fullName,
+      username: data.username,
       phone: data.phone || null,
       avatarUrl: data.avatarUrl || null,
     });

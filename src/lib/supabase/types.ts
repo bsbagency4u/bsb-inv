@@ -30,8 +30,22 @@ export type RolePermission = {
 export type Profile = {
   id: string;
   full_name: string | null;
+  email: string | null;
+  username: string | null;
   phone: string | null;
   avatar_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type BusinessInvitation = {
+  id: string;
+  business_id: string;
+  email: string;
+  full_name: string;
+  role_slug: string;
+  invited_by: string | null;
+  status: string;
   created_at: string;
   updated_at: string;
 }
@@ -552,6 +566,12 @@ export interface Database {
         Update: Partial<BusinessSetting>;
         Relationships: [];
       };
+      business_invitations: {
+        Row: BusinessInvitation;
+        Insert: Partial<BusinessInvitation> & { business_id: string; email: string; role_slug: string };
+        Update: Partial<BusinessInvitation>;
+        Relationships: [];
+      };
       audit_logs: {
         Row: AuditLog;
         Insert: Partial<AuditLog> & { action: string };
@@ -741,6 +761,10 @@ export interface Database {
       next_document_number: {
         Args: { p_business: string; p_kind: string; p_prefix: string };
         Returns: string;
+      };
+      is_username_available: {
+        Args: { p_username: string };
+        Returns: boolean;
       };
     };
     Enums: Record<never, never>;

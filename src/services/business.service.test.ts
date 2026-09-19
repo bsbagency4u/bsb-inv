@@ -8,6 +8,7 @@ import { AppError } from "@/lib/errors";
 function createMemoryRepositories(): Repositories {
   const businesses = new Map<string, BusinessProfile>();
   const auditLogs: AuditEvent[] = [];
+  const settings = new Map<string, unknown>();
 
   return {
     businesses: {
@@ -19,6 +20,12 @@ function createMemoryRepositories(): Repositories {
       },
       async getByUserAndId(_userId, id) {
         return businesses.get(id) ?? null;
+      },
+      async getSetting(businessId, key) {
+        return settings.get(`${businessId}:${key}`) ?? null;
+      },
+      async setSetting(businessId, key, value) {
+        settings.set(`${businessId}:${key}`, value);
       },
       async create(userId, input) {
         const now = new Date().toISOString();
@@ -62,7 +69,29 @@ function createMemoryRepositories(): Repositories {
         return null;
       },
       async update(_userId, input: Partial<SessionUser>) {
-        return { id: "u-1", email: "a@b.com", fullName: input.fullName ?? "", isOwner: false, isDemo: false } as SessionUser;
+        return {
+          id: "u-1",
+          email: "a@b.com",
+          fullName: input.fullName ?? "",
+          username: input.username ?? "user1",
+          isOwner: false,
+          isDemo: false,
+          role: null,
+        } as SessionUser;
+      },
+      async isUsernameAvailable() {
+        return true;
+      },
+      async upsertOwnProfile(_userId, input) {
+        return {
+          id: "u-1",
+          email: input.email ?? "a@b.com",
+          fullName: input.fullName ?? "",
+          username: input.username ?? "user1",
+          isOwner: false,
+          isDemo: false,
+          role: null,
+        } as SessionUser;
       },
     },
     audits: {
@@ -174,6 +203,18 @@ function createMemoryRepositories(): Repositories {
       async markRead() {},
       async markAllRead() {},
     },
+    team: {
+      async listMembers() { return []; },
+      async listRoles() { return []; },
+      async listPermissions() { return []; },
+      async listRolePermissions() { return []; },
+      async listInvitations() { return []; },
+      async createInvitation() { throw new Error("not used in test"); },
+      async cancelInvitation() {},
+      async updateMemberRole() {},
+      async removeMember() {},
+      async getMemberPermissions() { return ["*"]; },
+    },
   };
 }
 
@@ -257,5 +298,126 @@ describe("BusinessService", () => {
     });
     const active = await businesses.getActiveBusiness("u-1");
     expect(active?.name).toBe("Store A");
+  });
+
+  it("returns default sales and purchase settings when none are stored", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const sales = await businesses.getSalesDefaults(created.id);
+    const purchase = await businesses.getPurchaseDefaults(created.id);
+    expect(sales.defaultPaymentMode).toBe("cash");
+    expect(purchase.defaultWarehouseId).toBeNull();
+  });
+
+  it("persists sales and purchase defaults", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const sales = await businesses.updateSalesDefaults("u-1", created.id, {
+      defaultPaymentMode: "upi",
+      defaultIntraState: false,
+      defaultDiscountPercent: 5,
+      allowLineDiscount: false,
+    });
+    const purchase = await businesses.updatePurchaseDefaults("u-1", created.id, {
+      defaultWarehouseId: "wh-1",
+      defaultPaymentTerms: "Net 30",
+      defaultIntraState: false,
+    });
+    expect(sales.defaultPaymentMode).toBe("upi");
+    expect(await businesses.getSalesDefaults(created.id)).toEqual(sales);
+    expect(purchase.defaultPaymentTerms).toBe("Net 30");
+    expect((await businesses.getPurchaseDefaults(created.id)).defaultWarehouseId).toBe("wh-1");
+  });
+
+  it("returns default tax settings when none are stored", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const tax = await businesses.getTaxDefaults(created.id);
+    expect(tax.gstEnabled).toBe(true);
+    expect(tax.defaultGstRate).toBe(18);
+  });
+
+  it("persists tax defaults and records an audit event", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const tax = await businesses.updateTaxDefaults("u-1", created.id, {
+      gstEnabled: true,
+      defaultGstRate: 12,
+      defaultIntraState: false,
+      defaultHsnCode: "1006",
+      pricesIncludeTax: true,
+    });
+    expect(tax.defaultGstRate).toBe(12);
+    expect(tax.defaultHsnCode).toBe("1006");
+    expect(await businesses.getTaxDefaults(created.id)).toEqual(tax);
+
+    const logs = await audits.listForBusiness(created.id);
+    expect(logs.some((log) => log.action === "settings.tax.updated")).toBe(true);
+  });
+
+  it("returns default invoice settings when none are stored", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const invoice = await businesses.getInvoiceDefaults(created.id);
+    expect(invoice.showLogo).toBe(true);
+    expect(invoice.paperSize).toBe("a4");
+  });
+
+  it("persists invoice layout defaults", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const invoice = await businesses.updateInvoiceDefaults("u-1", created.id, {
+      showLogo: false,
+      showGstin: true,
+      showHsn: true,
+      showBankDetails: true,
+      bankDetails: "HDFC 1234",
+      termsAndConditions: "No returns.",
+      footerNote: "Thanks!",
+      paperSize: "thermal",
+    });
+    expect(invoice.paperSize).toBe("thermal");
+    expect(invoice.showHsn).toBe(true);
+    expect(await businesses.getInvoiceDefaults(created.id)).toEqual(invoice);
+  });
+
+  it("updates invoice numbering on the business profile", async () => {
+    const created = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const updated = await businesses.updateInvoiceNumbering("u-1", created.id, {
+      invoicePrefix: "bill",
+      invoiceStartNumber: 2000,
+    });
+    expect(updated.invoicePrefix).toBe("BILL");
+    expect(updated.invoiceStartNumber).toBe(2000);
+    expect((await repos.businesses.getById(created.id))?.invoicePrefix).toBe("BILL");
   });
 });

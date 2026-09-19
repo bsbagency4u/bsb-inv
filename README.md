@@ -1,9 +1,9 @@
 # BSB StockFlow
 
-Multi-business inventory & billing ERP for Indian SMEs. Phase 1 builds the
-foundation: application shell, authentication, multi-business/Supabase-ready
-architecture, design system, business setup, and dashboard/settings/profile.
-Product, inventory, sales, POS and GST engine ship in later phases.
+Multi-business inventory & billing ERP for Indian SMEs. Phases 1–3 are
+shipped: foundation, inventory engine, sales/POS, purchases, GST, and
+transaction numbering. Remaining work (users/roles, barcode, print/PDF,
+offline) is tracked in `CHECKLIST.md`.
 
 ## Stack
 
@@ -31,7 +31,7 @@ anon key to enable real accounts and persistence:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=   # server-only, optional in Phase 1
+SUPABASE_SERVICE_ROLE_KEY=   # server-only, optional
 ```
 
 Apply the database schema and seed:
@@ -58,22 +58,35 @@ supabase db seed --file supabase/seed/0001_roles_permissions.sql
   Supabase; a local/demo implementation swaps in when Supabase is unconfigured.
   UI never queries Supabase directly — it always goes through services.
 - **Services** (`src/services/`) hold business logic (validation, audit logs,
-  active-business persistence, auth).
+  stock ledger, GST, transactions, auth).
 - **Multi-business**: records carry `business_id`, RLS scopes rows to members,
   owners write; the shell includes a business switcher.
 - **Future modules** render via a config-driven catch-all placeholder
   ("Coming Soon"); adding a real page overrides the placeholder. See
-  `src/config/modules.ts`.
+  `src/config/modules.ts`. Remaining work: `CHECKLIST.md`.
 
-## Phase 1 scope
+## Shipped
 
-- Auth foundation (sign in / sign up, demo session) + `proxy.ts` session check
+### Phase 1 — Foundation
+
+- Auth (sign in / sign up, demo session) + `proxy.ts` session check
 - Business profile + onboarding + settings (business/system)
 - User profile, app shell, global search (⌘K), notifications, business switcher
 - Supabase schema, RLS policies and seed (roles/permissions)
 
-## Phase 2+ roadmap
+### Phase 2 — Inventory & operations
 
-Product master (dynamic attributes per business type), inventory, sales & POS,
-purchases, invoicing + GST engine, reports, offline/sync, audit logs, global
-search, notifications.
+- Products (dynamic attributes per business type), categories, brands, units
+- Warehouses, stock locations, stock ledger
+- Customers, suppliers, POS, sales invoices, GST engine, reports
+
+### Phase 3 — Transaction engine
+
+- Purchase orders, receiving, purchase invoices, sales/purchase returns
+- Payments, configurable payment modes, atomic document numbering
+- Stock transfers page, sales/purchase defaults
+
+## Next (Phase 4+)
+
+Users & roles UI, tax/invoice settings, barcode, print/PDF, GSTR export,
+multi-counter POS, offline/sync. See `CHECKLIST.md`.

@@ -46,9 +46,9 @@ export default function PurchaseInvoicesPage() {
   const [supplierId, setSupplierId] = React.useState<string | null>(null);
   const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = React.useState<string | null>(null);
-  const [intraState, setIntraState] = React.useState(true);
+  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [lines, setLines] = React.useState<CartLine[]>([]);
-  const [notes, setNotes] = React.useState<string | null>(null);
+  const [notesOverride, setNotesOverride] = React.useState<string | null | undefined>(undefined);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-invoices", business?.id],
@@ -86,6 +86,18 @@ export default function PurchaseInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: purchaseDefaults } = useQuery({
+    queryKey: ["purchase-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getPurchaseDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? true;
+  const notes = notesOverride === undefined ? (purchaseDefaults?.defaultPaymentTerms || null) : notesOverride;
+
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -110,9 +122,9 @@ export default function PurchaseInvoicesPage() {
     setSupplierId(null);
     setDate(new Date().toISOString().slice(0, 10));
     setDueDate(null);
-    setIntraState(true);
+    setIntraStateOverride(null);
     setLines([]);
-    setNotes(null);
+    setNotesOverride(undefined);
   };
 
   const createInvoice = async () => {
@@ -131,6 +143,7 @@ export default function PurchaseInvoicesPage() {
       );
       await services.transactions.createPurchaseInvoice(business.id, user.id, billNo, {
         supplierId,
+        warehouseId: purchaseDefaults?.defaultWarehouseId ?? null,
         invoiceDate: date,
         dueDate,
         notes,
@@ -309,11 +322,11 @@ export default function PurchaseInvoicesPage() {
           partyValue={supplierId}
           onPartyChange={setSupplierId}
           intraState={intraState}
-          onIntraStateChange={setIntraState}
+          onIntraStateChange={setIntraStateOverride}
           lines={lines}
           onLinesChange={setLines}
           notes={notes}
-          onNotesChange={setNotes}
+          onNotesChange={setNotesOverride}
           date={date}
           onDateChange={setDate}
           dueDate={dueDate}

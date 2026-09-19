@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Circle, LayoutDashboard, Store } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
@@ -17,7 +18,14 @@ import { formatDate } from "@/lib/utils";
 import { getBusinessType } from "@/config/business-types";
 
 export default function DashboardPage() {
-  const { business, isDemo } = useSession();
+  const { business, isDemo, status } = useSession();
+  const router = useRouter();
+
+  React.useEffect(() => {
+    if (status === "authenticated" && !business) {
+      router.replace("/onboarding");
+    }
+  }, [status, business, router]);
 
   const statsQuery = useQuery({
     queryKey: ["dashboard-stats", business?.id],

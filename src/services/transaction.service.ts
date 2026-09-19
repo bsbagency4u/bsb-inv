@@ -16,6 +16,7 @@ import { GstEngine } from "./gst.service";
 import { InventoryService } from "./inventory.service";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
+import { AuthorizationService } from "./authorization.service";
 
 export interface CartItemInput {
   productId: string;
@@ -40,6 +41,7 @@ export interface SalesInput {
   items: CartItemInput[];
   intraState?: boolean;
   payments?: PaymentAllocation[];
+  discount?: number;
 }
 
 export interface PurchaseInput {
@@ -105,13 +107,16 @@ type DocumentKind = "sales" | "purchase_order" | "purchase_invoice" | "sales_ret
 export class TransactionService {
   private gst = new GstEngine();
   private inventory: InventoryService;
+  private auth: AuthorizationService;
 
   constructor(
     private repos: Repositories,
     private audits: AuditService,
-    private notifications: NotificationService
+    private notifications: NotificationService,
+    auth?: AuthorizationService
   ) {
-    this.inventory = new InventoryService(repos, audits, notifications);
+    this.auth = auth ?? new AuthorizationService(repos);
+    this.inventory = new InventoryService(repos, audits, notifications, this.auth);
   }
 
   private validateItems(items: { quantity: number; unitPrice: number }[]): void {
@@ -158,9 +163,11 @@ export class TransactionService {
     invoiceNo: string,
     input: SalesInput
   ): Promise<{ invoice: SalesInvoice; totals: InvoiceTotals }> {
+    await this.auth.requirePermission(businessId, userId, "sales.manage");
     this.validateItems(input.items);
     const totals = this.gst.computeTotals(input.items, {
       intraState: input.intraState ?? true,
+      discount: input.discount ?? 0,
     });
 
     const payments = input.payments ?? [];
@@ -250,6 +257,7 @@ export class TransactionService {
     userId: string,
     invoiceId: string
   ): Promise<void> {
+    await this.auth.requirePermission(businessId, userId, "sales.manage");
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Invoice not found.");
     if (invoice.status === "cancelled") return;
@@ -284,6 +292,7 @@ export class TransactionService {
     orderNo: string,
     input: PurchaseInput
   ): Promise<PurchaseOrder> {
+    await this.auth.requirePermission(businessId, userId, "purchase.manage");
     this.validateItems(input.items);
     const totals = this.gst.computeTotals(input.items, {
       intraState: input.intraState ?? true,
@@ -330,6 +339,7 @@ export class TransactionService {
     receiptNo: string,
     input: ReceivingInput
   ): Promise<PurchaseReceipt> {
+    await this.auth.requirePermission(businessId, userId, "purchase.manage");
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one received item.");
     }
@@ -385,6 +395,7 @@ export class TransactionService {
     billNo: string,
     input: PurchaseInput
   ): Promise<PurchaseInvoice> {
+    await this.auth.requirePermission(businessId, userId, "purchase.manage");
     this.validateItems(input.items);
     const totals = this.gst.computeTotals(input.items, {
       intraState: input.intraState ?? true,
@@ -448,6 +459,7 @@ export class TransactionService {
     returnNo: string,
     input: PurchaseReturnInput
   ): Promise<PurchaseReturn> {
+    await this.auth.requirePermission(businessId, userId, "purchase.manage");
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one returned item.");
     }
@@ -509,6 +521,7 @@ export class TransactionService {
     returnNo: string,
     input: SalesReturnInput
   ): Promise<SalesReturn> {
+    await this.auth.requirePermission(businessId, userId, "sales.manage");
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one returned item.");
     }
@@ -577,6 +590,11 @@ export class TransactionService {
   }
 
   async createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment> {
+    await this.auth.requirePermission(
+      businessId,
+      userId,
+      input.direction === "in" ? "sales.manage" : "purchase.manage"
+    );
     if (input.amount <= 0) {
       throw AppError.validation("Payment amount must be positive.");
     }
@@ -645,6 +663,7 @@ export class TransactionService {
     userId: string,
     input: { code: string; name: string }
   ): Promise<PaymentMode> {
+    await this.auth.requirePermission(businessId, userId, "settings.manage");
     const mode = await this.repos.transactions.createPaymentMode(businessId, input);
     await this.audits.log({
       businessId,
@@ -663,6 +682,7 @@ export class TransactionService {
     modeId: string,
     input: { name?: string; isActive?: boolean }
   ): Promise<PaymentMode> {
+    await this.auth.requirePermission(businessId, userId, "settings.manage");
     const mode = await this.repos.transactions.updatePaymentMode(businessId, modeId, input);
     await this.audits.log({
       businessId,

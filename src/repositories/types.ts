@@ -6,6 +6,7 @@ import type { InventoryRepository } from "./inventory.repository";
 import type { PartyRepository } from "./party.repository";
 import type { TransactionRepository } from "./transaction.repository";
 import type { NotificationRepository } from "./notification.repository";
+import type { TeamRepository } from "./team.repository";
 
 export interface Repositories {
   businesses: BusinessRepository;
@@ -16,6 +17,7 @@ export interface Repositories {
   parties: PartyRepository;
   transactions: TransactionRepository;
   notifications: NotificationRepository;
+  team: TeamRepository;
 }
 
 export type {
@@ -27,6 +29,7 @@ export type {
   PartyRepository,
   TransactionRepository,
   NotificationRepository,
+  TeamRepository,
 };
 export type { BusinessProfile } from "@/types/domain";
 export type { AuditLogInput } from "./audit.repository";
@@ -42,3 +45,4 @@ export type {
   PaymentInput,
   LineItemInput,
 } from "./transaction.repository";
+export type { InvitationInput } from "./team.repository";

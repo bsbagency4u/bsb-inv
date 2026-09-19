@@ -1,12 +1,14 @@
 import type {
   Brand,
   Business,
+  BusinessInvitation,
   BusinessMember,
   Category,
   Customer,
   Notification,
   Payment,
   PaymentMode,
+  Permission,
   Product,
   ProductBatch,
   ProductImage,
@@ -19,6 +21,7 @@ import type {
   PurchaseReceiptItem,
   PurchaseReturn,
   PurchaseReturnItem,
+  Role,
   SalesInvoice,
   SalesReturn,
   SalesReturnItem,
@@ -38,6 +41,7 @@ import type {
   NotificationItem,
   Payment as PaymentModel,
   PaymentMode as PaymentModeModel,
+  Permission as PermissionModel,
   Product as ProductModel,
   ProductBatch as ProductBatchModel,
   ProductImage as ProductImageModel,
@@ -47,10 +51,12 @@ import type {
   PurchaseOrder as PurchaseOrderModel,
   PurchaseReceipt as PurchaseReceiptModel,
   PurchaseReturn as PurchaseReturnModel,
+  Role as RoleModel,
   SalesInvoice as SalesInvoiceModel,
   SalesReturn as SalesReturnModel,
   SessionUser,
   StockBalance,
+  TeamInvitation,
   StockLocation as StockLocationModel,
   StockMovement,
   Supplier as SupplierModel,
@@ -522,12 +528,44 @@ export function mapMembership(row: BusinessMember): BusinessMembership {
 export function mapProfile(row: Profile): SessionUser {
   return {
     id: row.id,
-    email: "",
+    email: row.email ?? "",
     fullName: row.full_name ?? "User",
+    username: row.username ?? null,
     phone: row.phone,
     avatarUrl: row.avatar_url,
     role: null,
     isOwner: false,
     isDemo: false,
+  };
+}
+
+export function mapRole(row: Role): RoleModel {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    isSystem: row.is_system,
+  };
+}
+
+export function mapPermission(row: Permission): PermissionModel {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+  };
+}
+
+export function mapInvitation(row: BusinessInvitation): TeamInvitation {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    email: row.email,
+    fullName: row.full_name,
+    roleSlug: row.role_slug,
+    invitedBy: row.invited_by ?? "",
+    createdAt: row.created_at,
   };
 }

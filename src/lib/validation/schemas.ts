@@ -109,6 +109,17 @@ export const businessProfileSchema = z.object({
 
 export type BusinessProfileValues = z.infer<typeof businessProfileSchema>;
 
+export const USERNAME = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(3, "Username must be at least 3 characters.")
+  .max(24, "Username must be 24 characters or fewer.")
+  .regex(
+    /^[a-z][a-z0-9_]*$/,
+    "Username must start with a letter and contain only letters, numbers and underscores."
+  );
+
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email address."),
   password: z.string().min(1, "Password is required."),
@@ -116,8 +127,59 @@ export const loginSchema = z.object({
 
 export type LoginValues = z.infer<typeof loginSchema>;
 
+export const signupSchema = z
+  .object({
+    fullName: z.string().trim().min(2, "Full name is required.").max(80),
+    email: z.string().trim().toLowerCase().email("Enter a valid email address."),
+    username: USERNAME,
+    password: z.string().min(8, "Password must be at least 8 characters."),
+    confirmPassword: z.string().min(1, "Confirm your password."),
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
+
+export type SignupValues = z.infer<typeof signupSchema>;
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().toLowerCase().email("Enter a valid email address."),
+});
+
+export type ForgotPasswordValues = z.infer<typeof forgotPasswordSchema>;
+
+export const resetPasswordSchema = z
+  .object({
+    password: z.string().min(8, "Password must be at least 8 characters."),
+    confirmPassword: z.string().min(1, "Confirm your password."),
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
+
+export type ResetPasswordValues = z.infer<typeof resetPasswordSchema>;
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Current password is required."),
+    password: z.string().min(8, "Password must be at least 8 characters."),
+    confirmPassword: z.string().min(1, "Confirm your password."),
+  })
+  .refine((value) => value.password === value.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  })
+  .refine((value) => value.currentPassword !== value.password, {
+    message: "New password must be different from the current password.",
+    path: ["password"],
+  });
+
+export type ChangePasswordValues = z.infer<typeof changePasswordSchema>;
+
 export const userProfileSchema = z.object({
   fullName: z.string().trim().min(2, "Full name is required.").max(120),
+  username: USERNAME,
   phone: PHONE,
   avatarUrl: z.string().trim().url("Invalid image URL.").optional().or(z.literal("")),
 });
@@ -209,3 +271,73 @@ export const partySchema = z.object({
 });
 
 export type PartyValues = z.infer<typeof partySchema>;
+
+export const salesDefaultsSchema = z.object({
+  defaultPaymentMode: z.string().trim().min(1, "Default payment mode is required."),
+  defaultIntraState: z.boolean(),
+  defaultDiscountPercent: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
+    .pipe(z.number().min(0, "Discount cannot be negative.").max(100, "Discount cannot exceed 100%.")),
+  allowLineDiscount: z.boolean(),
+});
+
+export type SalesDefaultsValues = z.infer<typeof salesDefaultsSchema>;
+
+export const purchaseDefaultsSchema = z.object({
+  defaultWarehouseId: z.string().trim().optional().or(z.literal("")),
+  defaultPaymentTerms: z.string().trim().max(200).optional().or(z.literal("")),
+  defaultIntraState: z.boolean(),
+});
+
+export type PurchaseDefaultsValues = z.infer<typeof purchaseDefaultsSchema>;
+
+export const taxDefaultsSchema = z.object({
+  gstEnabled: z.boolean(),
+  defaultGstRate: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
+    .pipe(
+      z
+        .number()
+        .min(0, "GST rate cannot be negative.")
+        .max(100, "GST rate cannot exceed 100%.")
+    ),
+  defaultIntraState: z.boolean(),
+  defaultHsnCode: z.string().trim().max(20).optional().or(z.literal("")),
+  pricesIncludeTax: z.boolean(),
+});
+
+export type TaxDefaultsValues = z.infer<typeof taxDefaultsSchema>;
+
+export const invoiceDefaultsSchema = z.object({
+  showLogo: z.boolean(),
+  showGstin: z.boolean(),
+  showHsn: z.boolean(),
+  showBankDetails: z.boolean(),
+  bankDetails: z.string().trim().max(300).optional().or(z.literal("")),
+  termsAndConditions: z.string().trim().max(1000).optional().or(z.literal("")),
+  footerNote: z.string().trim().max(200).optional().or(z.literal("")),
+  paperSize: z.enum(["a4", "a5", "thermal"]),
+});
+
+export type InvoiceDefaultsValues = z.infer<typeof invoiceDefaultsSchema>;
+
+export const invoiceNumberingSchema = z.object({
+  invoicePrefix: INVOICE_PREFIX,
+  invoiceStartNumber: INVOICE_START_NUMBER,
+});
+
+export type InvoiceNumberingValues = z.infer<typeof invoiceNumberingSchema>;
+
+export const inviteMemberSchema = z.object({
+  email: EMAIL,
+  fullName: z.string().trim().min(2, "Name is required.").max(80).optional().or(z.literal("")),
+  roleSlug: z
+    .string()
+    .trim()
+    .min(1, "Role is required.")
+    .refine((slug) => slug !== "owner", "Owner cannot be assigned by invite."),
+});
+
+export type InviteMemberValues = z.infer<typeof inviteMemberSchema>;

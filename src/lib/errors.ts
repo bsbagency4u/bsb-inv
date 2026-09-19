@@ -158,7 +158,39 @@ export function normalizeError(error: unknown): NormalizedError {
         userMessage: "The requested item could not be found.",
       };
     }
-    if (typeof code === "string" && code.startsWith("PGRST")) {
+    if (code === "42501") {
+      return {
+        code: "AUTHORIZATION",
+        status: 403,
+        message: message ?? "Row-level security denied the write.",
+        userMessage: "You do not have permission to save this.",
+      };
+    }
+    if (code === "23505") {
+      return {
+        code: "CONFLICT",
+        status: 409,
+        message: message ?? "Unique constraint failed.",
+        userMessage: "This conflicts with existing data. It may already exist.",
+      };
+    }
+    if (code === "23503") {
+      return {
+        code: "UNPROCESSABLE",
+        status: 422,
+        message: message ?? "Foreign key constraint failed.",
+        userMessage: "This could not be saved because a related record is missing.",
+      };
+    }
+    if (code === "23502") {
+      return {
+        code: "VALIDATION",
+        status: 422,
+        message: message ?? "Not-null constraint failed.",
+        userMessage: "A required value is missing.",
+      };
+    }
+    if (typeof code === "string" && (code.startsWith("PGRST") || /^[0-9]{5}$/.test(code))) {
       return {
         code: "DATABASE",
         status: 500,

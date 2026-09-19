@@ -24,24 +24,24 @@ const SETTINGS_GROUPS = [
     title: "Business",
     items: [
       { label: "Business profile", href: "/settings/business", icon: Store, available: true },
-      { label: "Users & roles", href: "/settings/users", icon: Users, available: false },
+      { label: "Users & roles", href: "/settings/users", icon: Users, available: true },
       { label: "Warehouses", href: "/settings/warehouses", icon: Warehouse, available: false },
     ],
   },
   {
     title: "Billing & tax",
     items: [
-      { label: "Tax", href: "/settings/tax", icon: Receipt, available: false },
-      { label: "Invoice", href: "/settings/invoice", icon: FileText, available: false },
-      { label: "Payments", href: "/settings/payments", icon: Wallet, available: false },
+      { label: "Tax", href: "/settings/tax", icon: Receipt, available: true },
+      { label: "Invoice", href: "/settings/invoice", icon: FileText, available: true },
+      { label: "Payments", href: "/settings/payments", icon: Wallet, available: true },
     ],
   },
   {
     title: "Operations",
     items: [
       { label: "Inventory", href: "/settings/inventory", icon: Boxes, available: false },
-      { label: "Sales", href: "/settings/sales", icon: ShoppingCart, available: false },
-      { label: "Purchase", href: "/settings/purchase", icon: ShoppingBag, available: false },
+      { label: "Sales", href: "/settings/sales", icon: ShoppingCart, available: true },
+      { label: "Purchase", href: "/settings/purchase", icon: ShoppingBag, available: true },
       { label: "Counters", href: "/settings/counters", icon: Monitor, available: false },
     ],
   },

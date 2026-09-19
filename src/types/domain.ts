@@ -6,6 +6,7 @@ export interface SessionUser {
   id: string;
   email: string;
   fullName: string;
+  username: string | null;
   phone?: string | null;
   avatarUrl?: string | null;
   /** Role slug within the active business. */
@@ -46,6 +47,85 @@ export interface BusinessMembership {
   userId: string;
   roleSlug: string | null;
   isOwner: boolean;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  isSystem: boolean;
+}
+
+export interface Permission {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+}
+
+export interface RolePermissionMap {
+  roleId: string;
+  permissionId: string;
+}
+
+export type TeamMemberStatus = "active" | "pending";
+
+export interface TeamMember {
+  businessId: string;
+  userId: string;
+  email: string;
+  fullName: string;
+  roleId: string | null;
+  roleSlug: string | null;
+  roleName: string | null;
+  isOwner: boolean;
+  status: TeamMemberStatus;
+  createdAt: string;
+}
+
+export interface TeamInvitation {
+  id: string;
+  businessId: string;
+  email: string;
+  fullName: string;
+  roleSlug: string;
+  invitedBy: string;
+  createdAt: string;
+}
+
+export interface SalesDefaults {
+  defaultPaymentMode: string;
+  defaultIntraState: boolean;
+  defaultDiscountPercent: number;
+  allowLineDiscount: boolean;
+}
+
+export interface PurchaseDefaults {
+  defaultWarehouseId: string | null;
+  defaultPaymentTerms: string;
+  defaultIntraState: boolean;
+}
+
+export interface TaxDefaults {
+  gstEnabled: boolean;
+  defaultGstRate: number;
+  defaultIntraState: boolean;
+  defaultHsnCode: string;
+  pricesIncludeTax: boolean;
+}
+
+export type InvoicePaperSize = "a4" | "a5" | "thermal";
+
+export interface InvoiceDefaults {
+  showLogo: boolean;
+  showGstin: boolean;
+  showHsn: boolean;
+  showBankDetails: boolean;
+  bankDetails: string;
+  termsAndConditions: string;
+  footerNote: string;
+  paperSize: InvoicePaperSize;
 }
 
 export interface SessionState {

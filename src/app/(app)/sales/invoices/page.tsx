@@ -51,10 +51,10 @@ export default function SalesInvoicesPage() {
   const [customerId, setCustomerId] = React.useState<string | null>(null);
   const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = React.useState<string | null>(null);
-  const [intraState, setIntraState] = React.useState(true);
+  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [lines, setLines] = React.useState<CartLine[]>([]);
   const [notes, setNotes] = React.useState<string | null>(null);
-  const [paymentMode, setPaymentMode] = React.useState<string>("cash");
+  const [paymentModeOverride, setPaymentModeOverride] = React.useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = React.useState<string>("");
 
   const [paying, setPaying] = React.useState<SalesInvoice | null>(null);
@@ -98,6 +98,18 @@ export default function SalesInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: salesDefaults } = useQuery({
+    queryKey: ["sales-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getSalesDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const paymentMode = paymentModeOverride ?? salesDefaults?.defaultPaymentMode ?? "cash";
+  const intraState = intraStateOverride ?? salesDefaults?.defaultIntraState ?? true;
+
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -124,10 +136,10 @@ export default function SalesInvoicesPage() {
     setCustomerId(null);
     setDate(new Date().toISOString().slice(0, 10));
     setDueDate(null);
-    setIntraState(true);
+    setIntraStateOverride(null);
     setLines([]);
     setNotes(null);
-    setPaymentMode("cash");
+    setPaymentModeOverride(null);
     setPaymentAmount("");
   };
 
@@ -158,6 +170,11 @@ export default function SalesInvoicesPage() {
         })),
         intraState,
         payments: [{ mode: paymentMode, amount: Number(paymentAmount) || 0 }],
+        discount:
+          salesDefaults && salesDefaults.defaultDiscountPercent > 0
+            ? lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0) *
+              (salesDefaults.defaultDiscountPercent / 100)
+            : 0,
       });
       toastSuccess("Invoice created", `Invoice ${invoiceNo} was saved.`);
       setCreateOpen(false);
@@ -189,7 +206,7 @@ export default function SalesInvoicesPage() {
   const openPay = (invoice: SalesInvoice) => {
     setPaying(invoice);
     setPayAmount(String(invoice.total - invoice.paidAmount));
-    setPayMode("cash");
+    setPayMode(salesDefaults?.defaultPaymentMode ?? "cash");
   };
 
   const submitPayment = async () => {
@@ -334,7 +351,7 @@ export default function SalesInvoicesPage() {
           partyValue={customerId}
           onPartyChange={setCustomerId}
           intraState={intraState}
-          onIntraStateChange={setIntraState}
+          onIntraStateChange={setIntraStateOverride}
           lines={lines}
           onLinesChange={setLines}
           notes={notes}
@@ -350,7 +367,7 @@ export default function SalesInvoicesPage() {
             <Select
               id="invoice-mode"
               value={paymentMode}
-              onChange={(event) => setPaymentMode(event.target.value)}
+              onChange={(event) => setPaymentModeOverride(event.target.value)}
             >
               {(paymentModes ?? []).map((mode) => (
                 <option key={mode.id} value={mode.code}>

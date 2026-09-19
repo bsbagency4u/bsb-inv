@@ -219,10 +219,26 @@ function memoryRepositories() {
       async getByUserAndId() { return null; },
       async create() { throw new Error("not used"); },
       async update() { throw new Error("not used"); },
+      async getSetting() { return null; },
+      async setSetting() {},
     },
     profiles: {
       async getByUserId() { return null; },
       async update() { throw new Error("not used"); },
+      async isUsernameAvailable() { return true; },
+      async upsertOwnProfile() { throw new Error("not used"); },
+    },
+    team: {
+      async listMembers() { return []; },
+      async listRoles() { return []; },
+      async listPermissions() { return []; },
+      async listRolePermissions() { return []; },
+      async listInvitations() { return []; },
+      async createInvitation() { throw new Error("not used"); },
+      async cancelInvitation() {},
+      async updateMemberRole() {},
+      async removeMember() {},
+      async getMemberPermissions() { return ["*"]; },
     },
   };
 

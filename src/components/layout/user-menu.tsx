@@ -17,12 +17,13 @@ import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 
 export function UserMenu() {
-  const { user, isDemo } = useSession();
+  const { user, isDemo, refresh } = useSession();
   const router = useRouter();
 
   const handleSignOut = async () => {
     const services = getClientServices();
     await services.auth.signOut();
+    await refresh();
     router.push("/login");
     router.refresh();
   };

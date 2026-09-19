@@ -3,6 +3,7 @@ import type { StockBalance, StockMovement } from "@/types/domain";
 import { AppError } from "@/lib/errors";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
+import { AuthorizationService } from "./authorization.service";
 
 export interface OpeningStockInput {
   productId: string;
@@ -63,11 +64,20 @@ export interface StockValuationRow {
  * derived by summing the ledger.
  */
 export class InventoryService {
+  private auth: AuthorizationService;
+
   constructor(
     private repos: Repositories,
     private audits: AuditService,
-    private notifications: NotificationService
-  ) {}
+    private notifications: NotificationService,
+    auth?: AuthorizationService
+  ) {
+    this.auth = auth ?? new AuthorizationService(repos);
+  }
+
+  private requireInventoryManage(businessId: string, userId: string): Promise<void> {
+    return this.auth.requirePermission(businessId, userId, "inventory.manage");
+  }
 
   async listBalances(businessId: string, productId?: string): Promise<StockBalance[]> {
     return this.repos.products.listBalances(businessId, productId);
@@ -82,6 +92,7 @@ export class InventoryService {
   }
 
   async createWarehouse(businessId: string, userId: string, input: { name: string; code: string; address?: string | null }) {
+    await this.requireInventoryManage(businessId, userId);
     const warehouse = await this.repos.inventory.createWarehouse(businessId, input);
     await this.audits.log({
       businessId,
@@ -100,6 +111,7 @@ export class InventoryService {
     warehouseId: string,
     input: { name?: string; code?: string; address?: string | null; isActive?: boolean }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const warehouse = await this.repos.inventory.updateWarehouse(businessId, warehouseId, input);
     await this.audits.log({
       businessId,
@@ -113,6 +125,7 @@ export class InventoryService {
   }
 
   async deleteWarehouse(businessId: string, userId: string, warehouseId: string): Promise<void> {
+    await this.requireInventoryManage(businessId, userId);
     await this.repos.inventory.deleteWarehouse(businessId, warehouseId);
     await this.audits.log({
       businessId,
@@ -132,6 +145,7 @@ export class InventoryService {
     userId: string,
     input: { warehouseId: string; name: string; code: string; parentId?: string | null }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const location = await this.repos.inventory.createLocation(businessId, input);
     await this.audits.log({
       businessId,
@@ -150,6 +164,7 @@ export class InventoryService {
     locationId: string,
     input: { name?: string; code?: string; parentId?: string | null; isActive?: boolean }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const location = await this.repos.inventory.updateLocation(businessId, locationId, input);
     await this.audits.log({
       businessId,
@@ -163,6 +178,7 @@ export class InventoryService {
   }
 
   async deleteLocation(businessId: string, userId: string, locationId: string): Promise<void> {
+    await this.requireInventoryManage(businessId, userId);
     await this.repos.inventory.deleteLocation(businessId, locationId);
     await this.audits.log({
       businessId,
@@ -185,6 +201,7 @@ export class InventoryService {
     userId: string,
     input: OpeningStockInput
   ): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity < 0) {
       throw AppError.validation("Opening stock quantity cannot be negative.");
@@ -223,6 +240,7 @@ export class InventoryService {
     userId: string,
     input: StockAdjustmentInput
   ): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (!Number.isFinite(input.change) || input.change === 0) {
       throw AppError.validation("Adjustment quantity must be a non-zero number.");
@@ -259,6 +277,7 @@ export class InventoryService {
     userId: string,
     input: StockTransferInput
   ): Promise<StockMovement[]> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity <= 0) {
       throw AppError.validation("Transfer quantity must be positive.");
@@ -309,6 +328,7 @@ export class InventoryService {
 
   /** Writes off damaged/waste stock as a SCRAP movement. */
   async scrapStock(businessId: string, userId: string, input: ScrapInput): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity <= 0) {
       throw AppError.validation("Scrap quantity must be positive.");

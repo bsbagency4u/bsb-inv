@@ -16,7 +16,7 @@ export default function SystemSettingsPage() {
   const rows = [
     { label: "Product", value: SITE.name },
     { label: "Tagline", value: SITE.tagline },
-    { label: "Phase", value: "1 — Foundation" },
+    { label: "Phase", value: "3 — Transaction engine" },
     { label: "Environment", value: isDemo ? "Demo (local)" : "Supabase connected" },
     { label: "Database", value: isSupabaseConfigured() ? "Supabase PostgreSQL" : "Local storage (demo)" },
     { label: "Service-role key", value: hasServiceRoleKey() ? "Configured (server-only)" : "Not configured" },
@@ -63,7 +63,7 @@ export default function SystemSettingsPage() {
               <Database className="size-4" />
               Database foundation
             </CardTitle>
-            <CardDescription>Tables created by the Phase 1 migration.</CardDescription>
+            <CardDescription>Core tables from the Phase 1–3 migrations.</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="grid grid-cols-1 gap-1.5 text-sm text-foreground sm:grid-cols-2">
