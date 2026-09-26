@@ -32,19 +32,30 @@ const RECEIPTS_KEY = "demo-purchase-receipts";
 const PURCHASE_RETURNS_KEY = "demo-purchase-returns";
 const SALES_RETURNS_KEY = "demo-sales-returns";
 
-const lineToModel = (item: LineItemInput): LineItem => ({
-  productId: item.productId,
-  quantity: item.quantity,
-  unitPrice: item.unitPrice,
-  gstRate: item.gstRate,
-  discount: item.discount ?? 0,
-  taxableAmount: item.quantity * item.unitPrice,
-  taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-  amount: item.quantity * item.unitPrice + item.quantity * item.unitPrice * (item.gstRate / 100),
-});
+const lineToModel = (item: LineItemInput): LineItem => {
+  const gross = item.quantity * item.unitPrice;
+  const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+  const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+  return {
+    productId: item.productId,
+    variantId: item.variantId ?? null,
+    batchId: item.batchId ?? null,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    gstRate: item.gstRate,
+    discount: item.discount ?? 0,
+    taxableAmount: taxable,
+    taxAmount: tax,
+    amount: item.amount ?? taxable + tax,
+    saleUnit: item.saleUnit ?? null,
+    baseQuantity: item.baseQuantity ?? item.quantity,
+  };
+};
 
 const lineToPurchaseModel = (item: LineItemInput): LineItem => ({
   productId: item.productId,
+  variantId: item.variantId ?? null,
+  batchId: item.batchId ?? null,
   quantity: item.quantity,
   unitPrice: item.unitPrice,
   gstRate: item.gstRate,
@@ -52,6 +63,8 @@ const lineToPurchaseModel = (item: LineItemInput): LineItem => ({
   taxableAmount: item.quantity * item.unitPrice,
   taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
   amount: item.quantity * item.unitPrice,
+  saleUnit: item.saleUnit ?? null,
+  baseQuantity: item.baseQuantity ?? item.quantity,
 });
 
 export class LocalTransactionRepository implements TransactionRepository {

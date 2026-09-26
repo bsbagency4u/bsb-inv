@@ -195,6 +195,25 @@ export const productSchema = z.object({
   brandId: z.string().optional().or(z.literal("")),
   unitId: z.string().optional().or(z.literal("")),
   unit: z.string().trim().optional().or(z.literal("pcs")),
+  packUnitId: z.string().optional().or(z.literal("")),
+  packUnit: z.string().trim().optional().or(z.literal("")),
+  unitsPerPack: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0.0001, "Units per pack must be greater than zero."))
+    .optional(),
+  minSaleQty: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Minimum sale quantity cannot be negative."))
+    .optional(),
+  maxSaleQty: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
+    .pipe(z.number().min(0, "Maximum sale quantity cannot be negative."))
+    .optional(),
+  allowBaseSale: z.boolean().optional(),
+  allowPackSale: z.boolean().optional(),
   attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   gstRate: z
     .union([z.number(), z.string().trim()])
@@ -240,7 +259,42 @@ export const productSchema = z.object({
   trackInventory: z.boolean().optional(),
   taxable: z.boolean().optional(),
   productStatus: z.enum(["active", "inactive", "draft", "discontinued"]).optional(),
-});
+})
+  .superRefine((data, ctx) => {
+    if (data.allowPackSale && !(data.packUnit || data.packUnitId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Select a pack unit to sell in packs.",
+        path: ["packUnitId"],
+      });
+    }
+    if (data.allowPackSale && (data.unitsPerPack ?? 1) <= 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Units per pack must be greater than 1 when selling packs.",
+        path: ["unitsPerPack"],
+      });
+    }
+    if (data.allowBaseSale === false && data.allowPackSale !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Allow sale in at least one unit.",
+        path: ["allowBaseSale"],
+      });
+    }
+    if (
+      data.maxSaleQty != null &&
+      data.minSaleQty != null &&
+      data.maxSaleQty > 0 &&
+      data.maxSaleQty < data.minSaleQty
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Maximum sale quantity cannot be less than minimum.",
+        path: ["maxSaleQty"],
+      });
+    }
+  });
 
 export type ProductValues = z.infer<typeof productSchema>;
 

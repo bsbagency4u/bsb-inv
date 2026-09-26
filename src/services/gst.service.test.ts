@@ -44,13 +44,61 @@ describe("GstEngine", () => {
     expect(result.total).toBe(223);
   });
 
-  it("applies an invoice-level discount", () => {
+  it("applies item and invoice discounts before GST", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 500, gstRate: 18, discount: 20 }],
+      { intraState: true, discount: 30 }
+    );
+    expect(result.subtotal).toBe(500);
+    expect(result.itemDiscount).toBe(20);
+    expect(result.discount).toBe(30);
+    expect(result.taxableAmount).toBe(450);
+    expect(result.taxAmount).toBe(81);
+    expect(result.total).toBe(531);
+  });
+
+  it("applies an invoice-level discount before GST", () => {
     const result = engine.computeTotals(
       [{ quantity: 1, unitPrice: 100, gstRate: 18 }],
       { intraState: true, discount: 10 }
     );
     expect(result.discount).toBe(10);
-    expect(result.total).toBe(108);
+    expect(result.taxableAmount).toBe(90);
+    expect(result.taxAmount).toBe(16.2);
+    expect(result.total).toBe(106.2);
+  });
+
+  it("applies item percentage discount before GST", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 200, gstRate: 18, discountPercent: 10 }],
+      { intraState: true }
+    );
+    expect(result.itemDiscount).toBe(20);
+    expect(result.taxableAmount).toBe(180);
+    expect(result.taxAmount).toBe(32.4);
+    expect(result.total).toBe(212.4);
+  });
+
+  it("applies invoice percentage discount after item discounts", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 500, gstRate: 18, discount: 50 }],
+      { intraState: true, discountPercent: 10 }
+    );
+    expect(result.itemDiscount).toBe(50);
+    expect(result.discount).toBe(45);
+    expect(result.taxableAmount).toBe(405);
+    expect(result.taxAmount).toBe(72.9);
+    expect(result.total).toBe(477.9);
+  });
+
+  it("clamps discounts so taxable amount is never negative", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 100, gstRate: 18, discount: 80 }],
+      { intraState: true, discount: 50 }
+    );
+    expect(result.taxableAmount).toBe(0);
+    expect(result.taxAmount).toBe(0);
+    expect(result.total).toBe(0);
   });
 
   it("rounds to two decimal places", () => {

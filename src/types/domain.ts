@@ -278,6 +278,13 @@ export interface Product {
   brandId: string | null;
   unitId: string | null;
   unit: string;
+  packUnit: string | null;
+  packUnitId: string | null;
+  unitsPerPack: number;
+  minSaleQty: number;
+  maxSaleQty: number | null;
+  allowBaseSale: boolean;
+  allowPackSale: boolean;
   /** Dynamic attributes resolved from the business-type attribute registry. */
   attributes: Record<string, string | number | boolean | null>;
   gstRate: number;
@@ -306,6 +313,7 @@ export interface ProductStock {
 export interface StockBalance {
   productId: string;
   variantId: string | null;
+  batchId: string | null;
   warehouseId: string | null;
   locationId: string | null;
   quantity: number;
@@ -324,8 +332,23 @@ export interface ProductBatch {
   batchNo: string;
   expiryDate: string | null;
   mrp: number | null;
+  purchasePrice: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** On-hand lot used to resolve MRP and stock OUT on sale. */
+export interface SellableLot {
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  batchNo: string | null;
+  expiryDate: string | null;
+  mrp: number | null;
+  purchasePrice: number | null;
+  quantity: number;
+  warehouseId: string | null;
+  locationId: string | null;
 }
 
 export type StockMovementType =
@@ -463,6 +486,8 @@ export interface SalesReturn {
 
 export interface LineItem {
   productId: string;
+  variantId?: string | null;
+  batchId?: string | null;
   quantity: number;
   unitPrice: number;
   gstRate: number;
@@ -470,6 +495,8 @@ export interface LineItem {
   taxableAmount: number;
   taxAmount: number;
   amount: number;
+  saleUnit?: string | null;
+  baseQuantity?: number | null;
 }
 
 export interface PurchaseOrder {
@@ -582,9 +609,16 @@ export interface GstLine {
 
 export interface InvoiceTotals {
   subtotal: number;
+  /** Sum of line-item discounts, applied before invoice discount and GST. */
+  itemDiscount: number;
+  /** Invoice-level discount, applied after item discounts and before GST. */
   discount: number;
   taxableAmount: number;
   taxAmount: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  roundOff: number;
   total: number;
   /** Per-rate GST breakdown. */
   gstLines: GstLine[];

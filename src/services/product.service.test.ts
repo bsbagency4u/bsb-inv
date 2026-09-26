@@ -32,6 +32,13 @@ function memoryRepositories() {
           brandId: input.brandId ?? null,
           unitId: input.unitId ?? null,
           unit: input.unit ?? "pcs",
+          packUnit: input.packUnit ?? null,
+          packUnitId: input.packUnitId ?? null,
+          unitsPerPack: input.unitsPerPack ?? 1,
+          minSaleQty: input.minSaleQty ?? 1,
+          maxSaleQty: input.maxSaleQty ?? null,
+          allowBaseSale: input.allowBaseSale ?? true,
+          allowPackSale: input.allowPackSale ?? false,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,
@@ -64,6 +71,7 @@ function memoryRepositories() {
       },
       async listBatches() { return []; },
       async createBatch() { throw new Error("not used"); },
+      async updateBatch() { throw new Error("not used"); },
       async listStock() {
         const byProduct = new Map<string, number>();
         for (const entry of ledger) {
@@ -239,8 +247,33 @@ describe("ProductService", () => {
       purchasePrice: 250,
     });
     expect(product.name).toBe("Cotton T-Shirt");
+    expect(product.unitsPerPack).toBe(1);
+    expect(product.allowBaseSale).toBe(true);
     expect(services.products).toHaveLength(1);
     expect(services.auditLogs[0].action).toBe("product.created");
+  });
+
+  it("saves configurable packaging without using pack size as min/max sale qty", async () => {
+    const product = await products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      minSaleQty: 1,
+      maxSaleQty: 50,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 12,
+    });
+    expect(product).toMatchObject({
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      minSaleQty: 1,
+      maxSaleQty: 50,
+      allowBaseSale: true,
+      allowPackSale: true,
+    });
   });
 
   it("rejects invalid product data", async () => {

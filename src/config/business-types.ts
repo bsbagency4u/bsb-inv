@@ -153,6 +153,20 @@ export function getProductAttributesForType(
   return getBusinessType(slug).productAttributes;
 }
 
+/** Batch/expiry UI is driven by attribute registry, not business-type string checks. */
+export function businessTracksBatches(slug: string | null | undefined): boolean {
+  return getProductAttributesForType(slug).some(
+    (attribute) => attribute.key === "batch" || attribute.key === "expiry"
+  );
+}
+
+export function businessShowsMrp(slug: string | null | undefined): boolean {
+  return (
+    businessTracksBatches(slug) ||
+    getProductAttributesForType(slug).some((attribute) => attribute.key === "mrp")
+  );
+}
+
 export const CURRENCIES = [
   { code: "INR", label: "Indian Rupee (₹)", symbol: "₹", locale: "en-IN" },
   { code: "USD", label: "US Dollar ($)", symbol: "$", locale: "en-US" },

@@ -31,6 +31,13 @@ export interface ProductCreateInput {
   brandId?: string | null;
   unitId?: string | null;
   unit?: string;
+  packUnitId?: string | null;
+  packUnit?: string | null;
+  unitsPerPack?: number;
+  minSaleQty?: number;
+  maxSaleQty?: number | null;
+  allowBaseSale?: boolean;
+  allowPackSale?: boolean;
   attributes?: Record<string, string | number | boolean | null>;
   gstRate?: number;
   hsn?: string | null;
@@ -78,7 +85,8 @@ export interface ProductRepository {
   updateProduct(businessId: string, productId: string, input: ProductUpdateInput): Promise<Product>;
   deleteProduct(businessId: string, productId: string): Promise<void>;
   listBatches(businessId: string, productId?: string): Promise<ProductBatch[]>;
-  createBatch(businessId: string, input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null }): Promise<ProductBatch>;
+  createBatch(businessId: string, input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }): Promise<ProductBatch>;
+  updateBatch(businessId: string, batchId: string, input: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }): Promise<ProductBatch>;
   listStock(businessId: string): Promise<ProductStock[]>;
   listBalances(businessId: string, productId?: string): Promise<StockBalance[]>;
   listMovements(businessId: string, productId?: string, limit?: number): Promise<StockMovement[]>;
@@ -193,6 +201,13 @@ export class SupabaseProductRepository implements ProductRepository {
         brand_id: input.brandId ?? null,
         unit_id: input.unitId ?? null,
         unit: input.unit ?? "pcs",
+        pack_unit_id: input.packUnitId ?? null,
+        pack_unit: input.packUnit ?? null,
+        units_per_pack: input.unitsPerPack ?? 1,
+        min_sale_qty: input.minSaleQty ?? 1,
+        max_sale_qty: input.maxSaleQty ?? null,
+        allow_base_sale: input.allowBaseSale ?? true,
+        allow_pack_sale: input.allowPackSale ?? false,
         attributes: input.attributes ?? {},
         gst_rate: input.gstRate ?? 0,
         hsn: input.hsn ?? null,
@@ -231,6 +246,13 @@ export class SupabaseProductRepository implements ProductRepository {
         brand_id: input.brandId === undefined ? undefined : input.brandId,
         unit_id: input.unitId === undefined ? undefined : input.unitId,
         unit: input.unit,
+        pack_unit_id: input.packUnitId === undefined ? undefined : input.packUnitId,
+        pack_unit: input.packUnit === undefined ? undefined : input.packUnit,
+        units_per_pack: input.unitsPerPack,
+        min_sale_qty: input.minSaleQty,
+        max_sale_qty: input.maxSaleQty === undefined ? undefined : input.maxSaleQty,
+        allow_base_sale: input.allowBaseSale,
+        allow_pack_sale: input.allowPackSale,
         attributes: input.attributes,
         gst_rate: input.gstRate,
         hsn: input.hsn === undefined ? undefined : input.hsn,
@@ -277,7 +299,7 @@ export class SupabaseProductRepository implements ProductRepository {
 
   async createBatch(
     businessId: string,
-    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null }
+    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
   ): Promise<ProductBatch> {
     const { data, error } = await this.client
       .from("product_batches")
@@ -287,7 +309,28 @@ export class SupabaseProductRepository implements ProductRepository {
         batch_no: input.batchNo,
         expiry_date: input.expiryDate ?? null,
         mrp: input.mrp ?? null,
+        purchase_price: input.purchasePrice ?? null,
       })
+      .select()
+      .single();
+    if (error) throw error;
+    return mapProductBatch(data);
+  }
+
+  async updateBatch(
+    businessId: string,
+    batchId: string,
+    input: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
+  ): Promise<ProductBatch> {
+    const patch: Database["public"]["Tables"]["product_batches"]["Update"] = {};
+    if (input.expiryDate !== undefined) patch.expiry_date = input.expiryDate;
+    if (input.mrp !== undefined) patch.mrp = input.mrp;
+    if (input.purchasePrice !== undefined) patch.purchase_price = input.purchasePrice;
+    const { data, error } = await this.client
+      .from("product_batches")
+      .update(patch)
+      .eq("business_id", businessId)
+      .eq("id", batchId)
       .select()
       .single();
     if (error) throw error;

@@ -1,13 +1,14 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { Repositories } from "@/repositories/types";
-import type { AuditEvent, Product } from "@/types/domain";
+import type { AuditEvent, Product, ProductBatch } from "@/types/domain";
 import { AuditService } from "./audit.service";
 import { NotificationService } from "./notification.service";
 import { InventoryService } from "./inventory.service";
 
 function memoryRepositories() {
   const products: Product[] = [];
-  const ledger: Array<{ productId: string; change: number; businessId: string; movementType: string }> = [];
+  const ledger: Array<{ productId: string; change: number; businessId: string; movementType: string; batchId: string | null; warehouseId: string | null }> = [];
+  const batches: ProductBatch[] = [];
   const auditLogs: AuditEvent[] = [];
 
   const repos: Repositories = {
@@ -30,6 +31,13 @@ function memoryRepositories() {
           brandId: input.brandId ?? null,
           unitId: input.unitId ?? null,
           unit: input.unit ?? "pcs",
+          packUnit: input.packUnit ?? null,
+          packUnitId: input.packUnitId ?? null,
+          unitsPerPack: input.unitsPerPack ?? 1,
+          minSaleQty: input.minSaleQty ?? 1,
+          maxSaleQty: input.maxSaleQty ?? null,
+          allowBaseSale: input.allowBaseSale ?? true,
+          allowPackSale: input.allowPackSale ?? false,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,
@@ -52,8 +60,26 @@ function memoryRepositories() {
       },
       async updateProduct() { throw new Error("not used"); },
       async deleteProduct() {},
-      async listBatches() { return []; },
-      async createBatch() { throw new Error("not used"); },
+      async listBatches(_b, productId) {
+        return batches.filter((batch) => !productId || batch.productId === productId);
+      },
+      async createBatch(businessId, input) {
+        const now = new Date().toISOString();
+        const batch: ProductBatch = {
+          id: `batch-${batches.length + 1}`,
+          businessId,
+          productId: input.productId,
+          batchNo: input.batchNo,
+          expiryDate: input.expiryDate ?? null,
+          mrp: input.mrp ?? null,
+          purchasePrice: input.purchasePrice ?? null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        batches.push(batch);
+        return batch;
+      },
+      async updateBatch() { throw new Error("not used"); },
       async listStock() {
         const byProduct = new Map<string, number>();
         for (const entry of ledger) {
@@ -66,17 +92,23 @@ function memoryRepositories() {
         }));
       },
       async listBalances() {
-        const map = new Map<string, { productId: string; quantity: number }>();
+        const map = new Map<string, { productId: string; batchId: string | null; warehouseId: string | null; quantity: number }>();
         for (const entry of ledger) {
-          const key = `${entry.productId}`;
-          const current = map.get(key) ?? { productId: entry.productId, quantity: 0 };
+          const key = `${entry.productId}|${entry.batchId ?? ""}|${entry.warehouseId ?? ""}`;
+          const current = map.get(key) ?? {
+            productId: entry.productId,
+            batchId: entry.batchId ?? null,
+            warehouseId: entry.warehouseId ?? null,
+            quantity: 0,
+          };
           current.quantity += entry.change;
           map.set(key, current);
         }
         return Array.from(map.values()).map((b) => ({
           productId: b.productId,
           variantId: null,
-          warehouseId: null,
+          batchId: b.batchId,
+          warehouseId: b.warehouseId,
           locationId: null,
           quantity: b.quantity,
           lastMovementAt: null,
@@ -108,6 +140,8 @@ function memoryRepositories() {
           change: input.change,
           businessId: input.businessId,
           movementType: input.movementType,
+          batchId: input.batchId ?? null,
+          warehouseId: input.warehouseId ?? null,
         });
       },
       async listVariants() { return []; },
@@ -242,7 +276,7 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, auditLogs };
+  return { repos, products, ledger, auditLogs, batches };
 }
 
 async function seedProduct(services: ReturnType<typeof memoryRepositories>) {
@@ -355,5 +389,54 @@ describe("InventoryService", () => {
       costPrice: 100,
       stockValue: 1000,
     });
+  });
+
+  it("resolves sellable lots FEFO and prefers batch MRP over product MRP", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Medicine",
+      gstRate: 12,
+      purchasePrice: 80,
+      salePrice: 120,
+      mrp: 99,
+    });
+    const later = await services.repos.products.createBatch("b-1", {
+      productId: product.id,
+      batchNo: "LOT-B",
+      expiryDate: "2028-12-01",
+      mrp: 180,
+      purchasePrice: 90,
+    });
+    const sooner = await services.repos.products.createBatch("b-1", {
+      productId: product.id,
+      batchNo: "LOT-A",
+      expiryDate: "2027-01-15",
+      mrp: 150,
+      purchasePrice: 70,
+    });
+    await inventory.recordPurchaseMovement("b-1", "u-1", product.id, null, 4, "inv-1", "purchase_invoice", "wh-1", later.id);
+    await inventory.recordPurchaseMovement("b-1", "u-1", product.id, null, 8, "inv-2", "purchase_invoice", "wh-1", sooner.id);
+
+    const lots = await inventory.listSellableLots("b-1", { productId: product.id });
+    expect(lots).toHaveLength(2);
+    expect(lots[0]).toMatchObject({ batchId: sooner.id, batchNo: "LOT-A", mrp: 150, quantity: 8 });
+    expect(lots[1]).toMatchObject({ batchId: later.id, batchNo: "LOT-B", mrp: 180, quantity: 4 });
+  });
+
+  it("falls back to product MRP when a lot has no batch MRP", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Soap",
+      gstRate: 18,
+      purchasePrice: 40,
+      salePrice: 55,
+      mrp: 60,
+    });
+    const batch = await services.repos.products.createBatch("b-1", {
+      productId: product.id,
+      batchNo: "OPEN",
+      mrp: null,
+    });
+    await inventory.recordPurchaseMovement("b-1", "u-1", product.id, null, 5, "inv-3", "purchase_invoice", null, batch.id);
+    const lots = await inventory.listSellableLots("b-1", { productId: product.id });
+    expect(lots[0].mrp).toBe(60);
   });
 });

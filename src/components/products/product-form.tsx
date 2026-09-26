@@ -24,6 +24,13 @@ function toFormValues(product?: Product | null): ProductValues {
     brandId: product?.brandId ?? "",
     unitId: product?.unitId ?? "",
     unit: product?.unit ?? "pcs",
+    packUnitId: product?.packUnitId ?? "",
+    packUnit: product?.packUnit ?? "",
+    unitsPerPack: product?.unitsPerPack ?? 1,
+    minSaleQty: product?.minSaleQty ?? 1,
+    maxSaleQty: product?.maxSaleQty ?? undefined,
+    allowBaseSale: product?.allowBaseSale ?? true,
+    allowPackSale: product?.allowPackSale ?? false,
     attributes: product?.attributes ?? {},
     gstRate: product?.gstRate ?? 0,
     hsn: product?.hsn ?? "",
@@ -72,6 +79,14 @@ export function ProductForm({
 
   const trackInventory = useWatch({ control, name: "trackInventory" });
   const taxable = useWatch({ control, name: "taxable" });
+  const allowBaseSale = useWatch({ control, name: "allowBaseSale" });
+  const allowPackSale = useWatch({ control, name: "allowPackSale" });
+
+  const unitById = React.useMemo(() => {
+    const map = new Map<string, Unit>();
+    for (const unit of units ?? []) map.set(unit.id, unit);
+    return map;
+  }, [units]);
 
   const submit = async (values: ProductValues) => {
     const attributesRecord: ProductValues["attributes"] = {};
@@ -86,7 +101,14 @@ export function ProductForm({
         attributesRecord[definition.key] = String(value);
       }
     }
-    await onSubmit({ ...values, attributes: attributesRecord });
+    const baseUnit = values.unitId ? unitById.get(values.unitId) : undefined;
+    const packUnit = values.packUnitId ? unitById.get(values.packUnitId) : undefined;
+    await onSubmit({
+      ...values,
+      unit: baseUnit?.code ?? values.unit ?? "pcs",
+      packUnit: packUnit?.code ?? values.packUnit ?? "",
+      attributes: attributesRecord,
+    });
   };
 
   return (
@@ -154,11 +176,15 @@ export function ProductForm({
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Unit" htmlFor="product-unit" error={errors.unitId?.message}>
+        <Field label="Base unit" htmlFor="product-unit" error={errors.unitId?.message}>
           <Select
             id="product-unit"
             defaultValue={product?.unitId ?? ""}
-            onChange={(event) => setValue("unitId", event.target.value || "")}
+            onChange={(event) => {
+              const id = event.target.value || "";
+              setValue("unitId", id);
+              setValue("unit", unitById.get(id)?.code ?? "pcs");
+            }}
           >
             <option value="">Select unit…</option>
             {(units ?? []).map((unit) => (
@@ -180,6 +206,96 @@ export function ProductForm({
             <option value="discontinued">Discontinued</option>
           </Select>
         </Field>
+      </div>
+
+      <div className="space-y-3 rounded-md border border-border bg-surface-subtle p-3">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Units and packaging
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Stock is always kept in the base unit. Pack size converts purchase and sale quantities; it is not a min or max sale quantity.
+        </p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Pack unit" htmlFor="product-pack-unit" error={errors.packUnitId?.message}>
+            <Select
+              id="product-pack-unit"
+              defaultValue={product?.packUnitId ?? ""}
+              onChange={(event) => {
+                const id = event.target.value || "";
+                setValue("packUnitId", id);
+                setValue("packUnit", unitById.get(id)?.code ?? "");
+              }}
+            >
+              <option value="">No pack unit</option>
+              {(units ?? []).map((unit) => (
+                <option key={unit.id} value={unit.id}>
+                  {unit.name} ({unit.code})
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Units per pack"
+            htmlFor="product-units-per-pack"
+            hint="How many base units are in one pack."
+            error={errors.unitsPerPack?.message}
+          >
+            <Input
+              id="product-units-per-pack"
+              type="number"
+              min={1}
+              step="any"
+              defaultValue={product?.unitsPerPack ?? 1}
+              {...register("unitsPerPack")}
+            />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Min sale qty" htmlFor="product-min-sale" error={errors.minSaleQty?.message}>
+            <Input
+              id="product-min-sale"
+              type="number"
+              min={0}
+              step="any"
+              defaultValue={product?.minSaleQty ?? 1}
+              {...register("minSaleQty")}
+            />
+          </Field>
+          <Field label="Max sale qty" htmlFor="product-max-sale" error={errors.maxSaleQty?.message}>
+            <Input
+              id="product-max-sale"
+              type="number"
+              min={0}
+              step="any"
+              defaultValue={product?.maxSaleQty ?? ""}
+              {...register("maxSaleQty")}
+            />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Sell in base unit</p>
+              <p className="text-xs text-muted-foreground">Allow cashiers to sell the base unit.</p>
+            </div>
+            <Switch
+              checked={allowBaseSale ?? true}
+              onCheckedChange={(checked) => setValue("allowBaseSale", checked)}
+              aria-label="Allow sale in base unit"
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Sell in pack</p>
+              <p className="text-xs text-muted-foreground">Allow cashiers to sell whole packs.</p>
+            </div>
+            <Switch
+              checked={allowPackSale ?? false}
+              onCheckedChange={(checked) => setValue("allowPackSale", checked)}
+              aria-label="Allow sale in pack unit"
+            />
+          </div>
+        </div>
       </div>
 
       {attributes.length > 0 ? (

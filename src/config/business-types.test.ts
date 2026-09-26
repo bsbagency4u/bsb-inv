@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { BUSINESS_TYPES, getBusinessType, getProductAttributesForType } from "./business-types";
+import {
+  BUSINESS_TYPES,
+  businessShowsMrp,
+  businessTracksBatches,
+  getBusinessType,
+  getProductAttributesForType,
+} from "./business-types";
 
 describe("business-types registry", () => {
   it("defines all expected business types", () => {
@@ -44,5 +50,14 @@ describe("business-types registry", () => {
 
   it("custom has no default product attributes", () => {
     expect(getProductAttributesForType("custom")).toHaveLength(0);
+  });
+
+  it("pharmacy tracks batches and shows MRP; retail shows MRP without batches", () => {
+    expect(businessTracksBatches("pharmacy")).toBe(true);
+    expect(businessShowsMrp("pharmacy")).toBe(true);
+    expect(businessTracksBatches("retail")).toBe(false);
+    expect(businessShowsMrp("retail")).toBe(true);
+    expect(businessTracksBatches("wholesale")).toBe(false);
+    expect(businessShowsMrp("wholesale")).toBe(false);
   });
 });

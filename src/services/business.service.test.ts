@@ -125,6 +125,7 @@ function createMemoryRepositories(): Repositories {
       async deleteProduct() {},
       async listBatches() { return []; },
       async createBatch() { throw new Error("not used in test"); },
+      async updateBatch() { throw new Error("not used in test"); },
       async listStock() { return []; },
       async addStockMovement() {},
       async listBalances() { return []; },

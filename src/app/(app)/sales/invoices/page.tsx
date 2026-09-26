@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, FileText, Plus, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, FileText, Plus, XCircle } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
-import { TransactionBuilder, type CartLine } from "@/components/transactions/transaction-builder";
 import {
   Table,
   TableBody,
@@ -39,28 +39,24 @@ const STATUS_VARIANTS: Record<SalesInvoiceStatus, "success" | "info" | "warning"
   returned: "secondary",
 };
 
+function walkInNameFromNotes(notes: string | null): string | null {
+  if (!notes) return null;
+  const match = notes.match(/^Walk-in:\s*(.+)$/m);
+  return match?.[1]?.trim() || null;
+}
+
 export default function SalesInvoicesPage() {
+  const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
   const { success: toastSuccess, error: toastError } = useToast();
   const [search, setSearch] = React.useState("");
-  const [createOpen, setCreateOpen] = React.useState(false);
   const [detail, setDetail] = React.useState<SalesInvoice | null>(null);
-  const [saving, setSaving] = React.useState(false);
-
-  const [customerId, setCustomerId] = React.useState<string | null>(null);
-  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [dueDate, setDueDate] = React.useState<string | null>(null);
-  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
-  const [lines, setLines] = React.useState<CartLine[]>([]);
-  const [notes, setNotes] = React.useState<string | null>(null);
-  const [paymentModeOverride, setPaymentModeOverride] = React.useState<string | null>(null);
-  const [paymentAmount, setPaymentAmount] = React.useState<string>("");
-
   const [paying, setPaying] = React.useState<SalesInvoice | null>(null);
   const [payAmount, setPayAmount] = React.useState("");
   const [payMode, setPayMode] = React.useState("cash");
   const [paySaving, setPaySaving] = React.useState(false);
+  const [completingId, setCompletingId] = React.useState<string | null>(null);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["sales-invoices", business?.id],
@@ -76,15 +72,6 @@ export default function SalesInvoicesPage() {
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
       return getClientServices().parties.listCustomers(business.id);
-    },
-    enabled: Boolean(business),
-  });
-
-  const { data: products } = useQuery({
-    queryKey: ["products-with-stock", business?.id],
-    queryFn: async () => {
-      if (!business) throw new Error("No active business.");
-      return getClientServices().products.listProductsWithStock(business.id);
     },
     enabled: Boolean(business),
   });
@@ -107,19 +94,21 @@ export default function SalesInvoicesPage() {
     enabled: Boolean(business),
   });
 
-  const paymentMode = paymentModeOverride ?? salesDefaults?.defaultPaymentMode ?? "cash";
-  const intraState = intraStateOverride ?? salesDefaults?.defaultIntraState ?? true;
-
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
     if (!q) return invoices;
-    return invoices.filter(
-      (invoice) =>
+    return invoices.filter((invoice) => {
+      const customerName = invoice.customerId
+        ? customers?.find((c) => c.id === invoice.customerId)?.name ?? ""
+        : walkInNameFromNotes(invoice.notes) ?? "walk-in";
+      return (
         invoice.invoiceNo.toLowerCase().includes(q) ||
-        invoice.status.toLowerCase().includes(q)
-    );
-  }, [invoices, search]);
+        invoice.status.toLowerCase().includes(q) ||
+        customerName.toLowerCase().includes(q)
+      );
+    });
+  }, [invoices, search, customers]);
 
   if (isLoading) return <LoadingState label="Loading invoices…" />;
   if (isError) {
@@ -132,74 +121,41 @@ export default function SalesInvoicesPage() {
     );
   }
 
-  const resetForm = () => {
-    setCustomerId(null);
-    setDate(new Date().toISOString().slice(0, 10));
-    setDueDate(null);
-    setIntraStateOverride(null);
-    setLines([]);
-    setNotes(null);
-    setPaymentModeOverride(null);
-    setPaymentAmount("");
-  };
-
-  const createInvoice = async () => {
-    if (!business || !user) return;
-    if (lines.length === 0) {
-      toastError("No items", "Add at least one line item to create an invoice.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const services = getClientServices();
-      const invoiceNo = await services.transactions.nextDocumentNo(
-        business.id,
-        business.invoicePrefix || "INV",
-        "sales"
-      );
-      await services.transactions.createSalesInvoice(business.id, user.id, invoiceNo, {
-        customerId,
-        invoiceDate: date,
-        dueDate,
-        notes,
-        items: lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-          gstRate: line.gstRate,
-        })),
-        intraState,
-        payments: [{ mode: paymentMode, amount: Number(paymentAmount) || 0 }],
-        discount:
-          salesDefaults && salesDefaults.defaultDiscountPercent > 0
-            ? lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0) *
-              (salesDefaults.defaultDiscountPercent / 100)
-            : 0,
-      });
-      toastSuccess("Invoice created", `Invoice ${invoiceNo} was saved.`);
-      setCreateOpen(false);
-      resetForm();
-      await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
-      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-    } catch (err) {
-      toastError("Could not create invoice", normalizeError(err).userMessage);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const openCreate = () => router.push("/sales/invoices/new");
 
   const cancelInvoice = async (invoice: SalesInvoice) => {
     if (!business || !user) return;
     try {
       await getClientServices().transactions.cancelSalesInvoice(business.id, user.id, invoice.id);
-      toastSuccess("Invoice cancelled", `${invoice.invoiceNo} was cancelled and stock restored.`);
+      toastSuccess(
+        "Invoice cancelled",
+        invoice.status === "draft"
+          ? `${invoice.invoiceNo} was cancelled. Stock was not changed.`
+          : `${invoice.invoiceNo} was cancelled and stock restored.`
+      );
       setDetail(null);
       await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
     } catch (err) {
       toastError("Could not cancel invoice", normalizeError(err).userMessage);
+    }
+  };
+
+  const completeDraft = async (invoice: SalesInvoice) => {
+    if (!business || !user) return;
+    setCompletingId(invoice.id);
+    try {
+      await getClientServices().transactions.completeSalesInvoice(business.id, user.id, invoice.id);
+      toastSuccess("Sale completed", `${invoice.invoiceNo} was completed and stock updated.`);
+      setDetail(null);
+      await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch (err) {
+      toastError("Could not complete sale", normalizeError(err).userMessage);
+    } finally {
+      setCompletingId(null);
     }
   };
 
@@ -238,18 +194,20 @@ export default function SalesInvoicesPage() {
     }
   };
 
+  const partyLabel = (invoice: SalesInvoice) => {
+    if (invoice.customerId) {
+      return customers?.find((c) => c.id === invoice.customerId)?.name ?? "Customer";
+    }
+    return walkInNameFromNotes(invoice.notes) ?? "Walk-in customer";
+  };
+
   return (
     <div>
       <PageHeader
         title="Sales Invoices"
         description="GST invoices raised against sales."
         actions={
-          <Button
-            onClick={() => {
-              resetForm();
-              setCreateOpen(true);
-            }}
-          >
+          <Button onClick={openCreate}>
             <Plus className="size-4" />
             New invoice
           </Button>
@@ -276,7 +234,7 @@ export default function SalesInvoicesPage() {
             icon={<FileText className="size-6" />}
             title="No invoices yet"
             description="Create your first sales invoice to record a sale with GST."
-            action={{ label: "New invoice", onClick: () => { resetForm(); setCreateOpen(true); } }}
+            action={{ label: "New invoice", onClick: openCreate }}
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -295,11 +253,7 @@ export default function SalesInvoicesPage() {
                   <TableRow key={invoice.id}>
                     <TableCell className="font-medium text-foreground">
                       {invoice.invoiceNo}
-                      {invoice.customerId ? (
-                        <p className="text-xs text-muted-foreground">
-                          {customers?.find((c) => c.id === invoice.customerId)?.name ?? "Customer"}
-                        </p>
-                      ) : null}
+                      <p className="text-xs text-muted-foreground">{partyLabel(invoice)}</p>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {formatDate(invoice.invoiceDate)}
@@ -308,14 +262,31 @@ export default function SalesInvoicesPage() {
                       {formatCurrency(invoice.total, business?.currency ?? "INR")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_VARIANTS[invoice.status]}>
-                        {invoice.status}
-                      </Badge>
+                      <Badge variant={STATUS_VARIANTS[invoice.status]}>{invoice.status}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => setDetail(invoice)}>
-                        View
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        {invoice.status === "draft" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void completeDraft(invoice)}
+                            loading={completingId === invoice.id}
+                          >
+                            <CheckCircle2 className="size-4" />
+                            Complete
+                          </Button>
+                        ) : null}
+                        {invoice.status !== "paid" && invoice.status !== "draft" && invoice.status !== "cancelled" ? (
+                          <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
+                            <Banknote className="size-4" />
+                            Pay
+                          </Button>
+                        ) : null}
+                        <Button variant="outline" size="sm" onClick={() => setDetail(invoice)}>
+                          View
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -324,75 +295,6 @@ export default function SalesInvoicesPage() {
           </div>
         )}
       </div>
-
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="New sales invoice"
-        description="Add line items; GST is computed automatically."
-        size="xl"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void createInvoice()} loading={saving}>
-              Create invoice
-            </Button>
-          </>
-        }
-      >
-        <TransactionBuilder
-          currency={business?.currency ?? "INR"}
-          products={products ?? []}
-          partyType="customer"
-          parties={(customers ?? []).map((c) => ({ id: c.id, name: c.name, gstin: c.gstin }))}
-          partyLabel="Customer"
-          partyValue={customerId}
-          onPartyChange={setCustomerId}
-          intraState={intraState}
-          onIntraStateChange={setIntraStateOverride}
-          lines={lines}
-          onLinesChange={setLines}
-          notes={notes}
-          onNotesChange={setNotes}
-          date={date}
-          onDateChange={setDate}
-          dueDate={dueDate}
-          onDueDateChange={setDueDate}
-          showDueDate
-        />
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Payment mode" htmlFor="invoice-mode">
-            <Select
-              id="invoice-mode"
-              value={paymentMode}
-              onChange={(event) => setPaymentModeOverride(event.target.value)}
-            >
-              {(paymentModes ?? []).map((mode) => (
-                <option key={mode.id} value={mode.code}>
-                  {mode.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field
-            label="Amount paid"
-            htmlFor="invoice-paid"
-            hint="Leave empty for a credit sale."
-          >
-            <Input
-              id="invoice-paid"
-              type="number"
-              step="0.01"
-              min={0}
-              value={paymentAmount}
-              onChange={(event) => setPaymentAmount(event.target.value)}
-              placeholder="e.g. 0.00"
-            />
-          </Field>
-        </div>
-      </Modal>
 
       <Modal
         open={Boolean(detail)}
@@ -406,16 +308,21 @@ export default function SalesInvoicesPage() {
               <Button variant="outline" onClick={() => setDetail(null)}>
                 Close
               </Button>
-              {detail.status !== "paid" ? (
+              {detail.status === "draft" ? (
+                <Button
+                  onClick={() => void completeDraft(detail)}
+                  loading={completingId === detail.id}
+                >
+                  <CheckCircle2 className="size-4" />
+                  Complete sale
+                </Button>
+              ) : detail.status !== "paid" ? (
                 <Button variant="outline" onClick={() => openPay(detail)}>
                   <Banknote className="size-4" />
                   Record payment
                 </Button>
               ) : null}
-              <Button
-                variant="destructive"
-                onClick={() => void cancelInvoice(detail)}
-              >
+              <Button variant="destructive" onClick={() => void cancelInvoice(detail)}>
                 <XCircle className="size-4" />
                 Cancel invoice
               </Button>
@@ -427,7 +334,9 @@ export default function SalesInvoicesPage() {
           )
         }
       >
-        {detail ? <InvoiceDetail invoice={detail} currency={business?.currency ?? "INR"} /> : null}
+        {detail ? (
+          <InvoiceDetail invoice={detail} currency={business?.currency ?? "INR"} partyLabel={partyLabel(detail)} />
+        ) : null}
       </Modal>
 
       <Modal
@@ -491,7 +400,15 @@ export default function SalesInvoicesPage() {
   );
 }
 
-function InvoiceDetail({ invoice, currency }: { invoice: SalesInvoice; currency: string }) {
+function InvoiceDetail({
+  invoice,
+  currency,
+  partyLabel,
+}: {
+  invoice: SalesInvoice;
+  currency: string;
+  partyLabel: string;
+}) {
   const customerLabel = invoice.customerId ? "Customer" : "Walk-in";
   return (
     <div className="space-y-4">
@@ -504,9 +421,7 @@ function InvoiceDetail({ invoice, currency }: { invoice: SalesInvoice; currency:
         </div>
         <div className="text-right">
           <p className="text-xs text-muted-foreground">{customerLabel}</p>
-          <p className="text-sm font-semibold text-foreground">
-            {invoice.customerId ?? "Walk-in customer"}
-          </p>
+          <p className="text-sm font-semibold text-foreground">{partyLabel}</p>
         </div>
       </div>
       <div className="overflow-hidden rounded-lg border border-border">
@@ -523,9 +438,7 @@ function InvoiceDetail({ invoice, currency }: { invoice: SalesInvoice; currency:
           <TableBody>
             {invoice.items.map((item, index) => (
               <TableRow key={index}>
-                <TableCell className="font-medium text-foreground">
-                  {item.productId}
-                </TableCell>
+                <TableCell className="font-medium text-foreground">{item.productId}</TableCell>
                 <TableCell className="text-right tabular-nums">{item.quantity}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatCurrency(item.unitPrice, currency)}
@@ -544,6 +457,12 @@ function InvoiceDetail({ invoice, currency }: { invoice: SalesInvoice; currency:
           <span className="text-muted-foreground">Subtotal</span>
           <span className="tabular-nums">{formatCurrency(invoice.subtotal, currency)}</span>
         </div>
+        {invoice.discount > 0 ? (
+          <div className="flex w-52 justify-between">
+            <span className="text-muted-foreground">Discount</span>
+            <span className="tabular-nums">{formatCurrency(invoice.discount, currency)}</span>
+          </div>
+        ) : null}
         <div className="flex w-52 justify-between">
           <span className="text-muted-foreground">Tax</span>
           <span className="tabular-nums">{formatCurrency(invoice.taxTotal, currency)}</span>
@@ -563,9 +482,7 @@ function InvoiceDetail({ invoice, currency }: { invoice: SalesInvoice; currency:
           </span>
         </div>
       </div>
-      {invoice.notes ? (
-        <p className="text-sm text-muted-foreground">{invoice.notes}</p>
-      ) : null}
+      {invoice.notes ? <p className="text-sm text-muted-foreground">{invoice.notes}</p> : null}
     </div>
   );
 }

@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Plus, Receipt } from "lucide-react";
+import { Banknote, CheckCircle2, Plus, Receipt } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
-import { TransactionBuilder, type CartLine } from "@/components/transactions/transaction-builder";
 import {
   Table,
   TableBody,
@@ -30,25 +30,24 @@ import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { PurchaseInvoice } from "@/types/domain";
 
+function statusVariant(status: string): "success" | "info" | "warning" | "secondary" {
+  if (status === "paid") return "success";
+  if (status === "unpaid") return "warning";
+  if (status === "draft") return "secondary";
+  return "info";
+}
+
 export default function PurchaseInvoicesPage() {
+  const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
   const { success: toastSuccess, error: toastError } = useToast();
   const [search, setSearch] = React.useState("");
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-
   const [paying, setPaying] = React.useState<PurchaseInvoice | null>(null);
   const [payAmount, setPayAmount] = React.useState("");
   const [payMode, setPayMode] = React.useState("cash");
   const [paySaving, setPaySaving] = React.useState(false);
-
-  const [supplierId, setSupplierId] = React.useState<string | null>(null);
-  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [dueDate, setDueDate] = React.useState<string | null>(null);
-  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
-  const [lines, setLines] = React.useState<CartLine[]>([]);
-  const [notesOverride, setNotesOverride] = React.useState<string | null | undefined>(undefined);
+  const [completingId, setCompletingId] = React.useState<string | null>(null);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-invoices", business?.id],
@@ -64,15 +63,6 @@ export default function PurchaseInvoicesPage() {
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
       return getClientServices().parties.listSuppliers(business.id);
-    },
-    enabled: Boolean(business),
-  });
-
-  const { data: products } = useQuery({
-    queryKey: ["products-with-stock", business?.id],
-    queryFn: async () => {
-      if (!business) throw new Error("No active business.");
-      return getClientServices().products.listProductsWithStock(business.id);
     },
     enabled: Boolean(business),
   });
@@ -95,9 +85,6 @@ export default function PurchaseInvoicesPage() {
     enabled: Boolean(business),
   });
 
-  const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? true;
-  const notes = notesOverride === undefined ? (purchaseDefaults?.defaultPaymentTerms || null) : notesOverride;
-
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -118,60 +105,33 @@ export default function PurchaseInvoicesPage() {
     );
   }
 
-  const resetForm = () => {
-    setSupplierId(null);
-    setDate(new Date().toISOString().slice(0, 10));
-    setDueDate(null);
-    setIntraStateOverride(null);
-    setLines([]);
-    setNotesOverride(undefined);
-  };
-
-  const createInvoice = async () => {
-    if (!business || !user) return;
-    if (lines.length === 0) {
-      toastError("No items", "Add at least one line item to record a bill.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const services = getClientServices();
-      const billNo = await services.transactions.nextDocumentNo(
-        business.id,
-        "BILL",
-        "purchase_invoice"
-      );
-      await services.transactions.createPurchaseInvoice(business.id, user.id, billNo, {
-        supplierId,
-        warehouseId: purchaseDefaults?.defaultWarehouseId ?? null,
-        invoiceDate: date,
-        dueDate,
-        notes,
-        items: lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-          gstRate: line.gstRate,
-        })),
-        intraState,
-      });
-      toastSuccess("Purchase recorded", `Bill ${billNo} was saved and stock updated.`);
-      setCreateOpen(false);
-      resetForm();
-      await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
-      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-    } catch (err) {
-      toastError("Could not record purchase", normalizeError(err).userMessage);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const openCreate = () => router.push("/purchase/invoices/new");
 
   const openPay = (invoice: PurchaseInvoice) => {
     setPaying(invoice);
     setPayAmount(String(invoice.total - invoice.paidAmount));
     setPayMode("cash");
+  };
+
+  const completeDraft = async (invoice: PurchaseInvoice) => {
+    if (!business || !user) return;
+    setCompletingId(invoice.id);
+    try {
+      await getClientServices().transactions.completePurchaseInvoice(
+        business.id,
+        user.id,
+        invoice.id,
+        purchaseDefaults?.defaultWarehouseId ?? null
+      );
+      toastSuccess("Bill received", `${invoice.billNo} was completed and stock updated.`);
+      await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch (err) {
+      toastError("Could not complete bill", normalizeError(err).userMessage);
+    } finally {
+      setCompletingId(null);
+    }
   };
 
   const submitPayment = async () => {
@@ -209,12 +169,7 @@ export default function PurchaseInvoicesPage() {
         title="Purchase Invoices"
         description="Bills received from suppliers."
         actions={
-          <Button
-            onClick={() => {
-              resetForm();
-              setCreateOpen(true);
-            }}
-          >
+          <Button onClick={openCreate}>
             <Plus className="size-4" />
             Record purchase
           </Button>
@@ -241,7 +196,7 @@ export default function PurchaseInvoicesPage() {
             icon={<Receipt className="size-6" />}
             title="No purchase invoices yet"
             description="Record a supplier bill to bring stock into the business."
-            action={{ label: "Record purchase", onClick: () => { resetForm(); setCreateOpen(true); } }}
+            action={{ label: "Record purchase", onClick: openCreate }}
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -273,20 +228,33 @@ export default function PurchaseInvoicesPage() {
                       {formatCurrency(invoice.total, business?.currency ?? "INR")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={invoice.status === "paid" ? "success" : invoice.status === "unpaid" ? "warning" : "info"}>
+                      <Badge variant={statusVariant(invoice.status)}>
                         {invoice.status}
-                        {invoice.status !== "paid" && invoice.paidAmount > 0
+                        {invoice.status !== "paid" && invoice.status !== "draft" && invoice.paidAmount > 0
                           ? ` · paid ${formatCurrency(invoice.paidAmount, business?.currency ?? "INR")}`
                           : ""}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      {invoice.status !== "paid" ? (
-                        <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
-                          <Banknote className="size-4" />
-                          Pay
-                        </Button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {invoice.status === "draft" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void completeDraft(invoice)}
+                            loading={completingId === invoice.id}
+                          >
+                            <CheckCircle2 className="size-4" />
+                            Receive
+                          </Button>
+                        ) : null}
+                        {invoice.status !== "paid" && invoice.status !== "draft" ? (
+                          <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
+                            <Banknote className="size-4" />
+                            Pay
+                          </Button>
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -295,45 +263,6 @@ export default function PurchaseInvoicesPage() {
           </div>
         )}
       </div>
-
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="Record purchase"
-        description="Enter the supplier bill; stock increases automatically."
-        size="xl"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void createInvoice()} loading={saving}>
-              Save bill
-            </Button>
-          </>
-        }
-      >
-        <TransactionBuilder
-          currency={business?.currency ?? "INR"}
-          products={products ?? []}
-          partyType="supplier"
-          parties={(suppliers ?? []).map((s) => ({ id: s.id, name: s.name, gstin: s.gstin }))}
-          partyLabel="Supplier"
-          partyValue={supplierId}
-          onPartyChange={setSupplierId}
-          intraState={intraState}
-          onIntraStateChange={setIntraStateOverride}
-          lines={lines}
-          onLinesChange={setLines}
-          notes={notes}
-          onNotesChange={setNotesOverride}
-          date={date}
-          onDateChange={setDate}
-          dueDate={dueDate}
-          onDueDateChange={setDueDate}
-          showDueDate
-        />
-      </Modal>
 
       <Modal
         open={Boolean(paying)}
