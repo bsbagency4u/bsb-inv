@@ -29,9 +29,32 @@ Copy `.env.example` to `.env.local` and set the public Supabase project URL and
 anon key to enable real accounts and persistence:
 
 ```bash
+NEXT_PUBLIC_SITE_URL=
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=   # server-only, optional
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+## Deploy on Vercel
+
+The repo is Git-connected. Vercel runs `npm ci` then `next build`.
+
+Set these Project Environment Variables (Production, Preview, Development):
+
+| Name | Required | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes for live data | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes for live data | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | No | Server-only; never expose to the browser |
+| `NEXT_PUBLIC_SITE_URL` | No | Canonical URL, e.g. `https://your-app.vercel.app` |
+
+Without Supabase vars the production app still builds and runs in demo mode.
+
+Apply schema on the same Supabase project used in Vercel:
+
+```bash
+supabase db push
+supabase db seed --file supabase/seed/0001_roles_permissions.sql
 ```
 
 Apply the database schema and seed:
