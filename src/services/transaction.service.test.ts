@@ -868,4 +868,151 @@ describe("TransactionService", () => {
       })
     ).rejects.toThrow(AppError);
   });
+
+  it("purchases 1 STRIP at Rs 5 per PCS as 10 PCS and Rs 50", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 0,
+      purchasePrice: 5,
+      salePrice: 8,
+    });
+    const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000020", {
+      supplierId: "s-1",
+      items: [{
+        productId: product.id,
+        quantity: 1,
+        unitKind: "pack",
+        rateBasis: "base",
+        unitPrice: 5,
+        gstRate: 0,
+        batchNo: "LOT-R5",
+        mrp: 12,
+      }],
+    });
+    expect(invoice.subtotal).toBe(50);
+    expect(invoice.items[0]).toMatchObject({ quantity: 1, saleUnit: "STRIP", baseQuantity: 10 });
+    expect(services.batches[0]).toMatchObject({ mrp: 12, purchasePrice: 5 });
+    expect(services.ledger).toContainEqual(
+      expect.objectContaining({ productId: product.id, change: 10, movementType: "PURCHASE" })
+    );
+  });
+
+  it("does not multiply a per-STRIP rate by pack size", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 0,
+      purchasePrice: 5,
+      salePrice: 8,
+    });
+    const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000021", {
+      supplierId: "s-1",
+      items: [{
+        productId: product.id,
+        quantity: 1,
+        unitKind: "pack",
+        rateBasis: "pack",
+        unitPrice: 50,
+        gstRate: 0,
+        batchNo: "LOT-R50",
+      }],
+    });
+    expect(invoice.subtotal).toBe(50);
+    expect(invoice.items[0].baseQuantity).toBe(10);
+    expect(services.batches[0].purchasePrice).toBe(5);
+  });
+
+  it("sells 1 STRIP then 2 PCS from 110 remaining 98", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 0,
+      purchasePrice: 5,
+      salePrice: 8,
+    });
+    await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000022", {
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 110, unitKind: "base", unitPrice: 5, gstRate: 0, batchNo: "LOT-110" }],
+    });
+    const batchId = services.batches[0].id;
+    await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000030", {
+      items: [{ productId: product.id, batchId, quantity: 1, unitKind: "pack", unitPrice: 80, gstRate: 0 }],
+      payments: [{ mode: "cash", amount: 80 }],
+    });
+    await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000031", {
+      items: [{ productId: product.id, batchId, quantity: 2, unitKind: "base", unitPrice: 8, gstRate: 0 }],
+      payments: [{ mode: "cash", amount: 16 }],
+    });
+    const remaining = services.ledger
+      .filter((entry) => entry.productId === product.id)
+      .reduce((sum, entry) => sum + entry.change, 0);
+    expect(remaining).toBe(98);
+  });
+
+  it("loads batch MRP independently for lot A and lot B", async () => {
+    const product = await seedProduct();
+    await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000023", {
+      supplierId: "s-1",
+      items: [
+        { productId: product.id, quantity: 10, unitPrice: 80, gstRate: 0, batchNo: "A", mrp: 120 },
+        { productId: product.id, quantity: 10, unitPrice: 90, gstRate: 0, batchNo: "B", mrp: 150 },
+      ],
+    });
+    expect(services.batches.find((batch) => batch.batchNo === "A")?.mrp).toBe(120);
+    expect(services.batches.find((batch) => batch.batchNo === "B")?.mrp).toBe(150);
+  });
+
+  it("converts purchase return pack qty to base-unit stock OUT", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 0,
+      purchasePrice: 5,
+      salePrice: 8,
+    });
+    await transactions.createPurchaseReturn("b-1", "u-1", "PRT-2026-000002", {
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 1, unitCost: 50, unitKind: "pack" }],
+    });
+    expect(services.ledger).toContainEqual(
+      expect.objectContaining({ productId: product.id, change: -10, movementType: "PURCHASE_RETURN" })
+    );
+  });
+
+  it("converts sales return pack qty to base-unit stock IN", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      allowBaseSale: true,
+      allowPackSale: true,
+      gstRate: 0,
+      purchasePrice: 5,
+      salePrice: 8,
+    });
+    await transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000002", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 80, unitKind: "pack" }],
+    });
+    expect(services.ledger).toContainEqual(
+      expect.objectContaining({ productId: product.id, change: 10, movementType: "SALE_RETURN" })
+    );
+  });
 });

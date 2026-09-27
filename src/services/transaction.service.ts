@@ -13,13 +13,11 @@ import type {
 } from "@/types/domain";
 import { AppError } from "@/lib/errors";
 import {
+  convertLine,
   oversellMessage,
   packagingFromProduct,
-  resolvePurchaseUnitKind,
-  resolveUnitKind,
-  toBaseQuantity,
-  unitCodeForKind,
   validateSaleQuantity,
+  type RateBasis,
 } from "@/lib/packaging";
 import { GstEngine } from "./gst.service";
 import { InventoryService } from "./inventory.service";
@@ -40,8 +38,10 @@ export interface CartItemInput {
   discount?: number;
   discountPercent?: number;
   unitKind?: "base" | "pack";
+  rateBasis?: RateBasis;
   saleUnit?: string | null;
   baseQuantity?: number | null;
+  baseUnitCost?: number | null;
 }
 
 export interface PaymentAllocation {
@@ -110,7 +110,14 @@ export interface PurchaseReturnInput {
   returnDate?: string;
   reason?: string | null;
   notes?: string | null;
-  items: Array<{ productId: string; variantId?: string | null; quantity: number; unitCost: number }>;
+  items: Array<{
+    productId: string;
+    variantId?: string | null;
+    quantity: number;
+    unitCost: number;
+    unitKind?: "base" | "pack";
+    rateBasis?: RateBasis;
+  }>;
 }
 
 export interface SalesReturnInput {
@@ -119,7 +126,14 @@ export interface SalesReturnInput {
   returnDate?: string;
   reason?: string | null;
   notes?: string | null;
-  items: Array<{ productId: string; variantId?: string | null; quantity: number; unitPrice: number }>;
+  items: Array<{
+    productId: string;
+    variantId?: string | null;
+    quantity: number;
+    unitPrice: number;
+    unitKind?: "base" | "pack";
+    rateBasis?: RateBasis;
+  }>;
 }
 
 type DocumentKind = "sales" | "purchase_order" | "purchase_invoice" | "sales_return" | "purchase_return";
@@ -181,23 +195,66 @@ export class TransactionService {
     const product = await this.repos.products.getProduct(businessId, item.productId);
     if (!product) throw AppError.notFound("Product not found.");
     const packaging = packagingFromProduct(product);
-    const kind =
-      mode === "purchase"
-        ? resolvePurchaseUnitKind(item.unitKind, packaging)
-        : resolveUnitKind(item.unitKind, packaging);
+    const converted = convertLine({
+      quantity: item.quantity,
+      unitKind: item.unitKind,
+      rateBasis: item.rateBasis,
+      unitPrice: item.unitPrice,
+      packaging,
+      mode,
+    });
     if (mode === "sale") {
-      const qtyError = validateSaleQuantity(item.quantity, packaging);
+      const qtyError = validateSaleQuantity(item.quantity, packaging, converted.unitKind);
       if (qtyError) throw AppError.validation(qtyError);
     }
-    const baseQuantity = item.baseQuantity ?? toBaseQuantity(item.quantity, kind, packaging);
+    const baseQuantity = item.baseQuantity ?? converted.baseQuantity;
     if (baseQuantity <= 0) {
       throw AppError.validation("Line items need a positive quantity and a valid price.");
     }
+    const commercialRate =
+      converted.quantity > 0 ? converted.lineAmount / converted.quantity : converted.unitPrice;
     return {
       ...item,
-      unitKind: kind,
-      saleUnit: item.saleUnit ?? unitCodeForKind(kind, packaging),
+      unitKind: converted.unitKind,
+      rateBasis: converted.rateBasis,
+      unitPrice: commercialRate,
+      saleUnit: item.saleUnit ?? converted.saleUnit,
       baseQuantity,
+      baseUnitCost: converted.baseUnitCost,
+    };
+  }
+
+  private async convertReturnItem(
+    businessId: string,
+    item: {
+      productId: string;
+      variantId?: string | null;
+      quantity: number;
+      unitPrice: number;
+      unitKind?: "base" | "pack";
+      rateBasis?: RateBasis;
+    }
+  ) {
+    const product = await this.repos.products.getProduct(businessId, item.productId);
+    if (!product) throw AppError.notFound("Product not found.");
+    const packaging = packagingFromProduct(product);
+    const converted = convertLine({
+      quantity: item.quantity,
+      unitKind: item.unitKind,
+      rateBasis: item.rateBasis,
+      unitPrice: item.unitPrice,
+      packaging,
+      mode: "return",
+    });
+    if (converted.baseQuantity <= 0) {
+      throw AppError.validation("Add at least one returned item.");
+    }
+    return {
+      productId: item.productId,
+      variantId: item.variantId ?? null,
+      quantity: converted.quantity,
+      unitPrice: converted.quantity > 0 ? converted.lineAmount / converted.quantity : converted.unitPrice,
+      baseQuantity: converted.baseQuantity,
     };
   }
 
@@ -236,7 +293,8 @@ export class TransactionService {
       const patch: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null } = {};
       if (item.expiryDate !== undefined) patch.expiryDate = item.expiryDate || null;
       if (item.mrp !== undefined && item.mrp !== null) patch.mrp = item.mrp;
-      if (item.unitPrice >= 0) patch.purchasePrice = item.unitPrice;
+      const cost = item.baseUnitCost ?? item.unitPrice;
+      if (cost >= 0) patch.purchasePrice = cost;
       if (Object.keys(patch).length > 0) {
         await this.repos.products.updateBatch(businessId, match.id, patch);
       }
@@ -247,7 +305,7 @@ export class TransactionService {
       batchNo,
       expiryDate: item.expiryDate ?? null,
       mrp: item.mrp ?? null,
-      purchasePrice: item.unitPrice,
+      purchasePrice: item.baseUnitCost ?? item.unitPrice,
     });
     return created.id;
   }
@@ -724,8 +782,21 @@ export class TransactionService {
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one returned item.");
     }
-    const total = input.items.reduce(
-      (sum, item) => sum + item.quantity * item.unitCost,
+    const convertedItems = [];
+    for (const item of input.items) {
+      convertedItems.push(
+        await this.convertReturnItem(businessId, {
+          productId: item.productId,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          unitPrice: item.unitCost,
+          unitKind: item.unitKind,
+          rateBasis: item.rateBasis,
+        })
+      );
+    }
+    const total = convertedItems.reduce(
+      (sum, item) => sum + item.quantity * item.unitPrice,
       0
     );
 
@@ -741,22 +812,21 @@ export class TransactionService {
         total,
         notes: input.notes ?? null,
       },
-      input.items.map((item) => ({
+      convertedItems.map((item) => ({
         productId: item.productId,
         variantId: item.variantId ?? null,
         quantity: item.quantity,
-        unitPrice: item.unitCost,
+        unitPrice: item.unitPrice,
       }))
     );
 
-    // Stock OUT (PURCHASE_RETURN movement) — send goods back to the supplier.
-    for (const item of input.items) {
+    for (const item of convertedItems) {
       await this.inventory.recordReturnMovement(
         businessId,
         userId,
         item.productId,
         item.variantId ?? null,
-        -item.quantity,
+        -item.baseQuantity,
         result.id
       );
     }
@@ -786,7 +856,11 @@ export class TransactionService {
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one returned item.");
     }
-    const total = input.items.reduce(
+    const convertedItems = [];
+    for (const item of input.items) {
+      convertedItems.push(await this.convertReturnItem(businessId, item));
+    }
+    const total = convertedItems.reduce(
       (sum, item) => sum + item.quantity * item.unitPrice,
       0
     );
@@ -803,7 +877,7 @@ export class TransactionService {
         total,
         notes: input.notes ?? null,
       },
-      input.items.map((item) => ({
+      convertedItems.map((item) => ({
         productId: item.productId,
         variantId: item.variantId ?? null,
         quantity: item.quantity,
@@ -811,14 +885,13 @@ export class TransactionService {
       }))
     );
 
-    // Stock IN (SALE_RETURN movement).
-    for (const item of input.items) {
+    for (const item of convertedItems) {
       await this.inventory.recordReturnMovement(
         businessId,
         userId,
         item.productId,
         item.variantId ?? null,
-        item.quantity,
+        item.baseQuantity,
         result.id
       );
     }

@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { Combobox } from "@/components/ui/combobox";
@@ -27,12 +28,19 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import {
+  packagingFromProduct,
+  purchaseUnitOptions,
+  resolvePurchaseUnitKind,
+  type UnitKind,
+} from "@/lib/packaging";
 import type { PurchaseInvoice, PurchaseReturn } from "@/types/domain";
 
 interface ReturnLine {
   productId: string;
   quantity: string;
   unitCost: string;
+  unitKind: UnitKind;
 }
 
 export default function PurchaseReturnsPage() {
@@ -112,6 +120,7 @@ export default function PurchaseReturnsPage() {
         productId: products[0].id,
         quantity: "1",
         unitCost: String(products[0].purchasePrice),
+        unitKind: "base",
       },
     ]);
   };
@@ -149,6 +158,7 @@ export default function PurchaseReturnsPage() {
           productId: line.productId,
           quantity: Number(line.quantity) || 0,
           unitCost: Number(line.unitCost) || 0,
+          unitKind: line.unitKind,
         })),
       });
       toastSuccess("Return recorded", `${result.returnNo} saved and stock updated.`);
@@ -271,6 +281,7 @@ export default function PurchaseReturnsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Product</TableHead>
+                    <TableHead className="w-28">Unit</TableHead>
                     <TableHead className="w-24 text-right">Qty</TableHead>
                     <TableHead className="w-32 text-right">Unit cost</TableHead>
                     <TableHead className="w-12" />
@@ -292,6 +303,33 @@ export default function PurchaseReturnsPage() {
                           }
                           placeholder="Select product…"
                         />
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const product = (products ?? []).find((item) => item.id === line.productId);
+                          const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+                          const options = purchaseUnitOptions(packaging);
+                          const kind = resolvePurchaseUnitKind(line.unitKind, packaging);
+                          if (options.length <= 1) {
+                            return <p className="text-sm">{options[0]?.code ?? product?.unit ?? "pcs"}</p>;
+                          }
+                          return (
+                            <Select
+                              value={kind}
+                              onChange={(event) =>
+                                updateLine(index, { unitKind: event.target.value as UnitKind })
+                              }
+                              className="h-8"
+                              aria-label="Return unit"
+                            >
+                              {options.map((option) => (
+                                <option key={option.kind} value={option.kind}>
+                                  {option.code}
+                                </option>
+                              ))}
+                            </Select>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input

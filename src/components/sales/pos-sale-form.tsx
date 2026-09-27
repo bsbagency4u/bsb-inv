@@ -458,7 +458,11 @@ export function PosSaleForm({
       const product = productById.get(line.productId);
       if (!product || !product.trackInventory) continue;
       const packaging = packagingFromProduct(product);
-      const qtyError = validateSaleQuantity(line.quantity, packaging);
+      const qtyError = validateSaleQuantity(
+        line.quantity,
+        packaging,
+        resolveUnitKind(line.unitKind, packaging)
+      );
       if (qtyError) return `${product.name}: ${qtyError}`;
       const usedBase = lines
         .filter((item) => {
@@ -1006,9 +1010,18 @@ export function PosSaleForm({
                                 return (
                                   <Select
                                     value={resolveUnitKind(line.unitKind, packaging)}
-                                    onChange={(event) =>
-                                      updateLine(line.key, { unitKind: event.target.value as UnitKind })
-                                    }
+                                    onChange={(event) => {
+                                      const nextKind = event.target.value as UnitKind;
+                                      const currentKind = resolveUnitKind(line.unitKind, packaging);
+                                      if (nextKind === currentKind) return;
+                                      const scaled =
+                                        nextKind === "pack" && packaging.unitsPerPack > 1
+                                          ? line.unitPrice * packaging.unitsPerPack
+                                          : nextKind === "base" && packaging.unitsPerPack > 1
+                                            ? line.unitPrice / packaging.unitsPerPack
+                                            : line.unitPrice;
+                                      updateLine(line.key, { unitKind: nextKind, unitPrice: scaled });
+                                    }}
                                     aria-label={`Unit for ${product?.name ?? "product"}`}
                                     className="h-11 min-w-[90px] px-3"
                                   >

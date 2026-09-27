@@ -1,4 +1,5 @@
 export type UnitKind = "base" | "pack";
+export type RateBasis = "base" | "pack";
 
 export interface ProductPackaging {
   unit: string;
@@ -100,6 +101,33 @@ export function resolvePurchaseUnitKind(
   return options[0]?.kind ?? "base";
 }
 
+export function rateBasisOptions(
+  packaging: ProductPackaging
+): Array<{ basis: RateBasis; code: string; label: string }> {
+  const options: Array<{ basis: RateBasis; code: string; label: string }> = [
+    { basis: "base", code: packaging.unit, label: `Per ${packaging.unit}` },
+  ];
+  if (packaging.packUnit && packaging.unitsPerPack > 1) {
+    options.push({
+      basis: "pack",
+      code: packaging.packUnit,
+      label: `Per ${packaging.packUnit}`,
+    });
+  }
+  return options;
+}
+
+export function resolveRateBasis(
+  basis: RateBasis | string | null | undefined,
+  packaging: ProductPackaging,
+  unitKind: UnitKind = "base"
+): RateBasis {
+  const options = rateBasisOptions(packaging);
+  if (basis === "pack" && options.some((option) => option.basis === "pack")) return "pack";
+  if (basis === "base" && options.some((option) => option.basis === "base")) return "base";
+  return unitKind === "pack" && options.some((option) => option.basis === "pack") ? "pack" : "base";
+}
+
 export function toBaseQuantity(
   quantity: number,
   kind: UnitKind,
@@ -126,6 +154,101 @@ export function fromBaseQuantity(
   return qty;
 }
 
+export function commercialLineAmount(
+  quantity: number,
+  unitPrice: number,
+  unitKind: UnitKind,
+  rateBasis: RateBasis,
+  packaging: ProductPackaging
+): number {
+  const qty = Number(quantity);
+  const rate = Number(unitPrice);
+  if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(rate) || rate < 0) return 0;
+  return qty * rateForUnitKind(rate, rateBasis, unitKind, packaging);
+}
+
+export function rateForUnitKind(
+  unitPrice: number,
+  rateBasis: RateBasis,
+  unitKind: UnitKind,
+  packaging: ProductPackaging
+): number {
+  const rate = Number(unitPrice);
+  if (!Number.isFinite(rate) || rate < 0) return 0;
+  if (unitKind === rateBasis) return rate;
+  if (unitKind === "pack" && rateBasis === "base") return packUnitCost(rate, "base", packaging);
+  if (unitKind === "base" && rateBasis === "pack") return baseUnitCost(rate, "pack", packaging);
+  return rate;
+}
+
+export function baseUnitCost(
+  unitPrice: number,
+  rateBasis: RateBasis,
+  packaging: ProductPackaging
+): number {
+  const rate = Number(unitPrice);
+  if (!Number.isFinite(rate) || rate < 0) return 0;
+  if (rateBasis === "pack" && packaging.unitsPerPack > 1) {
+    return rate / packaging.unitsPerPack;
+  }
+  return rate;
+}
+
+export function packUnitCost(
+  unitPrice: number,
+  rateBasis: RateBasis,
+  packaging: ProductPackaging
+): number {
+  const rate = Number(unitPrice);
+  if (!Number.isFinite(rate) || rate < 0) return 0;
+  if (rateBasis === "base" && packaging.unitsPerPack > 1) {
+    return rate * packaging.unitsPerPack;
+  }
+  return rate;
+}
+
+export interface ConvertedLine {
+  quantity: number;
+  unitKind: UnitKind;
+  saleUnit: string;
+  baseQuantity: number;
+  unitPrice: number;
+  rateBasis: RateBasis;
+  lineAmount: number;
+  baseUnitCost: number;
+}
+
+export function convertLine(input: {
+  quantity: number;
+  unitKind?: UnitKind | string | null;
+  rateBasis?: RateBasis | string | null;
+  unitPrice: number;
+  packaging: ProductPackaging;
+  mode?: "sale" | "purchase" | "return";
+}): ConvertedLine {
+  const packaging = input.packaging;
+  const mode = input.mode ?? "sale";
+  const kind =
+    mode === "sale"
+      ? resolveUnitKind(input.unitKind, packaging)
+      : resolvePurchaseUnitKind(input.unitKind, packaging);
+  const rateBasis = resolveRateBasis(input.rateBasis, packaging, kind);
+  const quantity = Number(input.quantity);
+  const qty = Number.isFinite(quantity) && quantity > 0 ? quantity : 0;
+  const unitPrice = Number(input.unitPrice);
+  const rate = Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : 0;
+  return {
+    quantity: qty,
+    unitKind: kind,
+    saleUnit: unitCodeForKind(kind, packaging),
+    baseQuantity: toBaseQuantity(qty, kind, packaging),
+    unitPrice: rate,
+    rateBasis,
+    lineAmount: commercialLineAmount(qty, rate, kind, rateBasis, packaging),
+    baseUnitCost: baseUnitCost(rate, rateBasis, packaging),
+  };
+}
+
 export function formatBaseAvailable(baseQuantity: number, packaging: ProductPackaging): string {
   const qty = Number.isFinite(baseQuantity) ? baseQuantity : 0;
   return `${qty} ${packaging.unit}`;
@@ -137,16 +260,18 @@ export function oversellMessage(availableBase: number, unit: string): string {
 
 export function validateSaleQuantity(
   quantity: number,
-  packaging: ProductPackaging
+  packaging: ProductPackaging,
+  unitKind: UnitKind = "base"
 ): string | null {
   if (!Number.isFinite(quantity) || quantity <= 0) {
     return "Quantity must be greater than zero.";
   }
-  if (packaging.minSaleQty > 0 && quantity < packaging.minSaleQty) {
-    return `Minimum sale quantity is ${packaging.minSaleQty}.`;
+  const baseQty = toBaseQuantity(quantity, unitKind, packaging);
+  if (packaging.minSaleQty > 0 && baseQty < packaging.minSaleQty) {
+    return `Minimum sale quantity is ${packaging.minSaleQty} ${packaging.unit}.`;
   }
-  if (packaging.maxSaleQty != null && packaging.maxSaleQty > 0 && quantity > packaging.maxSaleQty) {
-    return `Maximum sale quantity is ${packaging.maxSaleQty}.`;
+  if (packaging.maxSaleQty != null && packaging.maxSaleQty > 0 && baseQty > packaging.maxSaleQty) {
+    return `Maximum sale quantity is ${packaging.maxSaleQty} ${packaging.unit}.`;
   }
   return null;
 }

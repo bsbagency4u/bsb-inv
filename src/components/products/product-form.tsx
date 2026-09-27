@@ -36,7 +36,6 @@ function toFormValues(product?: Product | null): ProductValues {
     hsn: product?.hsn ?? "",
     purchasePrice: product?.purchasePrice ?? 0,
     salePrice: product?.salePrice ?? 0,
-    mrp: product?.mrp ?? undefined,
     lowStockThreshold: product?.lowStockThreshold ?? 0,
     minStock: product?.minStock ?? 0,
     maxStock: product?.maxStock ?? undefined,
@@ -212,9 +211,9 @@ export function ProductForm({
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Units and packaging
         </p>
-        <p className="text-xs text-muted-foreground">
-          Stock is always kept in the base unit. Pack size converts purchase and sale quantities; it is not a min or max sale quantity.
-        </p>
+         <p className="text-xs text-muted-foreground">
+           Stock is always kept in the base unit. Pack size converts purchase, sale, and return quantities. Min/max sale quantity is not Max stock.
+         </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Pack unit" htmlFor="product-pack-unit" error={errors.packUnitId?.message}>
             <Select
@@ -251,7 +250,12 @@ export function ProductForm({
           </Field>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Min sale qty" htmlFor="product-min-sale" error={errors.minSaleQty?.message}>
+          <Field
+            label="Min sale qty"
+            htmlFor="product-min-sale"
+            hint="In base units. Independent of pack size and Max stock."
+            error={errors.minSaleQty?.message}
+          >
             <Input
               id="product-min-sale"
               type="number"
@@ -261,7 +265,12 @@ export function ProductForm({
               {...register("minSaleQty")}
             />
           </Field>
-          <Field label="Max sale qty" htmlFor="product-max-sale" error={errors.maxSaleQty?.message}>
+          <Field
+            label="Max sale qty"
+            htmlFor="product-max-sale"
+            hint="In base units. Not the same as Max stock."
+            error={errors.maxSaleQty?.message}
+          >
             <Input
               id="product-max-sale"
               type="number"
@@ -377,8 +386,13 @@ export function ProductForm({
         </Field>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Field label="Purchase price" htmlFor="product-purchase" error={errors.purchasePrice?.message}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field
+          label="Purchase price"
+          htmlFor="product-purchase"
+          hint="Default cost per base unit. Batch MRP is captured on purchase."
+          error={errors.purchasePrice?.message}
+        >
           <Input
             id="product-purchase"
             type="number"
@@ -388,7 +402,12 @@ export function ProductForm({
             {...register("purchasePrice")}
           />
         </Field>
-        <Field label="Sale price" htmlFor="product-sale" error={errors.salePrice?.message}>
+        <Field
+          label="Sale price"
+          htmlFor="product-sale"
+          hint="Default selling price per base unit. MRP comes from the selected batch."
+          error={errors.salePrice?.message}
+        >
           <Input
             id="product-sale"
             type="number"
@@ -396,16 +415,6 @@ export function ProductForm({
             min={0}
             defaultValue={product?.salePrice ?? 0}
             {...register("salePrice")}
-          />
-        </Field>
-        <Field label="MRP" htmlFor="product-mrp" error={errors.mrp?.message}>
-          <Input
-            id="product-mrp"
-            type="number"
-            step="0.01"
-            min={0}
-            defaultValue={product?.mrp ?? ""}
-            {...register("mrp")}
           />
         </Field>
       </div>
@@ -436,7 +445,12 @@ export function ProductForm({
             {...register("reorderLevel")}
           />
         </Field>
-        <Field label="Max stock" htmlFor="product-max" error={errors.maxStock?.message}>
+        <Field
+          label="Max stock"
+          htmlFor="product-max"
+          hint="Inventory ceiling in base units. Not Max sale quantity."
+          error={errors.maxStock?.message}
+        >
           <Input
             id="product-max"
             type="number"

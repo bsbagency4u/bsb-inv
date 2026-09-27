@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  baseUnitCost,
+  commercialLineAmount,
+  convertLine,
   defaultUnitKind,
   formatBaseAvailable,
   fromBaseQuantity,
@@ -8,6 +11,7 @@ import {
   packSaleEnabled,
   purchaseUnitOptions,
   resolvePurchaseUnitKind,
+  resolveRateBasis,
   resolveUnitKind,
   saleUnitOptions,
   toBaseQuantity,
@@ -67,11 +71,58 @@ describe("packaging conversion", () => {
     expect(oversellMessage(14, "PCS")).toBe("Only 14 PCS available.");
   });
 
-  it("enforces min and max sale qty without using pack size", () => {
+  it("enforces min and max sale qty in base units", () => {
     expect(validateSaleQuantity(0, strip)).toBe("Quantity must be greater than zero.");
     expect(validateSaleQuantity(1, strip)).toBeNull();
-    expect(validateSaleQuantity(21, strip)).toBe("Maximum sale quantity is 20.");
+    expect(validateSaleQuantity(21, strip)).toBe("Maximum sale quantity is 20 PCS.");
+    expect(validateSaleQuantity(3, strip, "pack")).toBe("Maximum sale quantity is 20 PCS.");
+    expect(validateSaleQuantity(2, strip, "pack")).toBeNull();
     const minTwo = packagingFromProduct({ ...strip, minSaleQty: 2, maxSaleQty: null });
-    expect(validateSaleQuantity(1, minTwo)).toBe("Minimum sale quantity is 2.");
+    expect(validateSaleQuantity(1, minTwo)).toBe("Minimum sale quantity is 2 PCS.");
+  });
+
+  it("does not double-convert pack qty at per-base rate", () => {
+    expect(commercialLineAmount(1, 5, "pack", "base", strip)).toBe(50);
+    expect(commercialLineAmount(1, 50, "pack", "pack", strip)).toBe(50);
+    expect(baseUnitCost(5, "base", strip)).toBe(5);
+    expect(baseUnitCost(50, "pack", strip)).toBe(5);
+    expect(resolveRateBasis(undefined, strip, "pack")).toBe("pack");
+  });
+
+  it("converts 1 STRIP at Rs 5/PCS to 10 PCS and Rs 50", () => {
+    const line = convertLine({
+      quantity: 1,
+      unitKind: "pack",
+      rateBasis: "base",
+      unitPrice: 5,
+      packaging: strip,
+      mode: "purchase",
+    });
+    expect(line.baseQuantity).toBe(10);
+    expect(line.lineAmount).toBe(50);
+    expect(line.baseUnitCost).toBe(5);
+    expect(line.saleUnit).toBe("STRIP");
+  });
+
+  it("keeps 1 STRIP at Rs 50/STRIP as Rs 50 not Rs 500", () => {
+    const line = convertLine({
+      quantity: 1,
+      unitKind: "pack",
+      rateBasis: "pack",
+      unitPrice: 50,
+      packaging: strip,
+      mode: "purchase",
+    });
+    expect(line.baseQuantity).toBe(10);
+    expect(line.lineAmount).toBe(50);
+    expect(line.baseUnitCost).toBe(5);
+  });
+
+  it("restores remaining base stock after pack then loose sale", () => {
+    const opening = 110;
+    const afterStrip = opening - toBaseQuantity(1, "pack", strip);
+    const remaining = afterStrip - toBaseQuantity(2, "base", strip);
+    expect(afterStrip).toBe(100);
+    expect(remaining).toBe(98);
   });
 });

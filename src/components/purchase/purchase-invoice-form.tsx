@@ -38,10 +38,14 @@ import {
   getProductAttributesForType,
 } from "@/config/business-types";
 import {
+  convertLine,
   defaultUnitKind,
   packagingFromProduct,
   purchaseUnitOptions,
+  rateBasisOptions,
   resolvePurchaseUnitKind,
+  resolveRateBasis,
+  type RateBasis,
   type UnitKind,
 } from "@/lib/packaging";
 import type { PartyValues } from "@/lib/validation/schemas";
@@ -53,6 +57,7 @@ interface PurchaseLine {
   variantId: string | null;
   quantity: number;
   unitKind: UnitKind;
+  rateBasis: RateBasis;
   unitPrice: number;
   gstRate: number;
   discount: number;
@@ -259,12 +264,24 @@ export function PurchaseInvoiceForm() {
 
   const invoiceDiscount = Math.max(0, Number(discount) || 0);
   const totals = gst.computeTotals(
-    lines.map((line) => ({
-      quantity: line.quantity,
-      unitPrice: line.unitPrice,
-      gstRate: gstEnabled ? line.gstRate : 0,
-      discount: line.discount,
-    })),
+    lines.map((line) => {
+      const product = productById.get(line.productId);
+      const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+      const converted = convertLine({
+        quantity: line.quantity,
+        unitKind: line.unitKind,
+        rateBasis: line.rateBasis,
+        unitPrice: line.unitPrice,
+        packaging,
+        mode: "purchase",
+      });
+      return {
+        quantity: converted.quantity,
+        unitPrice: converted.quantity > 0 ? converted.lineAmount / converted.quantity : converted.unitPrice,
+        gstRate: gstEnabled ? line.gstRate : 0,
+        discount: line.discount,
+      };
+    }),
     { intraState, discount: invoiceDiscount }
   );
 
@@ -284,6 +301,7 @@ export function PurchaseInvoiceForm() {
       variantId: variant?.id ?? null,
       quantity: 1,
       unitKind: defaultUnitKind(packagingFromProduct(product)),
+      rateBasis: "base",
       unitPrice: variant?.purchasePrice ?? product.purchasePrice,
       gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
       discount: 0,
@@ -442,6 +460,7 @@ export function PurchaseInvoiceForm() {
           variantId: line.variantId,
           quantity: line.quantity,
           unitKind: line.unitKind,
+          rateBasis: line.rateBasis,
           unitPrice: line.unitPrice,
           gstRate: gstEnabled ? line.gstRate : 0,
           discount: line.discount,
@@ -771,6 +790,7 @@ export function PurchaseInvoiceForm() {
                         {tracksBatches ? <TableHead className="min-w-[132px]">Expiry</TableHead> : null}
                         {showsMrp ? <TableHead className="min-w-[110px] text-right">MRP</TableHead> : null}
                         <TableHead className="min-w-[110px]">Unit / Pack</TableHead>
+                        <TableHead className="min-w-[120px]">Rate basis</TableHead>
                         <TableHead className="min-w-[96px] text-right">Bill Qty</TableHead>
                         <TableHead className="min-w-[128px] text-right">Purchase Rate</TableHead>
                         <TableHead className="min-w-[110px] text-right">Discount</TableHead>
@@ -891,6 +911,30 @@ export function PurchaseInvoiceForm() {
                                   ))}
                                 </Select>
                               )}
+                            </TableCell>
+                            <TableCell className="min-w-[120px] align-middle py-3">
+                              {(() => {
+                                const basisOptions = rateBasisOptions(packaging);
+                                if (basisOptions.length <= 1) {
+                                  return <p className="text-sm">{basisOptions[0]?.label ?? `Per ${packaging.unit}`}</p>;
+                                }
+                                return (
+                                  <Select
+                                    value={resolveRateBasis(line.rateBasis, packaging, line.unitKind)}
+                                    onChange={(event) =>
+                                      updateLine(line.key, { rateBasis: event.target.value as RateBasis })
+                                    }
+                                    aria-label={`Rate basis for ${product?.name ?? "product"}`}
+                                    className={cn(controlClass, "min-w-[110px] px-3")}
+                                  >
+                                    {basisOptions.map((option) => (
+                                      <option key={option.basis} value={option.basis}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </Select>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell className="min-w-[96px] align-middle py-3">
                               <Input
