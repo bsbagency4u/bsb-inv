@@ -497,6 +497,7 @@ export interface LineItem {
   amount: number;
   saleUnit?: string | null;
   baseQuantity?: number | null;
+  receivedQuantity?: number;
 }
 
 export interface PurchaseOrder {

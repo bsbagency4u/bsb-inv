@@ -25,6 +25,7 @@ import {
   mapSalesReturn,
   mapSalesReturnItem,
 } from "./mappers";
+import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 
 export interface LineItemInput {
   productId: string;
@@ -118,7 +119,13 @@ export interface TransactionRepository {
   createSalesInvoice(businessId: string, userId: string, header: SalesHeaderInput, items: LineItemInput[]): Promise<SalesInvoice>;
   updateSalesInvoiceStatus(businessId: string, invoiceId: string, status: SalesInvoiceStatus): Promise<void>;
   listPurchaseOrders(businessId: string): Promise<PurchaseOrder[]>;
+  getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null>;
   createPurchaseOrder(businessId: string, userId: string, header: PurchaseOrderHeaderInput, items: LineItemInput[]): Promise<PurchaseOrder>;
+  applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder>;
   listPurchaseInvoices(businessId: string): Promise<PurchaseInvoice[]>;
   getPurchaseInvoice(businessId: string, invoiceId: string): Promise<PurchaseInvoice | null>;
   createPurchaseInvoice(businessId: string, userId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
@@ -299,6 +306,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       taxableAmount: row.quantity * row.unit_price,
       taxAmount: row.quantity * row.unit_price * (row.gst_rate / 100),
       amount: row.amount,
+      receivedQuantity: row.received_quantity ?? 0,
     }));
   }
 
@@ -352,6 +360,56 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     }
 
     return { ...mapPurchaseOrder(data), items: await this.fetchOrderItems(data.id) };
+  }
+
+  async getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null> {
+    const { data, error } = await this.client
+      .from("purchase_orders")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", orderId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { ...mapPurchaseOrder(data), items: await this.fetchOrderItems(data.id) };
+  }
+
+  async applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder> {
+    const { data: rows, error: fetchError } = await this.client
+      .from("purchase_order_items")
+      .select("*")
+      .eq("purchase_order_id", purchaseOrderId);
+    if (fetchError) throw fetchError;
+    const allocated = allocateReceivedQuantities(
+      (rows ?? []).map((row) => ({
+        id: row.id,
+        productId: row.product_id ?? "",
+        quantity: row.quantity,
+        receivedQuantity: row.received_quantity ?? 0,
+      })),
+      items
+    );
+    for (const line of allocated) {
+      const { error: updateError } = await this.client
+        .from("purchase_order_items")
+        .update({ received_quantity: line.receivedQuantity })
+        .eq("id", line.id);
+      if (updateError) throw updateError;
+    }
+    const order = await this.getPurchaseOrder(businessId, purchaseOrderId);
+    if (!order) throw new Error("Purchase order not found.");
+    const status = receivingStatusForItems(order.items);
+    const { error: statusError } = await this.client
+      .from("purchase_orders")
+      .update({ status })
+      .eq("business_id", businessId)
+      .eq("id", purchaseOrderId);
+    if (statusError) throw statusError;
+    return { ...order, status };
   }
 
   private async fetchPurchaseItems(invoiceId: string): Promise<LineItem[]> {

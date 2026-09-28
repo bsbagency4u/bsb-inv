@@ -19,6 +19,7 @@ import {
   validateSaleQuantity,
   type RateBasis,
 } from "@/lib/packaging";
+import { remainingForProduct } from "@/lib/purchase-receiving";
 import { GstEngine } from "./gst.service";
 import { InventoryService } from "./inventory.service";
 import type { AuditService } from "./audit.service";
@@ -601,9 +602,32 @@ export class TransactionService {
     input: ReceivingInput
   ): Promise<PurchaseReceipt> {
     await this.auth.requirePermission(businessId, userId, "purchase.manage");
-    if (input.items.length === 0) {
+    const receivedItems = input.items.filter((item) => item.quantity > 0);
+    if (receivedItems.length === 0) {
       throw AppError.validation("Add at least one received item.");
     }
+
+    let purchaseOrder = null;
+    if (input.purchaseOrderId) {
+      purchaseOrder = await this.repos.transactions.getPurchaseOrder(businessId, input.purchaseOrderId);
+      if (!purchaseOrder) throw AppError.notFound("Purchase order not found.");
+      if (purchaseOrder.status === "received") {
+        throw AppError.validation("This purchase order is already fully received.");
+      }
+      const receivedByProduct = new Map<string, number>();
+      for (const item of receivedItems) {
+        receivedByProduct.set(item.productId, (receivedByProduct.get(item.productId) ?? 0) + item.quantity);
+      }
+      for (const [productId, quantity] of receivedByProduct) {
+        const remaining = remainingForProduct(purchaseOrder.items, productId);
+        if (quantity > remaining + 1e-9) {
+          throw AppError.validation(
+            `Cannot receive more than the remaining ordered quantity (${remaining}).`
+          );
+        }
+      }
+    }
+
     const receipt = await this.repos.transactions.createPurchaseReceipt(
       businessId,
       userId,
@@ -615,7 +639,7 @@ export class TransactionService {
         receivedAt: input.receivedAt ?? new Date().toISOString().slice(0, 10),
         notes: input.notes ?? null,
       },
-      input.items.map((item) => ({
+      receivedItems.map((item) => ({
         productId: item.productId,
         variantId: item.variantId ?? null,
         quantity: item.quantity,
@@ -623,7 +647,15 @@ export class TransactionService {
       }))
     );
 
-    for (const item of input.items) {
+    if (purchaseOrder) {
+      await this.repos.transactions.applyPurchaseReceiptQuantities(
+        businessId,
+        purchaseOrder.id,
+        receivedItems.map((item) => ({ productId: item.productId, quantity: item.quantity }))
+      );
+    }
+
+    for (const item of receivedItems) {
       await this.inventory.recordPurchaseMovement(
         businessId,
         userId,
@@ -641,7 +673,7 @@ export class TransactionService {
       action: "purchase_received",
       entityType: "purchase_receipt",
       entityId: receipt.id,
-      metadata: { receiptNo },
+      metadata: { receiptNo, purchaseOrderId: input.purchaseOrderId ?? null },
     });
     return receipt;
   }

@@ -20,6 +20,7 @@ import type {
   LineItemInput,
   TransactionRepository,
 } from "../transaction.repository";
+import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { readStorage, writeStorage } from "./local-data";
 import { LocalPartyRepository } from "./party.repository";
 
@@ -49,6 +50,7 @@ const lineToModel = (item: LineItemInput): LineItem => {
     amount: item.amount ?? taxable + tax,
     saleUnit: item.saleUnit ?? null,
     baseQuantity: item.baseQuantity ?? item.quantity,
+    receivedQuantity: 0,
   };
 };
 
@@ -220,6 +222,32 @@ export class LocalTransactionRepository implements TransactionRepository {
     all.push(order);
     this.saveOrders(all);
     return order;
+  }
+
+  async getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null> {
+    return this.readOrders().find((order) => order.businessId === businessId && order.id === orderId) ?? null;
+  }
+
+  async applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder> {
+    const all = this.readOrders();
+    const index = all.findIndex((order) => order.businessId === businessId && order.id === purchaseOrderId);
+    if (index === -1) throw new Error("Purchase order not found.");
+    const order = all[index];
+    const nextItems = allocateReceivedQuantities(order.items, items);
+    const status = receivingStatusForItems(nextItems);
+    const updated: PurchaseOrder = {
+      ...order,
+      items: nextItems,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    all[index] = updated;
+    this.saveOrders(all);
+    return updated;
   }
 
   async listPurchaseInvoices(businessId: string): Promise<PurchaseInvoice[]> {

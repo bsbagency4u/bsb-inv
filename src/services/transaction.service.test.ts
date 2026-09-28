@@ -5,8 +5,10 @@ import type {
   Product,
   ProductBatch,
   PurchaseInvoice,
+  PurchaseOrder,
   SalesInvoice,
 } from "@/types/domain";
+import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { AuditService } from "./audit.service";
 import { NotificationService } from "./notification.service";
 import { TransactionService } from "./transaction.service";
@@ -21,6 +23,7 @@ function memoryRepositories() {
   const batches: ProductBatch[] = [];
   const auditLogs: AuditEvent[] = [];
   const receipts: unknown[] = [];
+  const purchaseOrders: PurchaseOrder[] = [];
   const purchaseReturns: unknown[] = [];
   const salesReturns: unknown[] = [];
   const paymentModes: Array<{ id: string; businessId: string; code: string; name: string; isActive: boolean; sortOrder: number; createdAt: string; updatedAt: string }> = [
@@ -233,8 +236,55 @@ function memoryRepositories() {
         const index = salesInvoices.findIndex((i) => i.id === id);
         if (index !== -1) salesInvoices[index] = { ...salesInvoices[index], status };
       },
-      async listPurchaseOrders() { return []; },
-      async createPurchaseOrder() { throw new Error("not used"); },
+      async listPurchaseOrders() { return purchaseOrders; },
+      async getPurchaseOrder(_b, id) { return purchaseOrders.find((o) => o.id === id) ?? null; },
+      async createPurchaseOrder(businessId, _u, header, items) {
+        const order: PurchaseOrder = {
+          id: `po-${purchaseOrders.length + 1}`,
+          businessId,
+          orderNo: header.orderNo,
+          supplierId: header.supplierId ?? null,
+          warehouseId: header.warehouseId ?? null,
+          orderDate: header.orderDate,
+          expectedDate: header.expectedDate ?? null,
+          status: header.status,
+          subtotal: header.subtotal,
+          discount: header.discount,
+          taxTotal: header.taxTotal,
+          total: header.total,
+          notes: header.notes ?? null,
+          items: items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            gstRate: item.gstRate,
+            discount: 0,
+            taxableAmount: item.quantity * item.unitPrice,
+            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
+            amount: item.quantity * item.unitPrice,
+            saleUnit: item.saleUnit ?? null,
+            baseQuantity: item.baseQuantity ?? item.quantity,
+            receivedQuantity: 0,
+          })),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        purchaseOrders.push(order);
+        return order;
+      },
+      async applyPurchaseReceiptQuantities(_b, purchaseOrderId, items) {
+        const index = purchaseOrders.findIndex((o) => o.id === purchaseOrderId);
+        if (index === -1) throw new Error("Purchase order not found.");
+        const nextItems = allocateReceivedQuantities(purchaseOrders[index].items, items);
+        purchaseOrders[index] = {
+          ...purchaseOrders[index],
+          items: nextItems,
+          status: receivingStatusForItems(nextItems),
+        };
+        return purchaseOrders[index];
+      },
       async listPurchaseInvoices() { return purchaseInvoices; },
       async getPurchaseInvoice(_b, id) { return purchaseInvoices.find((i) => i.id === id) ?? null; },
       async createPurchaseInvoice(businessId, _u, header, items) {
@@ -391,7 +441,7 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, payments, auditLogs, batches };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches };
 }
 
 describe("TransactionService", () => {
@@ -612,6 +662,79 @@ describe("TransactionService", () => {
       expect.objectContaining({ productId: product.id, change: 25, movementType: "PURCHASE" })
     );
     expect(services.auditLogs[0].action).toBe("purchase_received");
+  });
+
+  it("partially receives a purchase order then completes remaining qty", async () => {
+    const product = await seedProduct();
+    const order = await transactions.createPurchaseOrder("b-1", "u-1", "PO-2026-000001", {
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 10, unitPrice: 80, gstRate: 18 }],
+    });
+    await transactions.createPurchaseReceipt("b-1", "u-1", "RCT-2026-000002", {
+      purchaseOrderId: order.id,
+      warehouseId: "wh-1",
+      items: [{ productId: product.id, quantity: 4, unitCost: 80 }],
+    });
+    expect(services.purchaseOrders[0].status).toBe("partial");
+    expect(services.purchaseOrders[0].items[0].receivedQuantity).toBe(4);
+    expect(services.ledger).toContainEqual(
+      expect.objectContaining({ productId: product.id, change: 4, movementType: "PURCHASE" })
+    );
+
+    await transactions.createPurchaseReceipt("b-1", "u-1", "RCT-2026-000003", {
+      purchaseOrderId: order.id,
+      warehouseId: "wh-1",
+      items: [{ productId: product.id, quantity: 6, unitCost: 80 }],
+    });
+    expect(services.purchaseOrders[0].status).toBe("received");
+    expect(services.purchaseOrders[0].items[0].receivedQuantity).toBe(10);
+  });
+
+  it("rejects receiving more than remaining ordered quantity", async () => {
+    const product = await seedProduct();
+    const order = await transactions.createPurchaseOrder("b-1", "u-1", "PO-2026-000002", {
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 5, unitPrice: 50, gstRate: 0 }],
+    });
+    await transactions.createPurchaseReceipt("b-1", "u-1", "RCT-2026-000004", {
+      purchaseOrderId: order.id,
+      items: [{ productId: product.id, quantity: 3, unitCost: 50 }],
+    });
+    await expect(
+      transactions.createPurchaseReceipt("b-1", "u-1", "RCT-2026-000005", {
+        purchaseOrderId: order.id,
+        items: [{ productId: product.id, quantity: 3, unitCost: 50 }],
+      })
+    ).rejects.toThrow(AppError);
+    expect(services.purchaseOrders[0].items[0].receivedQuantity).toBe(3);
+    expect(services.ledger.filter((entry) => entry.productId === product.id)).toHaveLength(1);
+  });
+
+  it("ignores zero-qty lines and still records a partial receipt", async () => {
+    const product = await seedProduct();
+    const other = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Other",
+      gstRate: 0,
+      purchasePrice: 10,
+      salePrice: 20,
+      lowStockThreshold: 1,
+    });
+    const order = await transactions.createPurchaseOrder("b-1", "u-1", "PO-2026-000003", {
+      items: [
+        { productId: product.id, quantity: 8, unitPrice: 40, gstRate: 0 },
+        { productId: other.id, quantity: 2, unitPrice: 10, gstRate: 0 },
+      ],
+    });
+    await transactions.createPurchaseReceipt("b-1", "u-1", "RCT-2026-000006", {
+      purchaseOrderId: order.id,
+      items: [
+        { productId: product.id, quantity: 5, unitCost: 40 },
+        { productId: other.id, quantity: 0, unitCost: 10 },
+      ],
+    });
+    expect(services.purchaseOrders[0].status).toBe("partial");
+    expect(services.purchaseOrders[0].items.find((item) => item.productId === product.id)?.receivedQuantity).toBe(5);
+    expect(services.purchaseOrders[0].items.find((item) => item.productId === other.id)?.receivedQuantity).toBe(0);
   });
 
   it("records a purchase return that sends stock out", async () => {
