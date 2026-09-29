@@ -38,6 +38,8 @@ function memoryRepositories() {
           maxSaleQty: input.maxSaleQty ?? null,
           allowBaseSale: input.allowBaseSale ?? true,
           allowPackSale: input.allowPackSale ?? false,
+          allowPackPurchase: input.allowPackPurchase ?? true,
+          fixedPacking: input.fixedPacking ?? true,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,

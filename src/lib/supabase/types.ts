@@ -206,6 +206,8 @@ export type Product = {
   max_sale_qty: number | null;
   allow_base_sale: boolean;
   allow_pack_sale: boolean;
+  allow_pack_purchase: boolean;
+  fixed_packing: boolean;
   attributes: Record<string, unknown>;
   gst_rate: number;
   hsn: string | null;

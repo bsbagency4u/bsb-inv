@@ -187,6 +187,8 @@ export function mapProduct(row: Product): ProductModel {
     maxSaleQty: row.max_sale_qty === null || row.max_sale_qty === undefined ? null : asNumber(row.max_sale_qty),
     allowBaseSale: row.allow_base_sale !== false,
     allowPackSale: row.allow_pack_sale === true,
+    allowPackPurchase: row.allow_pack_purchase !== false,
+    fixedPacking: row.fixed_packing !== false,
     attributes: (row.attributes ?? {}) as Record<string, string | number | boolean | null>,
     gstRate: asNumber(row.gst_rate),
     hsn: row.hsn,

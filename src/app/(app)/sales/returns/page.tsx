@@ -29,9 +29,11 @@ import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
+  defaultSaleUnitKind,
   packagingFromProduct,
   resolveUnitKind,
   saleUnitOptions,
+  unitKindFromSaleUnit,
   type UnitKind,
 } from "@/lib/packaging";
 import type { SalesInvoice } from "@/types/domain";
@@ -112,15 +114,34 @@ export default function SalesReturnsPage() {
   const selectedInvoice: SalesInvoice | null =
     invoices?.find((invoice) => invoice.id === invoiceId) ?? null;
 
+  const lineFromInvoiceItem = (item: SalesInvoice["items"][number]): ReturnLine => {
+    const product = (products ?? []).find((entry) => entry.id === item.productId);
+    const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+    return {
+      productId: item.productId,
+      quantity: String(item.quantity),
+      unitPrice: String(item.unitPrice),
+      unitKind: unitKindFromSaleUnit(item.saleUnit, packaging),
+    };
+  };
+
   const addLine = () => {
+    if (selectedInvoice && selectedInvoice.items.length > 0) {
+      const used = new Set(lines.map((line) => line.productId));
+      const nextItem = selectedInvoice.items.find((item) => !used.has(item.productId)) ?? selectedInvoice.items[0];
+      setLines((current) => [...current, lineFromInvoiceItem(nextItem)]);
+      return;
+    }
     if (!products || products.length === 0) return;
+    const product = products[0];
+    const packaging = packagingFromProduct(product);
     setLines((current) => [
       ...current,
       {
-        productId: products[0].id,
+        productId: product.id,
         quantity: "1",
-        unitPrice: String(products[0].salePrice),
-        unitKind: "base",
+        unitPrice: String(product.salePrice),
+        unitKind: defaultSaleUnitKind(packaging),
       },
     ]);
   };
@@ -256,7 +277,15 @@ export default function SalesReturnsPage() {
                   customers?.find((c) => c.id === invoice.customerId)?.name ?? undefined,
               }))}
               value={invoiceId}
-              onValueChange={setInvoiceId}
+              onValueChange={(value) => {
+                setInvoiceId(value);
+                const invoice = (invoices ?? []).find((item) => item.id === value);
+                if (!invoice) {
+                  setLines([]);
+                  return;
+                }
+                setLines(invoice.items.map((item) => lineFromInvoiceItem(item)));
+              }}
               placeholder="Select a sales invoice…"
               emptyText="No sales invoices yet."
             />

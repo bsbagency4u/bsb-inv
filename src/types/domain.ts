@@ -285,6 +285,8 @@ export interface Product {
   maxSaleQty: number | null;
   allowBaseSale: boolean;
   allowPackSale: boolean;
+  allowPackPurchase: boolean;
+  fixedPacking: boolean;
   /** Dynamic attributes resolved from the business-type attribute registry. */
   attributes: Record<string, string | number | boolean | null>;
   gstRate: number;

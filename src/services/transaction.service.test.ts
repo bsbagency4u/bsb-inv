@@ -58,6 +58,8 @@ function memoryRepositories() {
           maxSaleQty: input.maxSaleQty ?? null,
           allowBaseSale: input.allowBaseSale ?? true,
           allowPackSale: input.allowPackSale ?? false,
+          allowPackPurchase: input.allowPackPurchase ?? true,
+          fixedPacking: input.fixedPacking ?? true,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,
@@ -1137,5 +1139,73 @@ describe("TransactionService", () => {
     expect(services.ledger).toContainEqual(
       expect.objectContaining({ productId: product.id, change: 10, movementType: "SALE_RETURN" })
     );
+  });
+
+  it("keeps one minor-unit ledger for 1 STRIP = 15 PCS purchase, sale and return", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 15,
+      allowBaseSale: true,
+      allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
+      gstRate: 0,
+      purchasePrice: 10,
+      salePrice: 12,
+    });
+    const perMajor = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000030", {
+      supplierId: "s-1",
+      items: [{
+        productId: product.id,
+        quantity: 10,
+        unitKind: "pack",
+        rateBasis: "pack",
+        unitPrice: 150,
+        gstRate: 0,
+        batchNo: "LOT-15",
+        mrp: 200,
+      }],
+    });
+    const perMinor = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000031", {
+      supplierId: "s-1",
+      asDraft: true,
+      items: [{
+        productId: product.id,
+        quantity: 10,
+        unitKind: "pack",
+        rateBasis: "base",
+        unitPrice: 10,
+        gstRate: 0,
+        batchNo: "LOT-15B",
+        mrp: 200,
+      }],
+    });
+    expect(perMajor.subtotal).toBe(1500);
+    expect(perMinor.subtotal).toBe(1500);
+    expect(perMajor.items[0].baseQuantity).toBe(150);
+    expect(services.batches.find((batch) => batch.batchNo === "LOT-15")?.mrp).toBe(200);
+    const batchId = services.batches.find((batch) => batch.batchNo === "LOT-15")?.id;
+    await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000040", {
+      items: [{ productId: product.id, batchId, quantity: 5, unitKind: "base", unitPrice: 12, gstRate: 0 }],
+      payments: [{ mode: "cash", amount: 60 }],
+    });
+    await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000041", {
+      items: [{ productId: product.id, batchId, quantity: 1, unitKind: "pack", unitPrice: 180, gstRate: 0 }],
+      payments: [{ mode: "cash", amount: 180 }],
+    });
+    await transactions.createPurchaseReturn("b-1", "u-1", "PRT-2026-000003", {
+      purchaseInvoiceId: perMajor.id,
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 2, unitCost: 150, unitKind: "pack", rateBasis: "pack" }],
+    });
+    await transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000003", {
+      items: [{ productId: product.id, quantity: 3, unitPrice: 12, unitKind: "base" }],
+    });
+    const remaining = services.ledger
+      .filter((entry) => entry.productId === product.id)
+      .reduce((sum, entry) => sum + entry.change, 0);
+    expect(remaining).toBe(103);
   });
 });

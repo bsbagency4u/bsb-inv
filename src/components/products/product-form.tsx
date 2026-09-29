@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field } from "@/components/ui/field";
 import { productSchema, type ProductValues } from "@/lib/validation/schemas";
 import { getProductAttributesForType } from "@/config/business-types";
+import { packagingFromProduct, packingHelperText } from "@/lib/packaging";
 import type { Brand, Category, Product, Unit } from "@/types/domain";
 
 function toFormValues(product?: Product | null): ProductValues {
@@ -31,6 +32,8 @@ function toFormValues(product?: Product | null): ProductValues {
     maxSaleQty: product?.maxSaleQty ?? undefined,
     allowBaseSale: product?.allowBaseSale ?? true,
     allowPackSale: product?.allowPackSale ?? false,
+    allowPackPurchase: product?.allowPackPurchase ?? true,
+    fixedPacking: product?.fixedPacking ?? true,
     attributes: product?.attributes ?? {},
     gstRate: product?.gstRate ?? 0,
     hsn: product?.hsn ?? "",
@@ -78,8 +81,24 @@ export function ProductForm({
 
   const trackInventory = useWatch({ control, name: "trackInventory" });
   const taxable = useWatch({ control, name: "taxable" });
+  const unitCode = useWatch({ control, name: "unit" });
+  const packUnitCode = useWatch({ control, name: "packUnit" });
+  const unitsPerPack = useWatch({ control, name: "unitsPerPack" });
   const allowBaseSale = useWatch({ control, name: "allowBaseSale" });
   const allowPackSale = useWatch({ control, name: "allowPackSale" });
+  const allowPackPurchase = useWatch({ control, name: "allowPackPurchase" });
+  const fixedPacking = useWatch({ control, name: "fixedPacking" });
+  const packingPreview = packingHelperText(
+    packagingFromProduct({
+      unit: unitCode || "pcs",
+      packUnit: packUnitCode || null,
+      unitsPerPack: Number(unitsPerPack) || 1,
+      allowBaseSale,
+      allowPackSale,
+      allowPackPurchase,
+      fixedPacking,
+    })
+  );
 
   const unitById = React.useMemo(() => {
     const map = new Map<string, Unit>();
@@ -174,48 +193,56 @@ export function ProductForm({
         </Field>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Base unit" htmlFor="product-unit" error={errors.unitId?.message}>
-          <Select
-            id="product-unit"
-            defaultValue={product?.unitId ?? ""}
-            onChange={(event) => {
-              const id = event.target.value || "";
-              setValue("unitId", id);
-              setValue("unit", unitById.get(id)?.code ?? "pcs");
-            }}
-          >
-            <option value="">Select unit…</option>
-            {(units ?? []).map((unit) => (
-              <option key={unit.id} value={unit.id}>
-                {unit.name} ({unit.code})
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Status" htmlFor="product-status">
-          <Select
-            id="product-status"
-            defaultValue={product?.productStatus ?? "active"}
-            onChange={(event) => setValue("productStatus", event.target.value as ProductValues["productStatus"])}
-          >
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="draft">Draft</option>
-            <option value="discontinued">Discontinued</option>
-          </Select>
-        </Field>
-      </div>
+      <Field label="Status" htmlFor="product-status">
+        <Select
+          id="product-status"
+          defaultValue={product?.productStatus ?? "active"}
+          onChange={(event) => setValue("productStatus", event.target.value as ProductValues["productStatus"])}
+        >
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="draft">Draft</option>
+          <option value="discontinued">Discontinued</option>
+        </Select>
+      </Field>
 
       <div className="space-y-3 rounded-md border border-border bg-surface-subtle p-3">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Units and packaging
+          Units and packing
         </p>
-         <p className="text-xs text-muted-foreground">
-           Stock is always kept in the base unit. Pack size converts purchase, sale, and return quantities. Min/max sale quantity is not Max stock.
-         </p>
+        <p className="text-xs text-muted-foreground">
+          Stock is always kept in the Minor Unit. Purchases default to Major Unit. Sales and POS default to Minor Unit. MRP is set on the purchase batch, not here.
+        </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Pack unit" htmlFor="product-pack-unit" error={errors.packUnitId?.message}>
+          <Field
+            label="Minor Unit"
+            htmlFor="product-unit"
+            hint="Stock unit. Example: PCS."
+            error={errors.unitId?.message}
+          >
+            <Select
+              id="product-unit"
+              defaultValue={product?.unitId ?? ""}
+              onChange={(event) => {
+                const id = event.target.value || "";
+                setValue("unitId", id);
+                setValue("unit", unitById.get(id)?.code ?? "pcs");
+              }}
+            >
+              <option value="">Select unit…</option>
+              {(units ?? []).map((unit) => (
+                <option key={unit.id} value={unit.id}>
+                  {unit.name} ({unit.code})
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Major Unit"
+            htmlFor="product-pack-unit"
+            hint="Purchase pack. Example: STRIP."
+            error={errors.packUnitId?.message}
+          >
             <Select
               id="product-pack-unit"
               defaultValue={product?.packUnitId ?? ""}
@@ -225,7 +252,7 @@ export function ProductForm({
                 setValue("packUnit", unitById.get(id)?.code ?? "");
               }}
             >
-              <option value="">No pack unit</option>
+              <option value="">No major unit</option>
               {(units ?? []).map((unit) => (
                 <option key={unit.id} value={unit.id}>
                   {unit.name} ({unit.code})
@@ -233,27 +260,78 @@ export function ProductForm({
               ))}
             </Select>
           </Field>
-          <Field
-            label="Units per pack"
-            htmlFor="product-units-per-pack"
-            hint="How many base units are in one pack."
-            error={errors.unitsPerPack?.message}
-          >
-            <Input
-              id="product-units-per-pack"
-              type="number"
-              min={1}
-              step="any"
-              defaultValue={product?.unitsPerPack ?? 1}
-              {...register("unitsPerPack")}
+        </div>
+        <Field
+          label="Packing"
+          htmlFor="product-units-per-pack"
+          hint="How many Minor Units are in one Major Unit. Example: 1 STRIP = 15 PCS."
+          error={errors.unitsPerPack?.message}
+        >
+          <Input
+            id="product-units-per-pack"
+            type="number"
+            min={1}
+            step="any"
+            defaultValue={product?.unitsPerPack ?? 1}
+            {...register("unitsPerPack")}
+          />
+        </Field>
+        <p className="text-xs text-muted-foreground">{packingPreview}</p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Fixed Packing</p>
+              <p className="text-xs text-muted-foreground">
+                ON locks conversion on every bill. OFF keeps this product default unless a transaction is allowed to override.
+              </p>
+            </div>
+            <Switch
+              checked={fixedPacking ?? true}
+              onCheckedChange={(checked) => setValue("fixedPacking", checked)}
+              aria-label="Fixed packing"
             />
-          </Field>
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Buy in Major Unit</p>
+              <p className="text-xs text-muted-foreground">Purchases default to the Major Unit when packing is set.</p>
+            </div>
+            <Switch
+              checked={allowPackPurchase ?? true}
+              onCheckedChange={(checked) => setValue("allowPackPurchase", checked)}
+              aria-label="Allow purchase in major unit"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Sell in Minor Unit</p>
+              <p className="text-xs text-muted-foreground">Allow cashiers to sell the Minor Unit. This is the POS default.</p>
+            </div>
+            <Switch
+              checked={allowBaseSale ?? true}
+              onCheckedChange={(checked) => setValue("allowBaseSale", checked)}
+              aria-label="Allow sale in minor unit"
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+            <div>
+              <p className="text-sm font-medium text-foreground">Sell in Major Unit</p>
+              <p className="text-xs text-muted-foreground">Allow cashiers to sell whole packs.</p>
+            </div>
+            <Switch
+              checked={allowPackSale ?? false}
+              onCheckedChange={(checked) => setValue("allowPackSale", checked)}
+              aria-label="Allow sale in major unit"
+            />
+          </div>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Min sale qty"
             htmlFor="product-min-sale"
-            hint="In base units. Independent of pack size and Max stock."
+            hint="In Minor Units. Independent of packing and Max stock."
             error={errors.minSaleQty?.message}
           >
             <Input
@@ -268,7 +346,7 @@ export function ProductForm({
           <Field
             label="Max sale qty"
             htmlFor="product-max-sale"
-            hint="In base units. Not the same as Max stock."
+            hint="In Minor Units. Not the same as Max stock."
             error={errors.maxSaleQty?.message}
           >
             <Input
@@ -280,30 +358,6 @@ export function ProductForm({
               {...register("maxSaleQty")}
             />
           </Field>
-        </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium text-foreground">Sell in base unit</p>
-              <p className="text-xs text-muted-foreground">Allow cashiers to sell the base unit.</p>
-            </div>
-            <Switch
-              checked={allowBaseSale ?? true}
-              onCheckedChange={(checked) => setValue("allowBaseSale", checked)}
-              aria-label="Allow sale in base unit"
-            />
-          </div>
-          <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium text-foreground">Sell in pack</p>
-              <p className="text-xs text-muted-foreground">Allow cashiers to sell whole packs.</p>
-            </div>
-            <Switch
-              checked={allowPackSale ?? false}
-              onCheckedChange={(checked) => setValue("allowPackSale", checked)}
-              aria-label="Allow sale in pack unit"
-            />
-          </div>
         </div>
       </div>
 

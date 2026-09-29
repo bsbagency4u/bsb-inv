@@ -23,6 +23,8 @@ function product(overrides: Partial<Product> = {}): Product {
     maxSaleQty: null,
     allowBaseSale: true,
     allowPackSale: false,
+    allowPackPurchase: true,
+    fixedPacking: true,
     attributes: {},
     gstRate: 12,
     hsn: null,

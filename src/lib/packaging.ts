@@ -9,6 +9,8 @@ export interface ProductPackaging {
   maxSaleQty: number | null;
   allowBaseSale: boolean;
   allowPackSale: boolean;
+  allowPackPurchase: boolean;
+  fixedPacking: boolean;
 }
 
 export interface PackagingSource {
@@ -19,6 +21,8 @@ export interface PackagingSource {
   maxSaleQty?: number | null;
   allowBaseSale?: boolean | null;
   allowPackSale?: boolean | null;
+  allowPackPurchase?: boolean | null;
+  fixedPacking?: boolean | null;
 }
 
 export function packagingFromProduct(product: PackagingSource): ProductPackaging {
@@ -34,6 +38,8 @@ export function packagingFromProduct(product: PackagingSource): ProductPackaging
         : Number(product.maxSaleQty),
     allowBaseSale: product.allowBaseSale !== false,
     allowPackSale: product.allowPackSale === true,
+    allowPackPurchase: product.allowPackPurchase !== false,
+    fixedPacking: product.fixedPacking !== false,
   };
 }
 
@@ -61,19 +67,40 @@ export function saleUnitOptions(
   return options;
 }
 
+export function majorUnitEnabled(packaging: ProductPackaging): boolean {
+  return Boolean(packaging.packUnit) && packaging.unitsPerPack > 1;
+}
+
 export function purchaseUnitOptions(
   packaging: ProductPackaging
 ): Array<{ kind: UnitKind; code: string }> {
-  const options: Array<{ kind: UnitKind; code: string }> = [{ kind: "base", code: packaging.unit }];
-  if (packaging.packUnit && packaging.unitsPerPack > 1) {
+  const options: Array<{ kind: UnitKind; code: string }> = [];
+  if (packaging.allowPackPurchase !== false && majorUnitEnabled(packaging) && packaging.packUnit) {
     options.push({ kind: "pack", code: packaging.packUnit });
   }
+  options.push({ kind: "base", code: packaging.unit });
   return options;
 }
 
-export function defaultUnitKind(packaging: ProductPackaging): UnitKind {
+export function defaultSaleUnitKind(packaging: ProductPackaging): UnitKind {
   const options = saleUnitOptions(packaging);
   return options[0]?.kind ?? "base";
+}
+
+export function defaultPurchaseUnitKind(packaging: ProductPackaging): UnitKind {
+  const options = purchaseUnitOptions(packaging);
+  return options[0]?.kind ?? "base";
+}
+
+export function defaultUnitKind(packaging: ProductPackaging): UnitKind {
+  return defaultSaleUnitKind(packaging);
+}
+
+export function packingHelperText(packaging: ProductPackaging): string {
+  if (!majorUnitEnabled(packaging) || !packaging.packUnit) {
+    return `Stock is kept in ${packaging.unit}.`;
+  }
+  return `1 ${packaging.packUnit} = ${packaging.unitsPerPack} ${packaging.unit}. Purchases convert automatically into ${packaging.unit}. Sales use ${packaging.unit} by default.`;
 }
 
 export function resolveUnitKind(
@@ -99,6 +126,24 @@ export function resolvePurchaseUnitKind(
   if (kind === "pack" && options.some((option) => option.kind === "pack")) return "pack";
   if (kind === "base" && options.some((option) => option.kind === "base")) return "base";
   return options[0]?.kind ?? "base";
+}
+
+export function unitKindFromSaleUnit(
+  saleUnit: string | null | undefined,
+  packaging: ProductPackaging
+): UnitKind {
+  if (saleUnit && packaging.packUnit && saleUnit.toUpperCase() === packaging.packUnit.toUpperCase()) {
+    return "pack";
+  }
+  return "base";
+}
+
+export function resolveReturnUnitKind(
+  kind: UnitKind | string | null | undefined,
+  packaging: ProductPackaging
+): UnitKind {
+  if (kind === "pack" && majorUnitEnabled(packaging)) return "pack";
+  return "base";
 }
 
 export function rateBasisOptions(
@@ -231,7 +276,9 @@ export function convertLine(input: {
   const kind =
     mode === "sale"
       ? resolveUnitKind(input.unitKind, packaging)
-      : resolvePurchaseUnitKind(input.unitKind, packaging);
+      : mode === "purchase"
+        ? resolvePurchaseUnitKind(input.unitKind, packaging)
+        : resolveReturnUnitKind(input.unitKind, packaging);
   const rateBasis = resolveRateBasis(input.rateBasis, packaging, kind);
   const quantity = Number(input.quantity);
   const qty = Number.isFinite(quantity) && quantity > 0 ? quantity : 0;

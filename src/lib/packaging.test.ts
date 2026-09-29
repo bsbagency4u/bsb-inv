@@ -3,11 +3,14 @@ import {
   baseUnitCost,
   commercialLineAmount,
   convertLine,
+  defaultPurchaseUnitKind,
+  defaultSaleUnitKind,
   defaultUnitKind,
   formatBaseAvailable,
   fromBaseQuantity,
   oversellMessage,
   packagingFromProduct,
+  packingHelperText,
   packSaleEnabled,
   purchaseUnitOptions,
   resolvePurchaseUnitKind,
@@ -15,6 +18,7 @@ import {
   resolveUnitKind,
   saleUnitOptions,
   toBaseQuantity,
+  unitKindFromSaleUnit,
   validateSaleQuantity,
 } from "./packaging";
 
@@ -50,7 +54,8 @@ describe("packaging conversion", () => {
     expect(packSaleEnabled(purchaseOnly)).toBe(false);
     expect(toBaseQuantity(3, "pack", purchaseOnly)).toBe(36);
     expect(resolvePurchaseUnitKind("pack", purchaseOnly)).toBe("pack");
-    expect(purchaseUnitOptions(purchaseOnly).map((option) => option.kind)).toEqual(["base", "pack"]);
+    expect(purchaseUnitOptions(purchaseOnly).map((option) => option.kind)).toEqual(["pack", "base"]);
+    expect(defaultPurchaseUnitKind(purchaseOnly)).toBe("pack");
   });
 
   it("does not offer pack sale when pack sale is disabled", () => {
@@ -124,5 +129,92 @@ describe("packaging conversion", () => {
     const remaining = afterStrip - toBaseQuantity(2, "base", strip);
     expect(afterStrip).toBe(100);
     expect(remaining).toBe(98);
+  });
+
+  it("defaults purchase to Major Unit and sales to Minor Unit", () => {
+    expect(defaultPurchaseUnitKind(strip)).toBe("pack");
+    expect(defaultSaleUnitKind(strip)).toBe("base");
+    expect(unitKindFromSaleUnit("STRIP", strip)).toBe("pack");
+    expect(unitKindFromSaleUnit("PCS", strip)).toBe("base");
+    expect(packingHelperText(strip)).toContain("1 STRIP = 10 PCS");
+  });
+
+  it("converts 1 STRIP = 15 PCS purchase, sale, return and both rate bases", () => {
+    const packing = packagingFromProduct({
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 15,
+      allowBaseSale: true,
+      allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
+    });
+    const purchase = convertLine({
+      quantity: 10,
+      unitKind: "pack",
+      rateBasis: "pack",
+      unitPrice: 150,
+      packaging: packing,
+      mode: "purchase",
+    });
+    expect(purchase.baseQuantity).toBe(150);
+    expect(purchase.lineAmount).toBe(1500);
+    const purchasePerMinor = convertLine({
+      quantity: 10,
+      unitKind: "pack",
+      rateBasis: "base",
+      unitPrice: 10,
+      packaging: packing,
+      mode: "purchase",
+    });
+    expect(purchasePerMinor.lineAmount).toBe(purchase.lineAmount);
+    expect(purchasePerMinor.baseQuantity).toBe(150);
+
+    let stock = purchase.baseQuantity;
+    const sellLoose = convertLine({
+      quantity: 5,
+      unitKind: "base",
+      rateBasis: "base",
+      unitPrice: 12,
+      packaging: packing,
+      mode: "sale",
+    });
+    stock -= sellLoose.baseQuantity;
+    expect(stock).toBe(145);
+
+    const sellStrip = convertLine({
+      quantity: 1,
+      unitKind: "pack",
+      rateBasis: "pack",
+      unitPrice: 180,
+      packaging: packing,
+      mode: "sale",
+    });
+    stock -= sellStrip.baseQuantity;
+    expect(stock).toBe(130);
+
+    const purchaseReturn = convertLine({
+      quantity: 2,
+      unitKind: "pack",
+      rateBasis: "pack",
+      unitPrice: 150,
+      packaging: packing,
+      mode: "return",
+    });
+    stock -= purchaseReturn.baseQuantity;
+    expect(purchaseReturn.baseQuantity).toBe(30);
+    expect(stock).toBe(100);
+
+    const salesReturn = convertLine({
+      quantity: 3,
+      unitKind: "base",
+      rateBasis: "base",
+      unitPrice: 12,
+      packaging: packing,
+      mode: "return",
+    });
+    stock += salesReturn.baseQuantity;
+    expect(salesReturn.baseQuantity).toBe(3);
+    expect(stock).toBe(103);
   });
 });

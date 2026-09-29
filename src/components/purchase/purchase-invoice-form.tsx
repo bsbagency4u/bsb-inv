@@ -39,7 +39,7 @@ import {
 } from "@/config/business-types";
 import {
   convertLine,
-  defaultUnitKind,
+  defaultPurchaseUnitKind,
   packagingFromProduct,
   purchaseUnitOptions,
   rateBasisOptions,
@@ -295,13 +295,15 @@ export function PurchaseInvoiceForm() {
   const buildLine = (product: ProductWithStock): PurchaseLine => {
     const productVariants = (variantsByProduct.get(product.id) ?? []).filter((variant) => variant.isActive);
     const variant = productVariants[0];
+    const packaging = packagingFromProduct(product);
+    const unitKind = defaultPurchaseUnitKind(packaging);
     return {
       key: newLineKey(),
       productId: product.id,
       variantId: variant?.id ?? null,
       quantity: 1,
-      unitKind: defaultUnitKind(packagingFromProduct(product)),
-      rateBasis: "base",
+      unitKind,
+      rateBasis: unitKind === "pack" ? "pack" : "base",
       unitPrice: variant?.purchasePrice ?? product.purchasePrice,
       gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
       discount: 0,

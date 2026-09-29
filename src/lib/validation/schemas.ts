@@ -214,6 +214,8 @@ export const productSchema = z.object({
     .optional(),
   allowBaseSale: z.boolean().optional(),
   allowPackSale: z.boolean().optional(),
+  allowPackPurchase: z.boolean().optional(),
+  fixedPacking: z.boolean().optional(),
   attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   gstRate: z
     .union([z.number(), z.string().trim()])
@@ -261,18 +263,27 @@ export const productSchema = z.object({
   productStatus: z.enum(["active", "inactive", "draft", "discontinued"]).optional(),
 })
   .superRefine((data, ctx) => {
-    if (data.allowPackSale && !(data.packUnit || data.packUnitId)) {
+    const hasMajorUnit = Boolean(data.packUnit || data.packUnitId);
+    const packing = data.unitsPerPack ?? 1;
+    if ((data.allowPackSale || data.allowPackPurchase !== false) && hasMajorUnit && packing <= 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Select a pack unit to sell in packs.",
+        message: "Packing must be greater than 1 when a major unit is set.",
+        path: ["unitsPerPack"],
+      });
+    }
+    if (data.allowPackSale && !hasMajorUnit) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Select a major unit to sell in packs.",
         path: ["packUnitId"],
       });
     }
-    if (data.allowPackSale && (data.unitsPerPack ?? 1) <= 1) {
+    if (data.allowPackPurchase !== false && !hasMajorUnit && packing > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Units per pack must be greater than 1 when selling packs.",
-        path: ["unitsPerPack"],
+        message: "Select a major unit for this packing.",
+        path: ["packUnitId"],
       });
     }
     if (data.allowBaseSale === false && data.allowPackSale !== true) {

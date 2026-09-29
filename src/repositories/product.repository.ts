@@ -38,6 +38,8 @@ export interface ProductCreateInput {
   maxSaleQty?: number | null;
   allowBaseSale?: boolean;
   allowPackSale?: boolean;
+  allowPackPurchase?: boolean;
+  fixedPacking?: boolean;
   attributes?: Record<string, string | number | boolean | null>;
   gstRate?: number;
   hsn?: string | null;
@@ -208,6 +210,8 @@ export class SupabaseProductRepository implements ProductRepository {
         max_sale_qty: input.maxSaleQty ?? null,
         allow_base_sale: input.allowBaseSale ?? true,
         allow_pack_sale: input.allowPackSale ?? false,
+        allow_pack_purchase: input.allowPackPurchase ?? true,
+        fixed_packing: input.fixedPacking ?? true,
         attributes: input.attributes ?? {},
         gst_rate: input.gstRate ?? 0,
         hsn: input.hsn ?? null,
@@ -253,6 +257,8 @@ export class SupabaseProductRepository implements ProductRepository {
         max_sale_qty: input.maxSaleQty === undefined ? undefined : input.maxSaleQty,
         allow_base_sale: input.allowBaseSale,
         allow_pack_sale: input.allowPackSale,
+        allow_pack_purchase: input.allowPackPurchase,
+        fixed_packing: input.fixedPacking,
         attributes: input.attributes,
         gst_rate: input.gstRate,
         hsn: input.hsn === undefined ? undefined : input.hsn,

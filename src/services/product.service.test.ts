@@ -39,6 +39,8 @@ function memoryRepositories() {
           maxSaleQty: input.maxSaleQty ?? null,
           allowBaseSale: input.allowBaseSale ?? true,
           allowPackSale: input.allowPackSale ?? false,
+          allowPackPurchase: input.allowPackPurchase ?? true,
+          fixedPacking: input.fixedPacking ?? true,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,
@@ -265,6 +267,8 @@ describe("ProductService", () => {
       maxSaleQty: 50,
       allowBaseSale: true,
       allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
       gstRate: 12,
     });
     expect(product).toMatchObject({
@@ -275,6 +279,8 @@ describe("ProductService", () => {
       maxSaleQty: 50,
       allowBaseSale: true,
       allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
     });
   });
 

@@ -34,7 +34,7 @@ import { normalizeError } from "@/lib/errors";
 import { cn, formatCurrency } from "@/lib/utils";
 import { businessShowsMrp, businessTracksBatches } from "@/config/business-types";
 import {
-  defaultUnitKind,
+  defaultSaleUnitKind,
   formatBaseAvailable,
   oversellMessage,
   packagingFromProduct,
@@ -370,7 +370,7 @@ export function PosSaleForm({
         batchId: lot?.batchId ?? null,
         mrp: lot?.mrp ?? variant?.mrp ?? product.mrp,
         quantity: 1,
-        unitKind: defaultUnitKind(packagingFromProduct(product)),
+        unitKind: defaultSaleUnitKind(packagingFromProduct(product)),
         unitPrice: variant?.salePrice ?? product.salePrice,
         gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
         discountKind: "amount",
@@ -422,7 +422,7 @@ export function PosSaleForm({
       variantId,
       batchId: lot?.batchId ?? null,
       mrp: lot?.mrp ?? productVariants[0]?.mrp ?? product.mrp,
-      unitKind: defaultUnitKind(packagingFromProduct(product)),
+      unitKind: defaultSaleUnitKind(packagingFromProduct(product)),
       unitPrice: productVariants[0]?.salePrice ?? product.salePrice,
       gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
     });
