@@ -91,6 +91,32 @@ export interface NormalizedError {
   userMessage: string;
 }
 
+function asErrorField(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (value === null || value === undefined) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function formatDatabaseError(error: {
+  code?: string;
+  message?: string;
+  details?: unknown;
+  hint?: unknown;
+}): string {
+  const parts: string[] = [];
+  if (error.code) parts.push(error.code);
+  if (error.message) parts.push(error.message);
+  const details = asErrorField(error.details);
+  const hint = asErrorField(error.hint);
+  if (details) parts.push(details);
+  if (hint) parts.push(`Hint: ${hint}`);
+  return parts.join(" — ") || "The database could not complete the request.";
+}
+
 /**
  * Maps a Supabase-style error to a normalized AppError.
  * Never leaks raw stack traces or internal messages.
@@ -111,6 +137,8 @@ export function normalizeError(error: unknown): NormalizedError {
     const code = typeof err.code === "string" ? err.code : undefined;
     const message =
       typeof err.message === "string" ? err.message : undefined;
+    const details = err.details;
+    const hint = err.hint;
 
     switch (status) {
       case 401:
@@ -191,11 +219,12 @@ export function normalizeError(error: unknown): NormalizedError {
       };
     }
     if (typeof code === "string" && (code.startsWith("PGRST") || /^[0-9]{5}$/.test(code))) {
+      const userMessage = formatDatabaseError({ code, message, details, hint });
       return {
         code: "DATABASE",
         status: 500,
         message: message ?? "Database query failed.",
-        userMessage: "The database could not complete the request.",
+        userMessage,
       };
     }
     if (

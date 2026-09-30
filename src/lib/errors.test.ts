@@ -35,9 +35,23 @@ describe("normalizeError", () => {
     expect(result.code).toBe("NOT_FOUND");
   });
 
-  it("maps PostgREST codes to DATABASE", () => {
+  it("maps PostgREST codes to DATABASE and surfaces the code", () => {
     const result = normalizeError({ code: "PGRST301" });
     expect(result.code).toBe("DATABASE");
+    expect(result.userMessage).toContain("PGRST301");
+  });
+
+  it("surfaces PostgREST code, message, details and hint", () => {
+    const result = normalizeError({
+      code: "42703",
+      message: "column products.allow_pack_purchase does not exist",
+      details: null,
+      hint: "Apply the packing migration.",
+    });
+    expect(result.code).toBe("DATABASE");
+    expect(result.userMessage).toContain("42703");
+    expect(result.userMessage).toContain("column products.allow_pack_purchase does not exist");
+    expect(result.userMessage).toContain("Apply the packing migration.");
   });
 
   it("maps Postgres RLS denial 42501 to AUTHORIZATION", () => {

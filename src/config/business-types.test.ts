@@ -5,6 +5,7 @@ import {
   businessTracksBatches,
   getBusinessType,
   getProductAttributesForType,
+  getProductFormAttributesForType,
 } from "./business-types";
 
 describe("business-types registry", () => {
@@ -59,5 +60,15 @@ describe("business-types registry", () => {
     expect(businessShowsMrp("retail")).toBe(true);
     expect(businessTracksBatches("wholesale")).toBe(false);
     expect(businessShowsMrp("wholesale")).toBe(false);
+  });
+
+  it("product form attributes omit dedicated MRP, GST, HSN, unit and barcode fields", () => {
+    const keys = getProductFormAttributesForType("pharmacy").map((a) => a.key);
+    expect(keys).toContain("manufacturer");
+    expect(keys).not.toContain("mrp");
+    expect(keys).not.toContain("gst");
+    expect(keys).not.toContain("hsn");
+    expect(keys).not.toContain("unit");
+    expect(getProductFormAttributesForType("retail")).toHaveLength(0);
   });
 });

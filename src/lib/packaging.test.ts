@@ -3,12 +3,15 @@ import {
   baseUnitCost,
   commercialLineAmount,
   convertLine,
+  decodePackagingAttribute,
   defaultPurchaseUnitKind,
   defaultSaleUnitKind,
   defaultUnitKind,
   formatBaseAvailable,
   fromBaseQuantity,
+  mergeAttributesWithPackaging,
   oversellMessage,
+  PACKAGING_ATTRIBUTE_KEY,
   packagingFromProduct,
   packingHelperText,
   packSaleEnabled,
@@ -17,6 +20,8 @@ import {
   resolveRateBasis,
   resolveUnitKind,
   saleUnitOptions,
+  storedPackagingFromInput,
+  stripPackagingAttribute,
   toBaseQuantity,
   unitKindFromSaleUnit,
   validateSaleQuantity,
@@ -216,5 +221,34 @@ describe("packaging conversion", () => {
     stock += salesReturn.baseQuantity;
     expect(salesReturn.baseQuantity).toBe(3);
     expect(stock).toBe(103);
+  });
+});
+
+describe("packaging attribute fallback", () => {
+  it("round-trips packing through product attributes", () => {
+    const stored = storedPackagingFromInput({
+      unit: "PCS",
+      packUnit: "STRIP",
+      packUnitId: "u-strip",
+      unitsPerPack: 15,
+      minSaleQty: 1,
+      maxSaleQty: 30,
+      allowBaseSale: true,
+      allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
+    });
+    const attributes = mergeAttributesWithPackaging({ manufacturer: "Acme" }, stored);
+    expect(attributes[PACKAGING_ATTRIBUTE_KEY]).toMatchObject({
+      packUnit: "STRIP",
+      unitsPerPack: 15,
+    });
+    expect(decodePackagingAttribute(attributes)).toMatchObject({
+      packUnit: "STRIP",
+      packUnitId: "u-strip",
+      unitsPerPack: 15,
+      allowPackSale: true,
+    });
+    expect(stripPackagingAttribute(attributes)).toEqual({ manufacturer: "Acme" });
   });
 });

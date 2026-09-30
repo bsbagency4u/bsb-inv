@@ -16,6 +16,7 @@ export interface ProductPackaging {
 export interface PackagingSource {
   unit?: string | null;
   packUnit?: string | null;
+  packUnitId?: string | null;
   unitsPerPack?: number | null;
   minSaleQty?: number | null;
   maxSaleQty?: number | null;
@@ -303,6 +304,81 @@ export function formatBaseAvailable(baseQuantity: number, packaging: ProductPack
 
 export function oversellMessage(availableBase: number, unit: string): string {
   return `Only ${availableBase} ${unit} available.`;
+}
+
+export const PACKAGING_ATTRIBUTE_KEY = "_packaging";
+
+export interface StoredPackaging {
+  packUnit: string | null;
+  packUnitId: string | null;
+  unitsPerPack: number;
+  minSaleQty: number;
+  maxSaleQty: number | null;
+  allowBaseSale: boolean;
+  allowPackSale: boolean;
+  allowPackPurchase: boolean;
+  fixedPacking: boolean;
+}
+
+export function storedPackagingFromInput(input: PackagingSource): StoredPackaging {
+  const packaging = packagingFromProduct(input);
+  return {
+    packUnit: packaging.packUnit,
+    packUnitId: input.packUnitId?.trim() ? input.packUnitId.trim() : null,
+    unitsPerPack: packaging.unitsPerPack,
+    minSaleQty: packaging.minSaleQty,
+    maxSaleQty: packaging.maxSaleQty,
+    allowBaseSale: packaging.allowBaseSale,
+    allowPackSale: packaging.allowPackSale,
+    allowPackPurchase: packaging.allowPackPurchase,
+    fixedPacking: packaging.fixedPacking,
+  };
+}
+
+export function decodePackagingAttribute(
+  attributes: Record<string, unknown> | null | undefined
+): StoredPackaging | null {
+  const raw = attributes?.[PACKAGING_ATTRIBUTE_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  return storedPackagingFromInput({
+    unit: typeof value.unit === "string" ? value.unit : undefined,
+    packUnit: typeof value.packUnit === "string" ? value.packUnit : null,
+    packUnitId: typeof value.packUnitId === "string" ? value.packUnitId : null,
+    unitsPerPack: typeof value.unitsPerPack === "number" ? value.unitsPerPack : Number(value.unitsPerPack),
+    minSaleQty: typeof value.minSaleQty === "number" ? value.minSaleQty : Number(value.minSaleQty),
+    maxSaleQty:
+      value.maxSaleQty === null || value.maxSaleQty === undefined
+        ? null
+        : Number(value.maxSaleQty),
+    allowBaseSale: value.allowBaseSale !== false,
+    allowPackSale: value.allowPackSale === true,
+    allowPackPurchase: value.allowPackPurchase !== false,
+    fixedPacking: value.fixedPacking !== false,
+  });
+}
+
+export function mergeAttributesWithPackaging(
+  attributes: Record<string, unknown> | null | undefined,
+  packaging: StoredPackaging
+): Record<string, unknown> {
+  return {
+    ...(attributes ?? {}),
+    [PACKAGING_ATTRIBUTE_KEY]: packaging,
+  };
+}
+
+export function stripPackagingAttribute(
+  attributes: Record<string, unknown> | null | undefined
+): Record<string, string | number | boolean | null> {
+  const next: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(attributes ?? {})) {
+    if (key === PACKAGING_ATTRIBUTE_KEY) continue;
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      next[key] = value;
+    }
+  }
+  return next;
 }
 
 export function validateSaleQuantity(

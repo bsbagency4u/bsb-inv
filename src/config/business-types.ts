@@ -153,6 +153,16 @@ export function getProductAttributesForType(
   return getBusinessType(slug).productAttributes;
 }
 
+const PRODUCT_FORM_DEDUPED_KEYS = new Set(["mrp", "gst", "hsn", "unit", "barcode"]);
+
+export function getProductFormAttributesForType(
+  slug: string | null | undefined
+): ProductAttributeDefinition[] {
+  return getProductAttributesForType(slug).filter(
+    (attribute) => !PRODUCT_FORM_DEDUPED_KEYS.has(attribute.key)
+  );
+}
+
 /** Batch/expiry UI is driven by attribute registry, not business-type string checks. */
 export function businessTracksBatches(slug: string | null | undefined): boolean {
   return getProductAttributesForType(slug).some(

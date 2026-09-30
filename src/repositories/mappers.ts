@@ -32,6 +32,10 @@ import type {
   Unit,
   Warehouse,
 } from "@/lib/supabase/types";
+import {
+  decodePackagingAttribute,
+  stripPackagingAttribute,
+} from "@/lib/packaging";
 import type {
   Brand as BrandModel,
   BusinessMembership,
@@ -169,6 +173,11 @@ export function mapProductImage(row: ProductImage): ProductImageModel {
 }
 
 export function mapProduct(row: Product): ProductModel {
+  const rawAttributes = (row.attributes ?? {}) as Record<string, unknown>;
+  const stored = decodePackagingAttribute(rawAttributes);
+  const unitsPerPack = row.units_per_pack ?? stored?.unitsPerPack;
+  const minSaleQty = row.min_sale_qty ?? stored?.minSaleQty;
+  const maxSaleQty = row.max_sale_qty === undefined ? stored?.maxSaleQty : row.max_sale_qty;
   return {
     id: row.id,
     businessId: row.business_id,
@@ -180,16 +189,16 @@ export function mapProduct(row: Product): ProductModel {
     brandId: row.brand_id,
     unitId: row.unit_id,
     unit: row.unit,
-    packUnit: row.pack_unit ?? null,
-    packUnitId: row.pack_unit_id ?? null,
-    unitsPerPack: asNumber(row.units_per_pack) || 1,
-    minSaleQty: asNumber(row.min_sale_qty) || 1,
-    maxSaleQty: row.max_sale_qty === null || row.max_sale_qty === undefined ? null : asNumber(row.max_sale_qty),
-    allowBaseSale: row.allow_base_sale !== false,
-    allowPackSale: row.allow_pack_sale === true,
-    allowPackPurchase: row.allow_pack_purchase !== false,
-    fixedPacking: row.fixed_packing !== false,
-    attributes: (row.attributes ?? {}) as Record<string, string | number | boolean | null>,
+    packUnit: row.pack_unit ?? stored?.packUnit ?? null,
+    packUnitId: row.pack_unit_id ?? stored?.packUnitId ?? null,
+    unitsPerPack: asNumber(unitsPerPack) || 1,
+    minSaleQty: asNumber(minSaleQty) || 1,
+    maxSaleQty: maxSaleQty === null || maxSaleQty === undefined ? null : asNumber(maxSaleQty),
+    allowBaseSale: (row.allow_base_sale ?? stored?.allowBaseSale) !== false,
+    allowPackSale: (row.allow_pack_sale ?? stored?.allowPackSale) === true,
+    allowPackPurchase: (row.allow_pack_purchase ?? stored?.allowPackPurchase) !== false,
+    fixedPacking: (row.fixed_packing ?? stored?.fixedPacking) !== false,
+    attributes: stripPackagingAttribute(rawAttributes),
     gstRate: asNumber(row.gst_rate),
     hsn: row.hsn,
     purchasePrice: asNumber(row.purchase_price),

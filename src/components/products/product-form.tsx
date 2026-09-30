@@ -11,8 +11,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Field } from "@/components/ui/field";
 import { productSchema, type ProductValues } from "@/lib/validation/schemas";
-import { getProductAttributesForType } from "@/config/business-types";
+import { getProductFormAttributesForType } from "@/config/business-types";
 import { packagingFromProduct, packingHelperText } from "@/lib/packaging";
+import { GST_RATE_OPTIONS } from "@/services/gst.service";
 import type { Brand, Category, Product, Unit } from "@/types/domain";
 
 function toFormValues(product?: Product | null): ProductValues {
@@ -49,6 +50,26 @@ function toFormValues(product?: Product | null): ProductValues {
   };
 }
 
+function FormSection({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3 rounded-md border border-border bg-surface-subtle p-3">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
+        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export function ProductForm({
   businessType,
   categories,
@@ -66,7 +87,7 @@ export function ProductForm({
   onSubmit: (values: ProductValues) => Promise<void>;
   submitLabel?: string;
 }) {
-  const attributes = getProductAttributesForType(businessType);
+  const attributes = getProductFormAttributesForType(businessType);
 
   const {
     register,
@@ -88,6 +109,7 @@ export function ProductForm({
   const allowPackSale = useWatch({ control, name: "allowPackSale" });
   const allowPackPurchase = useWatch({ control, name: "allowPackPurchase" });
   const fixedPacking = useWatch({ control, name: "fixedPacking" });
+  const gstRate = useWatch({ control, name: "gstRate" });
   const packingPreview = packingHelperText(
     packagingFromProduct({
       unit: unitCode || "pcs",
@@ -105,6 +127,12 @@ export function ProductForm({
     for (const unit of units ?? []) map.set(unit.id, unit);
     return map;
   }, [units]);
+
+  const gstOptions = React.useMemo(() => {
+    const rates = new Set<number>(GST_RATE_OPTIONS);
+    if (typeof gstRate === "number") rates.add(gstRate);
+    return Array.from(rates).sort((a, b) => a - b);
+  }, [gstRate]);
 
   const submit = async (values: ProductValues) => {
     const attributesRecord: ProductValues["attributes"] = {};
@@ -131,88 +159,87 @@ export function ProductForm({
 
   return (
     <form onSubmit={handleSubmit(submit)} className="space-y-4" noValidate>
-      <Field
-        label="Product name"
-        htmlFor="product-name"
-        required
-        error={errors.name?.message}
-      >
-        <Input
-          id="product-name"
-          placeholder="e.g. Cotton T-Shirt (White)"
-          invalid={Boolean(errors.name)}
-          {...register("name")}
-        />
-      </Field>
-
-      <Field label="Description" htmlFor="product-description" error={errors.description?.message}>
-        <Textarea
-          id="product-description"
-          placeholder="Short description shown on invoices and POS"
-          {...register("description")}
-        />
-      </Field>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="SKU" htmlFor="product-sku" error={errors.sku?.message}>
-          <Input id="product-sku" placeholder="e.g. TS-WHT-M" {...register("sku")} />
-        </Field>
-        <Field label="Barcode" htmlFor="product-barcode" error={errors.barcode?.message}>
-          <Input id="product-barcode" placeholder="Scan or type" {...register("barcode")} />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Category" htmlFor="product-category" error={errors.categoryId?.message}>
-          <Select
-            id="product-category"
-            defaultValue={product?.categoryId ?? ""}
-            onChange={(event) => setValue("categoryId", event.target.value || "")}
-          >
-            <option value="">No category</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Brand" htmlFor="product-brand" error={errors.brandId?.message}>
-          <Select
-            id="product-brand"
-            defaultValue={product?.brandId ?? ""}
-            onChange={(event) => setValue("brandId", event.target.value || "")}
-          >
-            <option value="">No brand</option>
-            {(brands ?? []).map((brand) => (
-              <option key={brand.id} value={brand.id}>
-                {brand.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
-
-      <Field label="Status" htmlFor="product-status">
-        <Select
-          id="product-status"
-          defaultValue={product?.productStatus ?? "active"}
-          onChange={(event) => setValue("productStatus", event.target.value as ProductValues["productStatus"])}
+      <FormSection title="Basic">
+        <Field
+          label="Product name"
+          htmlFor="product-name"
+          required
+          error={errors.name?.message}
         >
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-          <option value="draft">Draft</option>
-          <option value="discontinued">Discontinued</option>
-        </Select>
-      </Field>
+          <Input
+            id="product-name"
+            placeholder="e.g. Cotton T-Shirt (White)"
+            invalid={Boolean(errors.name)}
+            {...register("name")}
+          />
+        </Field>
 
-      <div className="space-y-3 rounded-md border border-border bg-surface-subtle p-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Units and packing
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Stock is always kept in the Minor Unit. Purchases default to Major Unit. Sales and POS default to Minor Unit. MRP is set on the purchase batch, not here.
-        </p>
+        <Field label="Description" htmlFor="product-description" error={errors.description?.message}>
+          <Textarea
+            id="product-description"
+            placeholder="Short description shown on invoices and POS"
+            {...register("description")}
+          />
+        </Field>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="SKU" htmlFor="product-sku" error={errors.sku?.message}>
+            <Input id="product-sku" placeholder="e.g. TS-WHT-M" {...register("sku")} />
+          </Field>
+          <Field label="Barcode" htmlFor="product-barcode" error={errors.barcode?.message}>
+            <Input id="product-barcode" placeholder="Scan or type" {...register("barcode")} />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Category" htmlFor="product-category" error={errors.categoryId?.message}>
+            <Select
+              id="product-category"
+              defaultValue={product?.categoryId ?? ""}
+              onChange={(event) => setValue("categoryId", event.target.value || "")}
+            >
+              <option value="">No category</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Brand" htmlFor="product-brand" error={errors.brandId?.message}>
+            <Select
+              id="product-brand"
+              defaultValue={product?.brandId ?? ""}
+              onChange={(event) => setValue("brandId", event.target.value || "")}
+            >
+              <option value="">No brand</option>
+              {(brands ?? []).map((brand) => (
+                <option key={brand.id} value={brand.id}>
+                  {brand.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <Field label="Status" htmlFor="product-status">
+          <Select
+            id="product-status"
+            defaultValue={product?.productStatus ?? "active"}
+            onChange={(event) => setValue("productStatus", event.target.value as ProductValues["productStatus"])}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="draft">Draft</option>
+            <option value="discontinued">Discontinued</option>
+          </Select>
+        </Field>
+      </FormSection>
+
+      <FormSection
+        title="Units and packaging"
+        hint="Stock is always kept in the Minor Unit. Purchases default to Major Unit. Sales and POS default to Minor Unit. MRP is set on the purchase batch, not here."
+      >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Minor Unit"
@@ -327,6 +354,76 @@ export function ProductForm({
             />
           </div>
         </div>
+      </FormSection>
+
+      <FormSection
+        title="Tax and pricing"
+        hint="One GST rate and one HSN. MRP is captured on the purchase batch, not on the product."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="GST rate (%)" htmlFor="product-gst" error={errors.gstRate?.message}>
+            <Select
+              id="product-gst"
+              defaultValue={String(product?.gstRate ?? 0)}
+              onChange={(event) => setValue("gstRate", Number(event.target.value))}
+            >
+              {gstOptions.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate}%
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="HSN code" htmlFor="product-hsn" error={errors.hsn?.message}>
+            <Input id="product-hsn" placeholder="e.g. 6109" {...register("hsn")} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="Purchase price"
+            htmlFor="product-purchase"
+            hint="Default cost per Minor Unit. Batch MRP is captured on purchase."
+            error={errors.purchasePrice?.message}
+          >
+            <Input
+              id="product-purchase"
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={product?.purchasePrice ?? 0}
+              {...register("purchasePrice")}
+            />
+          </Field>
+          <Field
+            label="Sale price"
+            htmlFor="product-sale"
+            hint="Default selling price per Minor Unit. MRP comes from the selected batch."
+            error={errors.salePrice?.message}
+          >
+            <Input
+              id="product-sale"
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={product?.salePrice ?? 0}
+              {...register("salePrice")}
+            />
+          </Field>
+        </div>
+        <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+          <div>
+            <p className="text-sm font-medium text-foreground">Taxable</p>
+            <p className="text-xs text-muted-foreground">Apply GST on sales of this product.</p>
+          </div>
+          <Switch
+            checked={taxable ?? true}
+            onCheckedChange={(checked) => setValue("taxable", checked)}
+            aria-label="Taxable product"
+          />
+        </div>
+      </FormSection>
+
+      <FormSection title="Stock controls">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Min sale qty"
@@ -359,13 +456,63 @@ export function ProductForm({
             />
           </Field>
         </div>
-      </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Field
+            label="Low-stock threshold"
+            htmlFor="product-threshold"
+            hint="Alert when stock drops to this level."
+            error={errors.lowStockThreshold?.message}
+          >
+            <Input
+              id="product-threshold"
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={product?.lowStockThreshold ?? 0}
+              {...register("lowStockThreshold")}
+            />
+          </Field>
+          <Field label="Reorder level" htmlFor="product-reorder" error={errors.reorderLevel?.message}>
+            <Input
+              id="product-reorder"
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={product?.reorderLevel ?? 0}
+              {...register("reorderLevel")}
+            />
+          </Field>
+          <Field
+            label="Max stock"
+            htmlFor="product-max"
+            hint="Inventory ceiling in Minor Units. Not Max sale quantity."
+            error={errors.maxStock?.message}
+          >
+            <Input
+              id="product-max"
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={product?.maxStock ?? ""}
+              {...register("maxStock")}
+            />
+          </Field>
+        </div>
+        <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+          <div>
+            <p className="text-sm font-medium text-foreground">Track inventory</p>
+            <p className="text-xs text-muted-foreground">Count this product in stock levels.</p>
+          </div>
+          <Switch
+            checked={trackInventory ?? true}
+            onCheckedChange={(checked) => setValue("trackInventory", checked)}
+            aria-label="Track inventory"
+          />
+        </div>
+      </FormSection>
 
       {attributes.length > 0 ? (
-        <div>
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Product attributes
-          </p>
+        <FormSection title="Product attributes">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {attributes.map((definition) => (
               <Field
@@ -420,126 +567,8 @@ export function ProductForm({
               </Field>
             ))}
           </div>
-        </div>
+        </FormSection>
       ) : null}
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="GST rate (%)" htmlFor="product-gst" error={errors.gstRate?.message}>
-          <Input
-            id="product-gst"
-            type="number"
-            step="0.01"
-            min={0}
-            max={100}
-            defaultValue={product?.gstRate ?? 0}
-            {...register("gstRate")}
-          />
-        </Field>
-        <Field label="HSN code" htmlFor="product-hsn" error={errors.hsn?.message}>
-          <Input id="product-hsn" placeholder="e.g. 6109" {...register("hsn")} />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field
-          label="Purchase price"
-          htmlFor="product-purchase"
-          hint="Default cost per base unit. Batch MRP is captured on purchase."
-          error={errors.purchasePrice?.message}
-        >
-          <Input
-            id="product-purchase"
-            type="number"
-            step="0.01"
-            min={0}
-            defaultValue={product?.purchasePrice ?? 0}
-            {...register("purchasePrice")}
-          />
-        </Field>
-        <Field
-          label="Sale price"
-          htmlFor="product-sale"
-          hint="Default selling price per base unit. MRP comes from the selected batch."
-          error={errors.salePrice?.message}
-        >
-          <Input
-            id="product-sale"
-            type="number"
-            step="0.01"
-            min={0}
-            defaultValue={product?.salePrice ?? 0}
-            {...register("salePrice")}
-          />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Field
-          label="Low-stock threshold"
-          htmlFor="product-threshold"
-          hint="Alert when stock drops to this level."
-          error={errors.lowStockThreshold?.message}
-        >
-          <Input
-            id="product-threshold"
-            type="number"
-            step="1"
-            min={0}
-            defaultValue={product?.lowStockThreshold ?? 0}
-            {...register("lowStockThreshold")}
-          />
-        </Field>
-        <Field label="Reorder level" htmlFor="product-reorder" error={errors.reorderLevel?.message}>
-          <Input
-            id="product-reorder"
-            type="number"
-            step="1"
-            min={0}
-            defaultValue={product?.reorderLevel ?? 0}
-            {...register("reorderLevel")}
-          />
-        </Field>
-        <Field
-          label="Max stock"
-          htmlFor="product-max"
-          hint="Inventory ceiling in base units. Not Max sale quantity."
-          error={errors.maxStock?.message}
-        >
-          <Input
-            id="product-max"
-            type="number"
-            step="1"
-            min={0}
-            defaultValue={product?.maxStock ?? ""}
-            {...register("maxStock")}
-          />
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="flex items-center justify-between rounded-md border border-border bg-surface-subtle px-3 py-2.5">
-          <div>
-            <p className="text-sm font-medium text-foreground">Track inventory</p>
-            <p className="text-xs text-muted-foreground">Count this product in stock levels.</p>
-          </div>
-          <Switch
-            checked={trackInventory ?? true}
-            onCheckedChange={(checked) => setValue("trackInventory", checked)}
-            aria-label="Track inventory"
-          />
-        </div>
-        <div className="flex items-center justify-between rounded-md border border-border bg-surface-subtle px-3 py-2.5">
-          <div>
-            <p className="text-sm font-medium text-foreground">Taxable</p>
-            <p className="text-xs text-muted-foreground">Apply GST on sales of this product.</p>
-          </div>
-          <Switch
-            checked={taxable ?? true}
-            onCheckedChange={(checked) => setValue("taxable", checked)}
-            aria-label="Taxable product"
-          />
-        </div>
-      </div>
 
       <div className="flex items-center justify-end gap-2 pt-2">
         <Button type="submit" loading={isSubmitting}>
@@ -549,4 +578,3 @@ export function ProductForm({
     </form>
   );
 }
-
