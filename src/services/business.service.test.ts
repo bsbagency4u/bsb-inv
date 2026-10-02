@@ -328,6 +328,7 @@ describe("BusinessService", () => {
       defaultIntraState: false,
       defaultDiscountPercent: 5,
       allowLineDiscount: false,
+      allowExpired: true,
     });
     const purchase = await businesses.updatePurchaseDefaults("u-1", created.id, {
       defaultWarehouseId: "wh-1",

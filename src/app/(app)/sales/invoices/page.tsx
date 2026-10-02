@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CheckCircle2, FileText, Plus, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, FileText, Plus, Printer, XCircle } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -27,8 +27,9 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
+import { printSalesInvoice } from "@/lib/invoice-print";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
+import type { ProductWithStock, SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
 
 const STATUS_VARIANTS: Record<SalesInvoiceStatus, "success" | "info" | "warning" | "destructive" | "secondary"> = {
   draft: "secondary",
@@ -90,6 +91,24 @@ export default function SalesInvoicesPage() {
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
       return getClientServices().businesses.getSalesDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: products } = useQuery({
+    queryKey: ["products-with-stock", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().products.listProductsWithStock(business.id);
     },
     enabled: Boolean(business),
   });
@@ -194,6 +213,50 @@ export default function SalesInvoicesPage() {
     }
   };
 
+  const printInvoice = (invoice: SalesInvoice) => {
+    if (!business) return;
+    const productById = new Map((products ?? []).map((product: ProductWithStock) => [product.id, product]));
+    printSalesInvoice(
+      business,
+      invoiceDefaults ?? {
+        showLogo: true,
+        showGstin: true,
+        showHsn: false,
+        showBankDetails: false,
+        bankDetails: "",
+        termsAndConditions: "",
+        footerNote: "",
+        paperSize: "a4",
+      },
+      {
+        invoiceNo: invoice.invoiceNo,
+        invoiceDate: invoice.invoiceDate,
+        partyLabel: partyLabel(invoice),
+        partyGstin: invoice.customerId
+          ? customers?.find((customer) => customer.id === invoice.customerId)?.gstin ?? null
+          : null,
+        notes: invoice.notes,
+        paymentMode: invoice.paymentMode,
+        paidAmount: invoice.paidAmount,
+        lines: invoice.items.map((item) => ({
+          name: productById.get(item.productId)?.name ?? item.productId,
+          hsn: productById.get(item.productId)?.hsn ?? null,
+          quantity: item.quantity,
+          unit: item.saleUnit,
+          unitPrice: item.unitPrice,
+          discount: item.discount,
+          gstRate: item.gstRate,
+          amount: item.amount,
+        })),
+        subtotal: invoice.subtotal,
+        discount: invoice.discount,
+        taxTotal: invoice.taxTotal,
+        total: invoice.total,
+      },
+      business.currency ?? "INR"
+    );
+  };
+
   const partyLabel = (invoice: SalesInvoice) => {
     if (invoice.customerId) {
       return customers?.find((c) => c.id === invoice.customerId)?.name ?? "Customer";
@@ -283,6 +346,10 @@ export default function SalesInvoicesPage() {
                             Pay
                           </Button>
                         ) : null}
+                        <Button variant="outline" size="sm" onClick={() => printInvoice(invoice)}>
+                          <Printer className="size-4" />
+                          Print
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => setDetail(invoice)}>
                           View
                         </Button>
@@ -307,6 +374,10 @@ export default function SalesInvoicesPage() {
             <>
               <Button variant="outline" onClick={() => setDetail(null)}>
                 Close
+              </Button>
+              <Button variant="outline" onClick={() => printInvoice(detail)}>
+                <Printer className="size-4" />
+                Print
               </Button>
               {detail.status === "draft" ? (
                 <Button

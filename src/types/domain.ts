@@ -99,6 +99,7 @@ export interface SalesDefaults {
   defaultIntraState: boolean;
   defaultDiscountPercent: number;
   allowLineDiscount: boolean;
+  allowExpired: boolean;
 }
 
 export interface PurchaseDefaults {

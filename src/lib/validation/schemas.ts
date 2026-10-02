@@ -345,6 +345,7 @@ export const salesDefaultsSchema = z.object({
     .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
     .pipe(z.number().min(0, "Discount cannot be negative.").max(100, "Discount cannot exceed 100%.")),
   allowLineDiscount: z.boolean(),
+  allowExpired: z.boolean(),
 });
 
 export type SalesDefaultsValues = z.infer<typeof salesDefaultsSchema>;

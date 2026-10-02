@@ -31,6 +31,8 @@ import { EmptyState } from "@/components/states/empty-state";
 import { useToast } from "@/components/ui/toast";
 import { GstEngine } from "@/services/gst.service";
 import { normalizeError } from "@/lib/errors";
+import { printSalesInvoice } from "@/lib/invoice-print";
+import { settleTender } from "@/lib/tender";
 import { cn, formatCurrency } from "@/lib/utils";
 import { businessShowsMrp, businessTracksBatches } from "@/config/business-types";
 import {
@@ -131,6 +133,7 @@ export function PosSaleForm({
     pincode: "",
   });
   const [creatingCustomer, setCreatingCustomer] = React.useState(false);
+  const savingLock = React.useRef(false);
 
   const { data: customers, isError, error, refetch, isLoading } = useQuery({
     queryKey: ["customers", business?.id],
@@ -195,6 +198,15 @@ export function PosSaleForm({
     enabled: Boolean(business),
   });
 
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const { data: taxDefaults } = useQuery({
     queryKey: ["tax-defaults", business?.id],
     queryFn: async () => {
@@ -228,6 +240,7 @@ export function PosSaleForm({
   const intraState = intraStateOverride ?? salesDefaults?.defaultIntraState ?? taxDefaults?.defaultIntraState ?? true;
   const paymentMode = paymentModeOverride ?? salesDefaults?.defaultPaymentMode ?? (paymentModes?.[0]?.code ?? "cash");
   const allowLineDiscount = salesDefaults?.allowLineDiscount ?? true;
+  const allowExpired = salesDefaults?.allowExpired ?? false;
   const gstEnabled = taxDefaults?.gstEnabled ?? true;
   const warehouseValue = warehouseId || purchaseDefaults?.defaultWarehouseId || "";
   const salesPersonValue = salesPersonId || user?.id || "";
@@ -257,14 +270,16 @@ export function PosSaleForm({
 
   const lotsForLine = React.useCallback(
     (productId: string, variantId: string | null): SellableLot[] => {
+      const today = new Date().toISOString().slice(0, 10);
       return (sellableLots ?? []).filter((lot) => {
         if (lot.productId !== productId) return false;
         if (variantId && lot.variantId && lot.variantId !== variantId) return false;
         if (warehouseValue && lot.warehouseId && lot.warehouseId !== warehouseValue) return false;
+        if (!allowExpired && lot.expiryDate && lot.expiryDate < today) return false;
         return lot.quantity > 0;
       });
     },
-    [sellableLots, warehouseValue]
+    [sellableLots, warehouseValue, allowExpired]
   );
 
   const pickLot = React.useCallback(
@@ -300,7 +315,23 @@ export function PosSaleForm({
   const simplePaid = paidAmount === "" ? amountToPay : Math.max(0, Number(paidAmount) || 0);
   const splitPaid = paymentSplits.reduce((sum, split) => sum + Math.max(0, Number(split.amount) || 0), 0);
   const amountPaid = splitPayment ? splitPaid : simplePaid;
-  const balance = Math.max(0, amountToPay - amountPaid);
+  const cashModes = React.useMemo(() => {
+    const codes = (paymentModes ?? [])
+      .filter((mode) => /cash/i.test(mode.code) || /cash/i.test(mode.name))
+      .map((mode) => mode.code);
+    return codes.length > 0 ? codes : ["cash"];
+  }, [paymentModes]);
+  const tenderedPayments = splitPayment
+    ? paymentSplits
+        .map((split) => ({ mode: split.mode, amount: Math.max(0, Number(split.amount) || 0) }))
+        .filter((split) => split.amount > 0)
+    : amountPaid > 0
+      ? [{ mode: paymentMode, amount: amountPaid }]
+      : [];
+  const tender = settleTender(tenderedPayments, amountToPay, cashModes);
+  const recordedPaid = tender.payments.reduce((sum, allocation) => sum + allocation.amount, 0);
+  const balance = Math.max(0, amountToPay - recordedPaid);
+  const changeDue = tender.changeDue;
   const controlClass = "h-11";
 
   const enableSplitPayment = () => {
@@ -352,8 +383,60 @@ export function PosSaleForm({
     setPaymentSplits(next);
   };
 
-  const printSale = () => {
-    window.print();
+  const printSale = (invoiceNo?: string) => {
+    if (!business) return;
+    const partyLabel =
+      customerMode === "existing"
+        ? customer?.name ?? "Customer"
+        : walkInName.trim() || "Walk-in customer";
+    printSalesInvoice(
+      business,
+      invoiceDefaults ?? {
+        showLogo: true,
+        showGstin: true,
+        showHsn: false,
+        showBankDetails: false,
+        bankDetails: "",
+        termsAndConditions: "",
+        footerNote: "",
+        paperSize: "a4",
+      },
+      {
+        invoiceNo: invoiceNo || "Preview",
+        invoiceDate,
+        partyLabel,
+        partyGstin: customer?.gstin ?? null,
+        notes,
+        paymentMode: tender.payments[0]?.mode ?? paymentMode,
+        paidAmount: recordedPaid,
+        lines: lines.map((line, index) => {
+          const product = productById.get(line.productId);
+          const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+          const lot = lotsForLine(line.productId, line.variantId).find((item) => item.batchId === line.batchId);
+          return {
+            name: product?.name ?? "Item",
+            hsn: product?.hsn ?? taxDefaults?.defaultHsnCode ?? null,
+            batchNo: lot?.batchNo ?? null,
+            quantity: line.quantity,
+            unit: line.unitKind === "pack" ? packaging.packUnit : packaging.unit,
+            unitPrice: line.unitPrice,
+            discount: lineDiscountAmount(line),
+            gstRate: gstEnabled ? line.gstRate : 0,
+            amount: totals.lines[index]?.amount ?? 0,
+            mrp: line.mrp,
+          };
+        }),
+        subtotal: totals.subtotal,
+        discount: totals.discount,
+        taxTotal: totals.taxAmount,
+        total: totals.total,
+        intraState,
+        cgst: totals.cgst,
+        sgst: totals.sgst,
+        igst: totals.igst,
+      },
+      currency
+    );
   };
 
   const addProduct = (product: ProductWithStock) => {
@@ -524,6 +607,7 @@ export function PosSaleForm({
 
   const saveSale = async (asDraft: boolean) => {
     if (!business || !user) return;
+    if (savingLock.current) return;
     if (lines.length === 0) {
       toastError("Empty cart", "Add at least one product.");
       return;
@@ -540,10 +624,11 @@ export function PosSaleForm({
       toastError("Price exceeds MRP", priceError);
       return;
     }
-    if (!asDraft && amountPaid > amountToPay) {
-      toastError("Invalid payment", "Amount paid cannot exceed the grand total.");
+    if (!asDraft && tender.error) {
+      toastError("Invalid payment", tender.error);
       return;
     }
+    savingLock.current = true;
     setSaving(asDraft ? "draft" : "complete");
     try {
       const services = getClientServices();
@@ -582,22 +667,17 @@ export function PosSaleForm({
           gstRate: gstEnabled ? line.gstRate : 0,
           discount: lineDiscountAmount(line),
         })),
-        payments: asDraft
-          ? []
-          : splitPayment
-            ? paymentSplits
-                .map((split) => ({ mode: split.mode, amount: Math.max(0, Number(split.amount) || 0) }))
-                .filter((split) => split.amount > 0)
-            : amountPaid > 0
-              ? [{ mode: paymentMode, amount: amountPaid }]
-              : [],
+        payments: asDraft ? [] : tender.payments,
       });
       toastSuccess(
         asDraft ? "Draft saved" : "Sale completed",
         asDraft
           ? `${invoiceNo} was saved as a draft. Stock was not updated.`
-          : `${invoiceNo} for ${formatCurrency(saved.total, currency)} was recorded.`
+          : changeDue > 0
+            ? `${invoiceNo} for ${formatCurrency(saved.total, currency)} was recorded. Change ${formatCurrency(changeDue, currency)}.`
+            : `${invoiceNo} for ${formatCurrency(saved.total, currency)} was recorded.`
       );
+      if (!asDraft) printSale(invoiceNo);
       resetCart();
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
       await queryClient.invalidateQueries({ queryKey: ["sellable-lots"] });
@@ -607,6 +687,7 @@ export function PosSaleForm({
     } catch (err) {
       toastError(asDraft ? "Could not save draft" : "Could not complete sale", normalizeError(err).userMessage);
     } finally {
+      savingLock.current = false;
       setSaving(null);
     }
   };
@@ -692,7 +773,7 @@ export function PosSaleForm({
                 Clear cart
               </Button>
             )}
-            <Button variant="outline" className={controlClass} onClick={printSale} disabled={Boolean(saving) || lines.length === 0}>
+            <Button variant="outline" className={controlClass} onClick={() => printSale()} disabled={Boolean(saving) || lines.length === 0}>
               Print
             </Button>
             <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
@@ -1325,16 +1406,17 @@ export function PosSaleForm({
               )}
               <div className="grid grid-cols-2 gap-2 border-t border-border pt-3">
                 <div>
-                  <p className="text-xs text-muted-foreground">Paid</p>
+                  <p className="text-xs text-muted-foreground">Tendered</p>
                   <p className="text-base font-semibold tabular-nums">{formatCurrency(amountPaid, currency)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">Balance</p>
+                  <p className="text-xs text-muted-foreground">{changeDue > 0 ? "Change" : "Balance"}</p>
                   <p className={cn("text-base font-semibold tabular-nums", balance > 0 && "text-warning")}>
-                    {formatCurrency(balance, currency)}
+                    {formatCurrency(changeDue > 0 ? changeDue : balance, currency)}
                   </p>
                 </div>
               </div>
+              {tender.error ? <Alert variant="warning" title="Payment">{tender.error}</Alert> : null}
             </CardContent>
           </Card>
 
@@ -1351,7 +1433,7 @@ export function PosSaleForm({
               <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
                 Save draft
               </Button>
-              <Button variant="outline" className={controlClass} onClick={printSale} disabled={Boolean(saving) || lines.length === 0}>
+              <Button variant="outline" className={controlClass} onClick={() => printSale()} disabled={Boolean(saving) || lines.length === 0}>
                 Print
               </Button>
             </div>

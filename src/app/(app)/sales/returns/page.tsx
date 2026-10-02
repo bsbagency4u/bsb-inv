@@ -29,7 +29,6 @@ import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
-  defaultSaleUnitKind,
   packagingFromProduct,
   resolveUnitKind,
   saleUnitOptions,
@@ -126,24 +125,11 @@ export default function SalesReturnsPage() {
   };
 
   const addLine = () => {
-    if (selectedInvoice && selectedInvoice.items.length > 0) {
-      const used = new Set(lines.map((line) => line.productId));
-      const nextItem = selectedInvoice.items.find((item) => !used.has(item.productId)) ?? selectedInvoice.items[0];
-      setLines((current) => [...current, lineFromInvoiceItem(nextItem)]);
-      return;
-    }
-    if (!products || products.length === 0) return;
-    const product = products[0];
-    const packaging = packagingFromProduct(product);
-    setLines((current) => [
-      ...current,
-      {
-        productId: product.id,
-        quantity: "1",
-        unitPrice: String(product.salePrice),
-        unitKind: defaultSaleUnitKind(packaging),
-      },
-    ]);
+    if (!selectedInvoice || selectedInvoice.items.length === 0) return;
+    const used = new Set(lines.map((line) => line.productId));
+    const nextItem = selectedInvoice.items.find((item) => !used.has(item.productId));
+    if (!nextItem) return;
+    setLines((current) => [...current, lineFromInvoiceItem(nextItem)]);
   };
 
   const updateLine = (index: number, patch: Partial<ReturnLine>) => {
@@ -156,8 +142,16 @@ export default function SalesReturnsPage() {
     setLines((current) => current.filter((_, i) => i !== index));
   };
 
+  const returnableInvoices = (invoices ?? []).filter(
+    (invoice) => invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "returned"
+  );
+
   const submit = async () => {
     if (!business || !user) return;
+    if (!selectedInvoice) {
+      toastError("Invoice required", "Select the original sales invoice.");
+      return;
+    }
     if (lines.length === 0) {
       toastError("No items", "Add at least one returned item.");
       return;
@@ -254,7 +248,7 @@ export default function SalesReturnsPage() {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         title="Record sales return"
-        description="Select the invoice and the goods being returned."
+        description="Returns must be against a completed sales invoice."
         size="xl"
         footer={
           <>
@@ -268,9 +262,9 @@ export default function SalesReturnsPage() {
         }
       >
         <div className="space-y-4">
-          <Field label="Sales invoice" htmlFor="sreturn-invoice">
+          <Field label="Sales invoice" htmlFor="sreturn-invoice" required>
             <Combobox
-              options={(invoices ?? []).map((invoice) => ({
+              options={returnableInvoices.map((invoice) => ({
                 value: invoice.id,
                 label: invoice.invoiceNo,
                 description:
@@ -287,7 +281,7 @@ export default function SalesReturnsPage() {
                 setLines(invoice.items.map((item) => lineFromInvoiceItem(item)));
               }}
               placeholder="Select a sales invoice…"
-              emptyText="No sales invoices yet."
+              emptyText="No returnable invoices."
             />
           </Field>
           <Field label="Reason" htmlFor="sreturn-reason">
@@ -302,7 +296,7 @@ export default function SalesReturnsPage() {
           <div className="rounded-lg border border-border">
             <div className="flex items-center justify-between border-b border-border p-3">
               <p className="text-sm font-medium text-foreground">Returned items</p>
-              <Button variant="outline" size="sm" onClick={addLine}>
+              <Button variant="outline" size="sm" onClick={addLine} disabled={!selectedInvoice}>
                 <Plus className="size-4" />
                 Add item
               </Button>
@@ -327,15 +321,20 @@ export default function SalesReturnsPage() {
                     <TableRow key={index}>
                       <TableCell>
                         <Combobox
-                          options={(products ?? []).map((p) => ({
-                            value: p.id,
-                            label: p.name,
-                            description: p.sku ?? undefined,
-                          }))}
+                          options={(selectedInvoice?.items ?? []).map((item) => {
+                            const product = (products ?? []).find((entry) => entry.id === item.productId);
+                            return {
+                              value: item.productId,
+                              label: product?.name ?? item.productId,
+                              description: product?.sku ?? undefined,
+                            };
+                          })}
                           value={line.productId}
-                          onValueChange={(value) =>
-                            updateLine(index, { productId: value ?? "" })
-                          }
+                          onValueChange={(value) => {
+                            const item = selectedInvoice?.items.find((entry) => entry.productId === value);
+                            if (!item) return;
+                            updateLine(index, lineFromInvoiceItem(item));
+                          }}
                           placeholder="Select product…"
                         />
                       </TableCell>

@@ -223,6 +223,7 @@ describe("salesDefaultsSchema", () => {
         defaultIntraState: true,
         defaultDiscountPercent: 5,
         allowLineDiscount: true,
+        allowExpired: false,
       }).success
     ).toBe(true);
   });
@@ -234,6 +235,7 @@ describe("salesDefaultsSchema", () => {
         defaultIntraState: true,
         defaultDiscountPercent: 120,
         allowLineDiscount: true,
+        allowExpired: false,
       }).success
     ).toBe(false);
   });

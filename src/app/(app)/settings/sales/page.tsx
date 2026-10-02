@@ -27,6 +27,7 @@ export default function SalesSettingsPage() {
   const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [discountOverride, setDiscountOverride] = React.useState<string | null>(null);
   const [allowLineDiscountOverride, setAllowLineDiscountOverride] = React.useState<boolean | null>(null);
+  const [allowExpiredOverride, setAllowExpiredOverride] = React.useState<boolean | null>(null);
 
   const { data: defaults, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["sales-defaults", business?.id],
@@ -50,6 +51,7 @@ export default function SalesSettingsPage() {
   const intraState = intraStateOverride ?? defaults?.defaultIntraState ?? DEFAULT_SALES.defaultIntraState;
   const discount = discountOverride ?? String(defaults?.defaultDiscountPercent ?? DEFAULT_SALES.defaultDiscountPercent);
   const allowLineDiscount = allowLineDiscountOverride ?? defaults?.allowLineDiscount ?? DEFAULT_SALES.allowLineDiscount;
+  const allowExpired = allowExpiredOverride ?? defaults?.allowExpired ?? DEFAULT_SALES.allowExpired;
 
   const save = async () => {
     if (!business || !user) return;
@@ -60,6 +62,7 @@ export default function SalesSettingsPage() {
         defaultIntraState: intraState,
         defaultDiscountPercent: Number(discount) || 0,
         allowLineDiscount,
+        allowExpired,
       });
       toastSuccess("Sales defaults saved", "POS and invoices will use these values.");
       await queryClient.invalidateQueries({ queryKey: ["sales-defaults"] });
@@ -152,6 +155,19 @@ export default function SalesSettingsPage() {
                 checked={allowLineDiscount}
                 onCheckedChange={setAllowLineDiscountOverride}
                 aria-label="Allow line discounts"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium text-foreground">Allow expired lots</p>
+                <p className="text-xs text-muted-foreground">
+                  When off, POS hides batches whose expiry date has passed.
+                </p>
+              </div>
+              <Switch
+                checked={allowExpired}
+                onCheckedChange={setAllowExpiredOverride}
+                aria-label="Allow expired lots"
               />
             </div>
           </CardContent>

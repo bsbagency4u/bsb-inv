@@ -30,6 +30,7 @@ export const DEFAULT_SALES: SalesDefaults = {
   defaultIntraState: true,
   defaultDiscountPercent: 0,
   allowLineDiscount: true,
+  allowExpired: false,
 };
 
 export const DEFAULT_PURCHASE: PurchaseDefaults = {
@@ -205,6 +206,7 @@ export class BusinessService {
           ? value.defaultDiscountPercent
           : DEFAULT_SALES.defaultDiscountPercent,
       allowLineDiscount: value.allowLineDiscount ?? DEFAULT_SALES.allowLineDiscount,
+      allowExpired: value.allowExpired ?? DEFAULT_SALES.allowExpired,
     };
   }
 
@@ -226,6 +228,7 @@ export class BusinessService {
       defaultIntraState: parsed.data.defaultIntraState,
       defaultDiscountPercent: parsed.data.defaultDiscountPercent,
       allowLineDiscount: parsed.data.allowLineDiscount,
+      allowExpired: parsed.data.allowExpired,
     };
     await this.repos.businesses.setSetting(businessId, SALES_KEY, value, userId);
     await this.audits.log({

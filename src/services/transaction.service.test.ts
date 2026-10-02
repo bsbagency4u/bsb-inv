@@ -502,14 +502,27 @@ describe("TransactionService", () => {
     expect(invoice.paidAmount).toBe(0);
   });
 
-  it("rejects payment above the invoice total", async () => {
+  it("rejects non-cash payment above the invoice total", async () => {
     const product = await seedProduct();
     await expect(
       transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000003", {
         items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
-        payments: [{ mode: "cash", amount: 9999 }],
+        payments: [{ mode: "upi", amount: 9999 }],
       })
     ).rejects.toThrow(AppError);
+  });
+
+  it("treats extra cash as change and records payment equal to the total", async () => {
+    const product = await seedProduct();
+    const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000011", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      payments: [{ mode: "cash", amount: 300 }],
+    });
+    expect(invoice.status).toBe("paid");
+    expect(invoice.paidAmount).toBe(236);
+    expect(services.payments).toEqual([
+      expect.objectContaining({ mode: "cash", amount: 236 }),
+    ]);
   });
 
   it("applies item and invoice discounts before GST on a sale", async () => {
@@ -766,6 +779,34 @@ describe("TransactionService", () => {
       expect.objectContaining({ productId: product.id, change: 1, movementType: "SALE_RETURN" })
     );
     expect(services.salesInvoices.find((i) => i.id === invoice.id)?.status).toBe("returned");
+  });
+
+  it("keeps a partial sales return from marking the invoice returned", async () => {
+    const product = await seedProduct();
+    const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000012", {
+      items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 18 }],
+      payments: [{ mode: "cash", amount: 472 }],
+    });
+    await transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000004", {
+      salesInvoiceId: invoice.id,
+      items: [{ productId: product.id, quantity: 1, unitPrice: 200 }],
+    });
+    expect(services.salesInvoices.find((i) => i.id === invoice.id)?.status).toBe("paid");
+    await expect(
+      transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000005", {
+        salesInvoiceId: invoice.id,
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200 }],
+      })
+    ).rejects.toThrow(AppError);
+  });
+
+  it("rejects a sales return without the original invoice", async () => {
+    const product = await seedProduct();
+    await expect(
+      transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000006", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200 }],
+      })
+    ).rejects.toThrow(AppError);
   });
 
   it("applies a payment and reconciles the invoice to partial then paid", async () => {
@@ -1133,7 +1174,12 @@ describe("TransactionService", () => {
       purchasePrice: 5,
       salePrice: 8,
     });
+    const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000050", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 80, gstRate: 0, unitKind: "pack" }],
+      payments: [{ mode: "cash", amount: 80 }],
+    });
     await transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000002", {
+      salesInvoiceId: invoice.id,
       items: [{ productId: product.id, quantity: 1, unitPrice: 80, unitKind: "pack" }],
     });
     expect(services.ledger).toContainEqual(
@@ -1191,7 +1237,7 @@ describe("TransactionService", () => {
       items: [{ productId: product.id, batchId, quantity: 5, unitKind: "base", unitPrice: 12, gstRate: 0 }],
       payments: [{ mode: "cash", amount: 60 }],
     });
-    await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000041", {
+    const stripSale = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000041", {
       items: [{ productId: product.id, batchId, quantity: 1, unitKind: "pack", unitPrice: 180, gstRate: 0 }],
       payments: [{ mode: "cash", amount: 180 }],
     });
@@ -1201,6 +1247,7 @@ describe("TransactionService", () => {
       items: [{ productId: product.id, quantity: 2, unitCost: 150, unitKind: "pack", rateBasis: "pack" }],
     });
     await transactions.createSalesReturn("b-1", "u-1", "SRT-2026-000003", {
+      salesInvoiceId: stripSale.invoice.id,
       items: [{ productId: product.id, quantity: 3, unitPrice: 12, unitKind: "base" }],
     });
     const remaining = services.ledger
