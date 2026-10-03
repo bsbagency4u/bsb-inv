@@ -15,6 +15,8 @@ import {
   mergeAttributesWithPackaging,
   storedPackagingFromInput,
 } from "@/lib/packaging";
+import { annotateDatabaseError } from "@/lib/errors";
+import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
 import {
   mapCategory,
   mapProduct,
@@ -38,19 +40,8 @@ const PACKING_COLUMN_KEYS = [
   "fixed_packing",
 ] as const;
 
-function isMissingColumnError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const err = error as { code?: string; message?: string };
-  if (err.code === "42703" || err.code === "PGRST204") return true;
-  return typeof err.message === "string" && /column .* does not exist|Could not find the .* column/i.test(err.message);
-}
-
 function omitPackingColumns<T extends Record<string, unknown>>(payload: T): T {
-  const next = { ...payload };
-  for (const key of PACKING_COLUMN_KEYS) {
-    delete next[key];
-  }
-  return next;
+  return omitColumns(payload, PACKING_COLUMN_KEYS);
 }
 
 function productWritePayload(input: ProductCreateInput | ProductUpdateInput) {
@@ -373,20 +364,24 @@ export class SupabaseProductRepository implements ProductRepository {
     businessId: string,
     input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
   ): Promise<ProductBatch> {
-    const { data, error } = await this.client
+    const payload = {
+      business_id: businessId,
+      product_id: input.productId,
+      batch_no: input.batchNo,
+      expiry_date: input.expiryDate ?? null,
+      mrp: input.mrp ?? null,
+      purchase_price: input.purchasePrice ?? null,
+    };
+    const first = await this.client.from("product_batches").insert(payload).select().single();
+    if (!first.error) return mapProductBatch(first.data);
+    if (!isMissingColumnError(first.error)) throw annotateDatabaseError(first.error, "product_batches", "insert");
+    const fallback = await this.client
       .from("product_batches")
-      .insert({
-        business_id: businessId,
-        product_id: input.productId,
-        batch_no: input.batchNo,
-        expiry_date: input.expiryDate ?? null,
-        mrp: input.mrp ?? null,
-        purchase_price: input.purchasePrice ?? null,
-      })
+      .insert(omitColumns(payload, ["purchase_price"]))
       .select()
       .single();
-    if (error) throw error;
-    return mapProductBatch(data);
+    if (fallback.error) throw annotateDatabaseError(fallback.error, "product_batches", "insert");
+    return mapProductBatch(fallback.data);
   }
 
   async updateBatch(
@@ -398,15 +393,40 @@ export class SupabaseProductRepository implements ProductRepository {
     if (input.expiryDate !== undefined) patch.expiry_date = input.expiryDate;
     if (input.mrp !== undefined) patch.mrp = input.mrp;
     if (input.purchasePrice !== undefined) patch.purchase_price = input.purchasePrice;
-    const { data, error } = await this.client
+    const first = await this.client
       .from("product_batches")
       .update(patch)
       .eq("business_id", businessId)
       .eq("id", batchId)
       .select()
       .single();
-    if (error) throw error;
-    return mapProductBatch(data);
+    if (!first.error) return mapProductBatch(first.data);
+    if (!isMissingColumnError(first.error) || input.purchasePrice === undefined) {
+      throw annotateDatabaseError(first.error, "product_batches", "update");
+    }
+    const fallbackPatch: Database["public"]["Tables"]["product_batches"]["Update"] = {
+      expiry_date: patch.expiry_date,
+      mrp: patch.mrp,
+    };
+    if (fallbackPatch.expiry_date === undefined && fallbackPatch.mrp === undefined) {
+      const existing = await this.client
+        .from("product_batches")
+        .select("*")
+        .eq("business_id", businessId)
+        .eq("id", batchId)
+        .single();
+      if (existing.error) throw existing.error;
+      return mapProductBatch(existing.data);
+    }
+    const fallback = await this.client
+      .from("product_batches")
+      .update(fallbackPatch)
+      .eq("business_id", businessId)
+      .eq("id", batchId)
+      .select()
+      .single();
+    if (fallback.error) throw fallback.error;
+    return mapProductBatch(fallback.data);
   }
 
   async listStock(businessId: string): Promise<ProductStock[]> {
@@ -436,7 +456,7 @@ export class SupabaseProductRepository implements ProductRepository {
       notes: input.notes ?? null,
       created_by: input.userId ?? null,
     });
-    if (error) throw error;
+    if (error) throw annotateDatabaseError(error, "stock_ledger", "insert");
   }
 
   async listBalances(businessId: string, productId?: string): Promise<StockBalance[]> {

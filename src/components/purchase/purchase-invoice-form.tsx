@@ -495,7 +495,8 @@ export function PurchaseInvoiceForm() {
       await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       router.push("/purchase/invoices");
     } catch (err) {
-      toastError(asDraft ? "Could not save draft" : "Could not record purchase", normalizeError(err).userMessage);
+      const normalized = normalizeError(err);
+      toastError(asDraft ? "Could not save draft" : "Could not record purchase", normalized.userMessage);
     } finally {
       setSaving(null);
     }

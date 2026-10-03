@@ -117,6 +117,19 @@ export function formatDatabaseError(error: {
   return parts.join(" — ") || "The database could not complete the request.";
 }
 
+export function annotateDatabaseError(
+  error: unknown,
+  table: string,
+  operation: string
+): unknown {
+  if (!error || typeof error !== "object") return error;
+  const err = error as { details?: unknown };
+  const extra = `table=${table} operation=${operation}`;
+  const existing = asErrorField(err.details);
+  err.details = existing && existing !== extra ? `${existing} — ${extra}` : extra;
+  return error;
+}
+
 /**
  * Maps a Supabase-style error to a normalized AppError.
  * Never leaks raw stack traces or internal messages.
@@ -218,7 +231,13 @@ export function normalizeError(error: unknown): NormalizedError {
         userMessage: "A required value is missing.",
       };
     }
-    if (typeof code === "string" && (code.startsWith("PGRST") || /^[0-9]{5}$/.test(code))) {
+    const looksLikeDatabase =
+      (typeof code === "string" && (code.startsWith("PGRST") || /^[0-9]{5}$/.test(code))) ||
+      (typeof message === "string" &&
+        /column .* does not exist|Could not find the .* column|schema cache|violates .* constraint/i.test(
+          message
+        ));
+    if (looksLikeDatabase) {
       const userMessage = formatDatabaseError({ code, message, details, hint });
       return {
         code: "DATABASE",

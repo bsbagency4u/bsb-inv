@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppError, normalizeError } from "./errors";
+import { AppError, annotateDatabaseError, normalizeError } from "./errors";
 
 describe("normalizeError", () => {
   it("maps 401 to AUTH with a friendly message", () => {
@@ -52,6 +52,27 @@ describe("normalizeError", () => {
     expect(result.userMessage).toContain("42703");
     expect(result.userMessage).toContain("column products.allow_pack_purchase does not exist");
     expect(result.userMessage).toContain("Apply the packing migration.");
+  });
+
+  it("surfaces a missing-column message even without a Postgres code", () => {
+    const result = normalizeError({
+      message: "column product_batches.purchase_price does not exist",
+      details: "Failing row contains (GH6478).",
+    });
+    expect(result.code).toBe("DATABASE");
+    expect(result.userMessage).toContain("column product_batches.purchase_price does not exist");
+    expect(result.userMessage).toContain("GH6478");
+  });
+
+  it("annotates the failing table and operation onto database errors", () => {
+    const annotated = annotateDatabaseError(
+      { code: "42703", message: "column product_batches.purchase_price does not exist" },
+      "product_batches",
+      "insert"
+    );
+    const result = normalizeError(annotated);
+    expect(result.userMessage).toContain("table=product_batches");
+    expect(result.userMessage).toContain("operation=insert");
   });
 
   it("maps Postgres RLS denial 42501 to AUTHORIZATION", () => {

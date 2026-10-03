@@ -26,6 +26,8 @@ import {
   mapSalesReturnItem,
 } from "./mappers";
 import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
+import { annotateDatabaseError } from "@/lib/errors";
+import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
 
 export interface LineItemInput {
   productId: string;
@@ -475,13 +477,20 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       })
       .select()
       .single();
-    if (error) throw error;
+    if (error) throw annotateDatabaseError(error, "purchase_invoices", "insert");
 
     if (items.length > 0) {
-      const { error: itemError } = await this.client
-        .from("purchase_invoice_items")
-        .insert(items.map((item) => lineItemToPurchaseRow(data.id, item)));
-      if (itemError) throw itemError;
+      const rows = items.map((item) => lineItemToPurchaseRow(data.id, item));
+      const first = await this.client.from("purchase_invoice_items").insert(rows);
+      if (first.error) {
+        if (!isMissingColumnError(first.error)) {
+          throw annotateDatabaseError(first.error, "purchase_invoice_items", "insert");
+        }
+        const fallback = await this.client
+          .from("purchase_invoice_items")
+          .insert(rows.map((row) => omitColumns(row, ["sale_unit", "base_quantity"])));
+        if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
+      }
     }
 
     return { ...mapPurchaseInvoice(data), items: await this.fetchPurchaseItems(data.id) };

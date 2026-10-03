@@ -609,6 +609,52 @@ describe("TransactionService", () => {
     expect(services.purchaseInvoices[0].status).toBe("unpaid");
   });
 
+  it("saves the screenshot purchase case with batch, GST 5%, and stock IN once", async () => {
+    const product = await services.repos.products.createProduct("b-1", "u-1", {
+      name: "NON VEG CHUNKIES UNDER 1 YEAR 10 KG",
+      unit: "KG",
+      packUnit: "BAG",
+      unitsPerPack: 10,
+      allowPackPurchase: true,
+      gstRate: 5,
+      purchasePrice: 140,
+      salePrice: 180,
+    });
+    const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-2026-000001", {
+      supplierId: "s-1",
+      notes: "Vendor invoice: HG3456",
+      items: [{
+        productId: product.id,
+        quantity: 10,
+        unitKind: "pack",
+        rateBasis: "base",
+        unitPrice: 140,
+        gstRate: 5,
+        batchNo: "GH6478",
+      }],
+    });
+    expect(invoice.subtotal).toBe(14000);
+    expect(invoice.taxTotal).toBe(700);
+    expect(invoice.total).toBe(14700);
+    expect(invoice.status).toBe("unpaid");
+    expect(invoice.items[0]).toMatchObject({ quantity: 10, saleUnit: "BAG", baseQuantity: 100, batchId: services.batches[0].id });
+    expect(services.batches[0]).toMatchObject({ batchNo: "GH6478", purchasePrice: 140 });
+    expect(services.ledger.filter((row) => row.productId === product.id && row.movementType === "PURCHASE")).toHaveLength(1);
+    expect(services.ledger[0]).toMatchObject({ change: 100, batchId: services.batches[0].id });
+  });
+
+  it("saves a minimal purchase when optional batch fields are empty", async () => {
+    const product = await seedProduct();
+    const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000040", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 50, gstRate: 0 }],
+    });
+    expect(invoice.items[0].batchId).toBeNull();
+    expect(services.batches).toHaveLength(0);
+    expect(services.ledger).toContainEqual(
+      expect.objectContaining({ productId: product.id, change: 1, movementType: "PURCHASE", batchId: null })
+    );
+  });
+
   it("saves a draft purchase invoice without stock movements", async () => {
     const product = await seedProduct();
     await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000002", {
