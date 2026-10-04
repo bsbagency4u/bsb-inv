@@ -134,4 +134,75 @@ describe("GstEngine", () => {
     expect(engine.splitTax(36, true)).toEqual({ cgst: 18, sgst: 18, igst: 0 });
     expect(engine.splitTax(36, false)).toEqual({ cgst: 0, sgst: 0, igst: 36 });
   });
+
+  it("extracts GST from inclusive prices instead of adding it", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 118, gstRate: 18 }],
+      { intraState: true, pricesIncludeTax: true }
+    );
+    expect(result.subtotal).toBe(100);
+    expect(result.taxableAmount).toBe(100);
+    expect(result.taxAmount).toBe(18);
+    expect(result.total).toBe(118);
+    expect(result.gstLines[0]).toMatchObject({ cgst: 9, sgst: 9, igst: 0 });
+  });
+
+  it.each([
+    { rate: 5, price: 105, taxable: 100, tax: 5 },
+    { rate: 12, price: 112, taxable: 100, tax: 12 },
+    { rate: 18, price: 118, taxable: 100, tax: 18 },
+    { rate: 28, price: 128, taxable: 100, tax: 28 },
+  ])("extracts inclusive GST at $rate%", ({ rate, price, taxable, tax }) => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: price, gstRate: rate }],
+      { intraState: true, pricesIncludeTax: true }
+    );
+    expect(result.taxableAmount).toBe(taxable);
+    expect(result.taxAmount).toBe(tax);
+    expect(result.total).toBe(price);
+  });
+
+  it("splits inclusive tax as IGST for inter-state", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 118, gstRate: 18 }],
+      { intraState: false, pricesIncludeTax: true }
+    );
+    expect(result.gstLines[0]).toMatchObject({ cgst: 0, sgst: 0, igst: 18 });
+    expect(result.total).toBe(118);
+  });
+
+  it("applies inclusive item and invoice discounts on extracted taxable", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 118, gstRate: 18, discount: 10 }],
+      { intraState: true, pricesIncludeTax: true, discount: 10 }
+    );
+    expect(result.subtotal).toBe(100);
+    expect(result.itemDiscount).toBe(10);
+    expect(result.discount).toBe(10);
+    expect(result.taxableAmount).toBe(80);
+    expect(result.taxAmount).toBe(14.4);
+    expect(result.total).toBe(94.4);
+  });
+
+  it("groups mixed inclusive rates without adding GST on top", () => {
+    const result = engine.computeTotals(
+      [
+        { quantity: 1, unitPrice: 118, gstRate: 18 },
+        { quantity: 1, unitPrice: 105, gstRate: 5 },
+      ],
+      { intraState: true, pricesIncludeTax: true }
+    );
+    expect(result.taxableAmount).toBe(200);
+    expect(result.taxAmount).toBe(23);
+    expect(result.total).toBe(223);
+  });
+
+  it("treats taxInclusive as an alias of pricesIncludeTax", () => {
+    const result = engine.computeTotals(
+      [{ quantity: 1, unitPrice: 118, gstRate: 18 }],
+      { taxInclusive: true }
+    );
+    expect(result.total).toBe(118);
+    expect(result.taxAmount).toBe(18);
+  });
 });

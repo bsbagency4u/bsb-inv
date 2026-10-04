@@ -60,7 +60,23 @@ export const DEFAULT_INVOICE: InvoiceDefaults = {
 
 const SALES_KEY = "sales.defaults";
 const PURCHASE_KEY = "purchase.defaults";
-const TAX_KEY = "tax.defaults";
+export const TAX_KEY = "tax.defaults";
+
+export function parseTaxDefaults(stored: unknown): TaxDefaults {
+  if (!stored || typeof stored !== "object") return { ...DEFAULT_TAX };
+  const value = stored as Partial<TaxDefaults>;
+  return {
+    gstEnabled: value.gstEnabled ?? DEFAULT_TAX.gstEnabled,
+    defaultGstRate:
+      typeof value.defaultGstRate === "number"
+        ? value.defaultGstRate
+        : DEFAULT_TAX.defaultGstRate,
+    defaultIntraState: value.defaultIntraState ?? DEFAULT_TAX.defaultIntraState,
+    defaultHsnCode: value.defaultHsnCode ?? DEFAULT_TAX.defaultHsnCode,
+    pricesIncludeTax: value.pricesIncludeTax ?? DEFAULT_TAX.pricesIncludeTax,
+  };
+}
+
 const INVOICE_KEY = "invoice.defaults";
 
 const ACTIVE_BUSINESS_KEY = "active-business-id";
@@ -285,18 +301,7 @@ export class BusinessService {
 
   async getTaxDefaults(businessId: string): Promise<TaxDefaults> {
     const stored = await this.repos.businesses.getSetting(businessId, TAX_KEY);
-    if (!stored || typeof stored !== "object") return { ...DEFAULT_TAX };
-    const value = stored as Partial<TaxDefaults>;
-    return {
-      gstEnabled: value.gstEnabled ?? DEFAULT_TAX.gstEnabled,
-      defaultGstRate:
-        typeof value.defaultGstRate === "number"
-          ? value.defaultGstRate
-          : DEFAULT_TAX.defaultGstRate,
-      defaultIntraState: value.defaultIntraState ?? DEFAULT_TAX.defaultIntraState,
-      defaultHsnCode: value.defaultHsnCode ?? DEFAULT_TAX.defaultHsnCode,
-      pricesIncludeTax: value.pricesIncludeTax ?? DEFAULT_TAX.pricesIncludeTax,
-    };
+    return parseTaxDefaults(stored);
   }
 
   async updateTaxDefaults(

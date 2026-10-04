@@ -102,7 +102,16 @@ export default function PurchaseOrdersPage() {
     enabled: Boolean(business),
   });
 
-  const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? true;
+  const { data: taxDefaults } = useQuery({
+    queryKey: ["tax-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getTaxDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? taxDefaults?.defaultIntraState ?? true;
   const notes = notesOverride === undefined ? (purchaseDefaults?.defaultPaymentTerms || null) : notesOverride;
 
   const filtered = React.useMemo(() => {
@@ -395,6 +404,7 @@ export default function PurchaseOrdersPage() {
           dueDate={expectedDate}
           onDueDateChange={setExpectedDate}
           showDueDate
+          pricesIncludeTax={taxDefaults?.pricesIncludeTax ?? false}
         />
       </Modal>
 

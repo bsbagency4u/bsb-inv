@@ -20,6 +20,10 @@ export interface GstComputeOptions {
   discount?: number;
   /** Invoice-level discount percent of net-after-item-discount. */
   discountPercent?: number;
+  /** true → unit prices already include GST; extract taxable, never add tax on top. */
+  pricesIncludeTax?: boolean;
+  /** Alias of `pricesIncludeTax`. */
+  taxInclusive?: boolean;
 }
 
 export interface GstComputedLine {
@@ -39,7 +43,8 @@ export interface GstComputedLine {
 /**
  * GST engine — pure, deterministic invoice tax calculation.
  *
- * Order: Gross → item discount → invoice discount → taxable → GST → grand total.
+ * Exclusive: Gross → item discount → invoice discount → taxable → GST → grand total.
+ * Inclusive: extract taxable from GST-in prices, then the same discount order on taxable.
  * Intra-state: CGST + SGST split (half each). Inter-state: IGST (full tax).
  *
  * Business behaviour is config-driven; this module has no UI or storage
@@ -51,12 +56,15 @@ export class GstEngine {
     options: GstComputeOptions = {}
   ): InvoiceTotals & { lines: GstComputedLine[] } {
     const intraState = options.intraState ?? true;
+    const pricesIncludeTax = options.pricesIncludeTax ?? options.taxInclusive ?? false;
 
     const prepared = items.map((item) => {
       const quantity = Math.max(0, item.quantity ?? 0);
       const unitPrice = Math.max(0, item.unitPrice ?? 0);
       const rate = Math.max(0, item.gstRate ?? 0);
-      const grossAmount = quantity * unitPrice;
+      const enteredGross = quantity * unitPrice;
+      const grossAmount =
+        pricesIncludeTax && rate > 0 ? enteredGross / (1 + rate / 100) : enteredGross;
       let itemDiscount =
         item.discount != null
           ? Math.max(0, item.discount)

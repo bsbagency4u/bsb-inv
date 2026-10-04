@@ -16,7 +16,10 @@ import { packagingFromProduct, packingHelperText } from "@/lib/packaging";
 import { GST_RATE_OPTIONS } from "@/services/gst.service";
 import type { Brand, Category, Product, Unit } from "@/types/domain";
 
-function toFormValues(product?: Product | null): ProductValues {
+function toFormValues(
+  product?: Product | null,
+  taxDefaults?: { defaultGstRate?: number; defaultHsnCode?: string } | null
+): ProductValues {
   return {
     name: product?.name ?? "",
     description: product?.description ?? "",
@@ -36,8 +39,8 @@ function toFormValues(product?: Product | null): ProductValues {
     allowPackPurchase: product?.allowPackPurchase ?? true,
     fixedPacking: product?.fixedPacking ?? true,
     attributes: product?.attributes ?? {},
-    gstRate: product?.gstRate ?? 0,
-    hsn: product?.hsn ?? "",
+    gstRate: product?.gstRate ?? taxDefaults?.defaultGstRate ?? 0,
+    hsn: product?.hsn ?? taxDefaults?.defaultHsnCode ?? "",
     purchasePrice: product?.purchasePrice ?? 0,
     salePrice: product?.salePrice ?? 0,
     lowStockThreshold: product?.lowStockThreshold ?? 0,
@@ -76,6 +79,7 @@ export function ProductForm({
   brands,
   units,
   product,
+  taxDefaults,
   onSubmit,
   submitLabel = "Save product",
 }: {
@@ -84,6 +88,7 @@ export function ProductForm({
   brands?: Brand[];
   units?: Unit[];
   product?: Product | null;
+  taxDefaults?: { defaultGstRate?: number; defaultHsnCode?: string } | null;
   onSubmit: (values: ProductValues) => Promise<void>;
   submitLabel?: string;
 }) {
@@ -97,7 +102,7 @@ export function ProductForm({
     formState: { errors, isSubmitting },
   } = useForm<z.input<typeof productSchema>, unknown, z.output<typeof productSchema>>({
     resolver: zodResolver(productSchema),
-    defaultValues: toFormValues(product),
+    defaultValues: toFormValues(product, taxDefaults),
   });
 
   const trackInventory = useWatch({ control, name: "trackInventory" });
@@ -364,7 +369,7 @@ export function ProductForm({
           <Field label="GST rate (%)" htmlFor="product-gst" error={errors.gstRate?.message}>
             <Select
               id="product-gst"
-              defaultValue={String(product?.gstRate ?? 0)}
+              defaultValue={String(product?.gstRate ?? taxDefaults?.defaultGstRate ?? 0)}
               onChange={(event) => setValue("gstRate", Number(event.target.value))}
             >
               {gstOptions.map((rate) => (

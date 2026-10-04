@@ -26,6 +26,7 @@ function memoryRepositories() {
   const purchaseOrders: PurchaseOrder[] = [];
   const purchaseReturns: unknown[] = [];
   const salesReturns: unknown[] = [];
+  const settings = new Map<string, unknown>();
   const paymentModes: Array<{ id: string; businessId: string; code: string; name: string; isActive: boolean; sortOrder: number; createdAt: string; updatedAt: string }> = [
     { id: "m-cash", businessId: "b-1", code: "cash", name: "Cash", isActive: true, sortOrder: 10, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: "m-upi", businessId: "b-1", code: "upi", name: "UPI", isActive: true, sortOrder: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
@@ -420,8 +421,8 @@ function memoryRepositories() {
       async getByUserAndId() { return null; },
       async create() { throw new Error("not used"); },
       async update() { throw new Error("not used"); },
-      async getSetting() { return null; },
-      async setSetting() {},
+      async getSetting(businessId, key) { return settings.get(`${businessId}:${key}`) ?? null; },
+      async setSetting(businessId, key, value) { settings.set(`${businessId}:${key}`, value); },
     },
     profiles: {
       async getByUserId() { return null; },
@@ -443,7 +444,7 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings };
 }
 
 describe("TransactionService", () => {
@@ -539,6 +540,98 @@ describe("TransactionService", () => {
     expect(services.ledger).toContainEqual(
       expect.objectContaining({ productId: product.id, change: -1, movementType: "SALE" })
     );
+  });
+
+  it("extracts GST from inclusive selling prices when tax settings say so", async () => {
+    const product = await seedProduct();
+    await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+      gstEnabled: true,
+      defaultGstRate: 18,
+      defaultIntraState: true,
+      defaultHsnCode: "",
+      pricesIncludeTax: true,
+    }, "u-1");
+    const { totals, invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000013", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 118, gstRate: 18 }],
+      payments: [{ mode: "cash", amount: 118 }],
+    });
+    expect(totals.taxableAmount).toBe(100);
+    expect(totals.taxAmount).toBe(18);
+    expect(totals.total).toBe(118);
+    expect(invoice.total).toBe(118);
+    expect(invoice.taxTotal).toBe(18);
+  });
+
+  it("keeps exclusive GST after settings change does not rewrite a prior invoice", async () => {
+    const product = await seedProduct();
+    const first = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000014", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      payments: [{ mode: "cash", amount: 118 }],
+    });
+    expect(first.totals.total).toBe(118);
+    await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+      gstEnabled: true,
+      defaultGstRate: 18,
+      defaultIntraState: true,
+      defaultHsnCode: "",
+      pricesIncludeTax: true,
+    }, "u-1");
+    const second = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000015", {
+      asDraft: true,
+      items: [{ productId: product.id, quantity: 1, unitPrice: 118, gstRate: 18 }],
+    });
+    expect(first.invoice.total).toBe(118);
+    expect(first.invoice.taxTotal).toBe(18);
+    expect(second.totals.taxableAmount).toBe(100);
+    expect(second.totals.total).toBe(118);
+  });
+
+  it("extracts GST from inclusive purchase prices when tax settings say so", async () => {
+    const product = await seedProduct();
+    await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+      gstEnabled: true,
+      defaultGstRate: 18,
+      defaultIntraState: true,
+      defaultHsnCode: "",
+      pricesIncludeTax: true,
+    }, "u-1");
+    const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000050", {
+      items: [{ productId: product.id, quantity: 1, unitPrice: 118, gstRate: 18 }],
+    });
+    expect(invoice.subtotal).toBe(100);
+    expect(invoice.taxTotal).toBe(18);
+    expect(invoice.total).toBe(118);
+  });
+
+  it("scopes inclusive tax to the business that saved the setting", async () => {
+    const productA = await seedProduct();
+    const productB = await services.repos.products.createProduct("b-2", "u-1", {
+      name: "Other",
+      gstRate: 18,
+      purchasePrice: 100,
+      salePrice: 200,
+      lowStockThreshold: 5,
+    });
+    await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+      gstEnabled: true,
+      defaultGstRate: 18,
+      defaultIntraState: true,
+      defaultHsnCode: "",
+      pricesIncludeTax: true,
+    }, "u-1");
+    const inclusive = await transactions.createSalesInvoice("b-1", "u-1", "SAL-B1-000001", {
+      asDraft: true,
+      items: [{ productId: productA.id, quantity: 1, unitPrice: 118, gstRate: 18 }],
+    });
+    const exclusive = await transactions.createSalesInvoice("b-2", "u-1", "SAL-B2-000001", {
+      asDraft: true,
+      items: [{ productId: productB.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+    });
+    expect(inclusive.totals.taxableAmount).toBe(100);
+    expect(inclusive.totals.total).toBe(118);
+    expect(exclusive.totals.taxableAmount).toBe(100);
+    expect(exclusive.totals.total).toBe(118);
+    expect(exclusive.totals.taxAmount).toBe(18);
   });
 
   it("saves a draft sales invoice without stock movements or payments", async () => {

@@ -25,10 +25,13 @@ import { remainingForProduct } from "@/lib/purchase-receiving";
 import { allocateReturnToLots } from "@/lib/sales-return";
 import { settleTender } from "@/lib/tender";
 import { GstEngine } from "./gst.service";
+import type { GstComputeOptions } from "./gst.service";
 import { InventoryService } from "./inventory.service";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
 import { AuthorizationService } from "./authorization.service";
+import { parseTaxDefaults, TAX_KEY } from "./business.service";
+import type { TaxDefaults } from "@/types/domain";
 
 export interface CartItemInput {
   productId: string;
@@ -68,6 +71,8 @@ export interface SalesInput {
   payments?: PaymentAllocation[];
   discount?: number;
   discountPercent?: number;
+  /** Override Settings → Tax “Prices include tax”. Unset reads the tenant default. */
+  pricesIncludeTax?: boolean;
   /** Draft invoices are stored without stock movements or payments. */
   asDraft?: boolean;
 }
@@ -83,6 +88,8 @@ export interface PurchaseInput {
   items: CartItemInput[];
   intraState?: boolean;
   discount?: number;
+  /** Override Settings → Tax “Prices include tax”. Unset reads the tenant default. */
+  pricesIncludeTax?: boolean;
   /** Draft bills are stored without stock movements. Complete/receive updates stock. */
   asDraft?: boolean;
 }
@@ -162,6 +169,23 @@ export class TransactionService {
   ) {
     this.auth = auth ?? new AuthorizationService(repos);
     this.inventory = new InventoryService(repos, audits, notifications, this.auth);
+  }
+
+  private async taxComputeOptions(
+    businessId: string,
+    input: { intraState?: boolean; discount?: number; discountPercent?: number; pricesIncludeTax?: boolean }
+  ): Promise<GstComputeOptions> {
+    const tax = await this.loadTaxDefaults(businessId);
+    return {
+      intraState: input.intraState ?? tax.defaultIntraState,
+      discount: input.discount,
+      discountPercent: input.discountPercent,
+      pricesIncludeTax: input.pricesIncludeTax ?? tax.pricesIncludeTax,
+    };
+  }
+
+  private async loadTaxDefaults(businessId: string): Promise<TaxDefaults> {
+    return parseTaxDefaults(await this.repos.businesses.getSetting(businessId, TAX_KEY));
   }
 
   private validateItems(items: { quantity: number; unitPrice: number; mrp?: number | null }[]): void {
@@ -360,11 +384,10 @@ export class TransactionService {
       }
     }
     const asDraft = input.asDraft === true;
-    const totals = this.gst.computeTotals(convertedItems, {
-      intraState: input.intraState ?? true,
-      discount: input.discount,
-      discountPercent: input.discountPercent,
-    });
+    const totals = this.gst.computeTotals(
+      convertedItems,
+      await this.taxComputeOptions(businessId, input)
+    );
 
     const tendered = asDraft ? [] : (input.payments ?? []).filter((p) => p.amount > 0);
     const paymentState = asDraft
@@ -562,9 +585,10 @@ export class TransactionService {
   ): Promise<PurchaseOrder> {
     await this.auth.requirePermission(businessId, userId, "purchase.manage");
     this.validateItems(input.items);
-    const totals = this.gst.computeTotals(input.items, {
-      intraState: input.intraState ?? true,
-    });
+    const totals = this.gst.computeTotals(
+      input.items,
+      await this.taxComputeOptions(businessId, input)
+    );
 
     const order = await this.repos.transactions.createPurchaseOrder(
       businessId,
@@ -701,10 +725,10 @@ export class TransactionService {
     for (const item of input.items) {
       convertedItems.push(await this.convertCartItem(businessId, item, "purchase"));
     }
-    const totals = this.gst.computeTotals(convertedItems, {
-      intraState: input.intraState ?? true,
-      discount: input.discount ?? 0,
-    });
+    const totals = this.gst.computeTotals(
+      convertedItems,
+      await this.taxComputeOptions(businessId, { ...input, discount: input.discount ?? 0 })
+    );
 
     const persistedItems: CartItemInput[] = [];
     for (const item of convertedItems) {

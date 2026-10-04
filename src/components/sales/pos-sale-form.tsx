@@ -80,8 +80,10 @@ function variantLabel(variant: ProductVariant): string {
   return variant.sku ?? "Variant";
 }
 
-function lineDiscountAmount(line: SaleLine): number {
-  const gross = Math.max(0, line.quantity * line.unitPrice);
+function lineDiscountAmount(line: SaleLine, pricesIncludeTax = false, gstEnabled = true): number {
+  const rate = gstEnabled ? line.gstRate : 0;
+  const entered = Math.max(0, line.quantity * line.unitPrice);
+  const gross = pricesIncludeTax && rate > 0 ? entered / (1 + rate / 100) : entered;
   if (line.discountKind === "percent") {
     return Math.min(gross, (gross * Math.max(0, line.discountValue)) / 100);
   }
@@ -242,6 +244,7 @@ export function PosSaleForm({
   const allowLineDiscount = salesDefaults?.allowLineDiscount ?? true;
   const allowExpired = salesDefaults?.allowExpired ?? false;
   const gstEnabled = taxDefaults?.gstEnabled ?? true;
+  const pricesIncludeTax = taxDefaults?.pricesIncludeTax ?? false;
   const warehouseValue = warehouseId || purchaseDefaults?.defaultWarehouseId || "";
   const salesPersonValue = salesPersonId || user?.id || "";
   const customer = customers?.find((item) => item.id === customerId) ?? null;
@@ -304,11 +307,11 @@ export function PosSaleForm({
       quantity: line.quantity,
       unitPrice: line.unitPrice,
       gstRate: gstEnabled ? line.gstRate : 0,
-      discount: lineDiscountAmount(line),
+      discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
     })),
     invoiceDiscountKindResolved === "percent"
-      ? { intraState, discountPercent: invoiceDiscountInput }
-      : { intraState, discount: invoiceDiscountInput }
+      ? { intraState, discountPercent: invoiceDiscountInput, pricesIncludeTax }
+      : { intraState, discount: invoiceDiscountInput, pricesIncludeTax }
   );
 
   const amountToPay = totals.total;
@@ -420,7 +423,7 @@ export function PosSaleForm({
             quantity: line.quantity,
             unit: line.unitKind === "pack" ? packaging.packUnit : packaging.unit,
             unitPrice: line.unitPrice,
-            discount: lineDiscountAmount(line),
+            discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
             gstRate: gstEnabled ? line.gstRate : 0,
             amount: totals.lines[index]?.amount ?? 0,
             mrp: line.mrp,
@@ -665,7 +668,7 @@ export function PosSaleForm({
           unitKind: line.unitKind,
           unitPrice: line.unitPrice,
           gstRate: gstEnabled ? line.gstRate : 0,
-          discount: lineDiscountAmount(line),
+          discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
         })),
         payments: asDraft ? [] : tender.payments,
       });
@@ -1254,7 +1257,11 @@ export function PosSaleForm({
           <Card>
             <CardHeader className="pb-2">
               <CardTitle>Order summary</CardTitle>
-              <CardDescription>Discounts before GST. Authoritative GstEngine totals.</CardDescription>
+              <CardDescription>
+                {pricesIncludeTax
+                  ? "Entered prices include GST. Tax is extracted, not added."
+                  : "Discounts before GST. Authoritative GstEngine totals."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <Field

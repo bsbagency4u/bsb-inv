@@ -223,6 +223,7 @@ export function PurchaseInvoiceForm() {
   const showsMrp = businessShowsMrp(business?.type);
   const showsManufacturer = getProductAttributesForType(business?.type).some((item) => item.key === "manufacturer");
   const gstEnabled = taxDefaults?.gstEnabled ?? true;
+  const pricesIncludeTax = taxDefaults?.pricesIncludeTax ?? false;
   const supplier = suppliers?.find((item) => item.id === supplierId) ?? null;
   const paymentMode = paymentModeOverride ?? (paymentModes?.[0]?.code ?? "cash");
   const paymentTerms = supplier?.paymentTerms || purchaseDefaults?.defaultPaymentTerms || "";
@@ -282,7 +283,7 @@ export function PurchaseInvoiceForm() {
         discount: line.discount,
       };
     }),
-    { intraState, discount: invoiceDiscount }
+    { intraState, discount: invoiceDiscount, pricesIncludeTax }
   );
 
   const amountToPay = totals.total;
@@ -1081,7 +1082,11 @@ export function PurchaseInvoiceForm() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle>Financial summary</CardTitle>
-              <CardDescription>Discounts before GST. Authoritative GstEngine totals.</CardDescription>
+              <CardDescription>
+                {pricesIncludeTax
+                  ? "Entered prices include GST. Tax is extracted, not added."
+                  : "Discounts before GST. Authoritative GstEngine totals."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <Field label="Invoice discount" htmlFor="purchase-discount" hint="Applied after item discounts and before GST">

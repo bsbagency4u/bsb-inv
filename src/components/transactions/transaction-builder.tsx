@@ -47,6 +47,7 @@ export interface TransactionBuilderProps {
   dueDate: string | null;
   onDueDateChange: (date: string | null) => void;
   showDueDate?: boolean;
+  pricesIncludeTax?: boolean;
 }
 
 const gst = new GstEngine();
@@ -70,6 +71,7 @@ export function TransactionBuilder({
   dueDate,
   onDueDateChange,
   showDueDate = false,
+  pricesIncludeTax = false,
 }: TransactionBuilderProps) {
   const [selectedId, setSelectedId] = React.useState<string>("");
 
@@ -120,7 +122,7 @@ export function TransactionBuilder({
       unitPrice: line.unitPrice,
       gstRate: line.gstRate,
     })),
-    { intraState }
+    { intraState, pricesIncludeTax }
   );
 
   const productOptions = products
@@ -209,9 +211,9 @@ export function TransactionBuilder({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {lines.map((line) => {
+              {lines.map((line, index) => {
                 const product = products.find((p) => p.id === line.productId);
-                const amount = line.quantity * line.unitPrice * (1 + line.gstRate / 100);
+                const amount = totals.lines[index]?.amount ?? line.quantity * line.unitPrice;
                 return (
                   <TableRow key={line.productId}>
                     <TableCell className="font-medium text-foreground">
