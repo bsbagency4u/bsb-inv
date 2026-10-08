@@ -32,6 +32,12 @@ import type { NotificationService } from "./notification.service";
 import { AuthorizationService } from "./authorization.service";
 import { parseTaxDefaults, TAX_KEY } from "./business.service";
 import type { TaxDefaults } from "@/types/domain";
+import {
+  DocumentControlService,
+  isDraftStatus,
+  isPostedStatus,
+  type DocumentGuardResult,
+} from "./document-control.service";
 
 export interface CartItemInput {
   productId: string;
@@ -94,6 +100,11 @@ export interface PurchaseInput {
   asDraft?: boolean;
 }
 
+export interface DocumentMutationOptions {
+  overrideLock?: boolean;
+  overrideReason?: string | null;
+}
+
 export interface PaymentInput {
   direction: "in" | "out";
   partyType: "customer" | "supplier";
@@ -105,6 +116,8 @@ export interface PaymentInput {
   reference?: string | null;
   paymentDate?: string;
   notes?: string | null;
+  overrideLock?: boolean;
+  overrideReason?: string | null;
 }
 
 export interface ReceivingInput {
@@ -160,6 +173,7 @@ export class TransactionService {
   private gst = new GstEngine();
   private inventory: InventoryService;
   private auth: AuthorizationService;
+  private documents: DocumentControlService;
 
   constructor(
     private repos: Repositories,
@@ -169,6 +183,7 @@ export class TransactionService {
   ) {
     this.auth = auth ?? new AuthorizationService(repos);
     this.inventory = new InventoryService(repos, audits, notifications, this.auth);
+    this.documents = new DocumentControlService(repos, this.auth);
   }
 
   private async taxComputeOptions(
@@ -366,13 +381,145 @@ export class TransactionService {
     return this.repos.transactions.nextDocumentNumber(businessId, kind, prefix);
   }
 
+  async nextControlledDocumentNo(
+    businessId: string,
+    kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment"
+  ): Promise<string> {
+    return this.documents.allocateNumber(businessId, kind);
+  }
+
+  private async guardDocument(
+    businessId: string,
+    userId: string,
+    input: {
+      kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment";
+      action: "create" | "edit" | "delete" | "cancel";
+      documentDate?: string | null;
+      createdAt?: string | null;
+      status?: string | null;
+      overrideLock?: boolean;
+      overrideReason?: string | null;
+    },
+    direction?: "in" | "out"
+  ): Promise<DocumentGuardResult> {
+    return this.documents.assertAllowed(businessId, userId, input, direction);
+  }
+
+  private async auditDocument(
+    businessId: string,
+    userId: string,
+    action: string,
+    entityType: string,
+    entityId: string,
+    metadata: Record<string, unknown>,
+    guard?: DocumentGuardResult
+  ): Promise<void> {
+    await this.audits.log({
+      businessId,
+      userId,
+      action,
+      entityType,
+      entityId,
+      metadata: {
+        ...metadata,
+        documentDate: guard?.documentDate,
+        backdated: guard?.backdated ?? false,
+        overrideLock: guard?.overrideUsed ?? false,
+      },
+    });
+  }
+
+  private async reverseDocumentStock(
+    businessId: string,
+    userId: string,
+    referenceId: string
+  ): Promise<void> {
+    const movements = await this.repos.products.listMovementsByReference(businessId, referenceId);
+    for (const movement of movements) {
+      if (movement.change === 0) continue;
+      await this.repos.products.addStockMovement({
+        businessId,
+        productId: movement.productId,
+        variantId: movement.variantId,
+        batchId: movement.batchId,
+        warehouseId: movement.warehouseId,
+        locationId: movement.locationId,
+        toWarehouseId: movement.toWarehouseId,
+        toLocationId: movement.toLocationId,
+        change: -movement.change,
+        movementType: "ADJUSTMENT",
+        reason: "reversal",
+        referenceType: movement.referenceType,
+        referenceId,
+        notes: "Document Control reversal",
+        userId,
+      });
+    }
+  }
+
+  private async assertPurchaseNotConsumed(businessId: string, invoice: PurchaseInvoice): Promise<void> {
+    const returns = await this.repos.transactions.listPurchaseReturns(businessId);
+    if (returns.some((item) => item.purchaseInvoiceId === invoice.id)) {
+      throw AppError.conflict("This bill has purchase returns. Reverse those first.");
+    }
+    for (const item of invoice.items) {
+      const needed = item.baseQuantity ?? item.quantity;
+      if (needed <= 0) continue;
+      const balances = await this.repos.products.listBalances(businessId, item.productId);
+      const available = balances
+        .filter((balance) => {
+          if (item.batchId && balance.batchId !== item.batchId) return false;
+          if (item.variantId && balance.variantId && balance.variantId !== item.variantId) return false;
+          return true;
+        })
+        .reduce((sum, balance) => sum + balance.quantity, 0);
+      if (available + 1e-9 < needed) {
+        throw AppError.conflict("Stock from this bill has already been used and cannot be reversed.");
+      }
+    }
+  }
+
+  private async assertSalesNotConsumed(businessId: string, invoice: SalesInvoice): Promise<void> {
+    const returns = await this.repos.transactions.listSalesReturns(businessId);
+    if (returns.some((item) => item.salesInvoiceId === invoice.id)) {
+      throw AppError.conflict("This invoice has sales returns. Reverse those first.");
+    }
+  }
+
+  private composePurchaseHeader(
+    billNo: string,
+    input: PurchaseInput,
+    totals: InvoiceTotals,
+    status: string,
+    documentDate: string
+  ) {
+    return {
+      billNo,
+      supplierId: input.supplierId ?? null,
+      purchaseOrderId: null,
+      invoiceDate: documentDate,
+      dueDate: input.dueDate ?? null,
+      status,
+      subtotal: totals.subtotal,
+      discount: totals.discount,
+      taxTotal: totals.taxAmount,
+      total: totals.total,
+      paidAmount: 0,
+      notes: input.notes ?? null,
+    };
+  }
+
   async createSalesInvoice(
     businessId: string,
     userId: string,
     invoiceNo: string,
     input: SalesInput
   ): Promise<{ invoice: SalesInvoice; totals: InvoiceTotals }> {
-    await this.auth.requirePermission(businessId, userId, "sales.manage");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "sales_invoice",
+      action: "create",
+      documentDate: input.invoiceDate,
+    });
     this.validateItems(input.items);
     const convertedItems: CartItemInput[] = [];
     for (const item of input.items) {
@@ -419,7 +566,7 @@ export class TransactionService {
       {
         invoiceNo,
         customerId: input.customerId ?? null,
-        invoiceDate: input.invoiceDate ?? new Date().toISOString().slice(0, 10),
+        invoiceDate: guard.documentDate,
         dueDate: input.dueDate ?? null,
         status: paymentState.status,
         subtotal: totals.subtotal,
@@ -451,14 +598,15 @@ export class TransactionService {
       }
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: asDraft ? "invoice.drafted" : "invoice.created",
-      entityType: "sales_invoice",
-      entityId: invoice.id,
-      metadata: { invoiceNo, total: totals.total, draft: asDraft },
-    });
+      asDraft ? "invoice.drafted" : "invoice.created",
+      "sales_invoice",
+      invoice.id,
+      { invoiceNo, total: totals.total, draft: asDraft },
+      guard
+    );
     if (!asDraft) {
       await this.notifications.create(businessId, {
         title: `Invoice ${invoiceNo} created`,
@@ -481,10 +629,16 @@ export class TransactionService {
     userId: string,
     invoiceId: string
   ): Promise<SalesInvoice> {
-    await this.auth.requirePermission(businessId, userId, "sales.manage");
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Invoice not found.");
     if (invoice.status !== "draft") return invoice;
+    await this.guardDocument(businessId, userId, {
+      kind: "sales_invoice",
+      action: "edit",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+    });
 
     for (const item of invoice.items) {
       await this.inventory.recordSaleMovement(
@@ -539,42 +693,184 @@ export class TransactionService {
     return this.repos.transactions.getSalesInvoice(businessId, invoiceId);
   }
 
+  async updateSalesInvoice(
+    businessId: string,
+    userId: string,
+    invoiceId: string,
+    input: SalesInput,
+    options: DocumentMutationOptions = {}
+  ): Promise<{ invoice: SalesInvoice; totals: InvoiceTotals }> {
+    const existing = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
+    if (!existing) throw AppError.notFound("Invoice not found.");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "sales_invoice",
+      action: "edit",
+      documentDate: input.invoiceDate ?? existing.invoiceDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    this.validateItems(input.items);
+    const convertedItems: CartItemInput[] = [];
+    for (const item of input.items) {
+      convertedItems.push(await this.convertCartItem(businessId, item, "sale"));
+    }
+    const asDraft = isDraftStatus(existing.status) && input.asDraft === true;
+    if (isPostedStatus(existing.status)) {
+      await this.assertSalesNotConsumed(businessId, existing);
+      await this.reverseDocumentStock(businessId, userId, existing.id);
+    }
+    if (!asDraft) {
+      for (const item of convertedItems) {
+        await this.assertSaleStock(businessId, item);
+      }
+    }
+    const totals = this.gst.computeTotals(
+      convertedItems,
+      await this.taxComputeOptions(businessId, input)
+    );
+    const tendered = asDraft ? [] : (input.payments ?? []).filter((p) => p.amount > 0);
+    const paymentState = asDraft
+      ? { paid: existing.paidAmount, status: existing.status, payments: [] as PaymentAllocation[], changeDue: 0 }
+      : this.computePaymentState(totals.total, tendered.length > 0 ? tendered : [{ mode: existing.paymentMode ?? "cash", amount: existing.paidAmount }].filter((p) => p.amount > 0));
+    const lineInputs: LineItemInput[] = convertedItems.map((item, index) => {
+      const computed = totals.lines[index];
+      return {
+        productId: item.productId,
+        variantId: item.variantId ?? null,
+        batchId: item.batchId ?? null,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        gstRate: item.gstRate,
+        discount: computed?.discount ?? item.discount ?? 0,
+        taxableAmount: computed?.taxableAmount,
+        taxAmount: computed?.taxAmount,
+        amount: computed?.amount,
+        saleUnit: item.saleUnit ?? null,
+        baseQuantity: item.baseQuantity ?? item.quantity,
+      };
+    });
+    const invoice = await this.repos.transactions.updateSalesInvoice(
+      businessId,
+      invoiceId,
+      {
+        invoiceNo: existing.invoiceNo,
+        customerId: input.customerId ?? existing.customerId,
+        invoiceDate: guard.documentDate,
+        dueDate: input.dueDate ?? existing.dueDate,
+        status: asDraft ? "draft" : paymentState.status,
+        subtotal: totals.subtotal,
+        discount: totals.discount,
+        taxTotal: totals.taxAmount,
+        total: totals.total,
+        paidAmount: asDraft ? 0 : paymentState.paid,
+        paymentMode: paymentState.payments[0]?.mode ?? existing.paymentMode,
+        notes: this.composeSalesNotes(input) ?? existing.notes,
+      },
+      lineInputs
+    );
+    if (!asDraft) {
+      await this.repos.transactions.deletePaymentsForDocument(businessId, { salesInvoiceId: invoice.id });
+      for (const allocation of paymentState.payments) {
+        await this.createPayment(businessId, userId, {
+          direction: "in",
+          partyType: "customer",
+          partyId: input.customerId ?? existing.customerId,
+          salesInvoiceId: invoice.id,
+          amount: allocation.amount,
+          mode: allocation.mode,
+          reference: allocation.reference ?? null,
+          overrideLock: options.overrideLock,
+          overrideReason: options.overrideReason,
+        });
+      }
+      for (const item of convertedItems) {
+        await this.inventorySaleMovement(businessId, userId, invoice.id, item, input.warehouseId);
+      }
+    }
+    await this.auditDocument(
+      businessId,
+      userId,
+      "invoice.updated",
+      "sales_invoice",
+      invoice.id,
+      { invoiceNo: invoice.invoiceNo, total: totals.total },
+      guard
+    );
+    return { invoice, totals };
+  }
+
+  async deleteSalesInvoice(
+    businessId: string,
+    userId: string,
+    invoiceId: string,
+    options: DocumentMutationOptions = {}
+  ): Promise<void> {
+    const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
+    if (!invoice) throw AppError.notFound("Invoice not found.");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "sales_invoice",
+      action: "delete",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    if (isPostedStatus(invoice.status)) {
+      await this.assertSalesNotConsumed(businessId, invoice);
+      await this.reverseDocumentStock(businessId, userId, invoice.id);
+    }
+    await this.repos.transactions.deletePaymentsForDocument(businessId, { salesInvoiceId: invoice.id });
+    await this.repos.transactions.deleteSalesInvoice(businessId, invoice.id);
+    await this.auditDocument(
+      businessId,
+      userId,
+      "invoice.deleted",
+      "sales_invoice",
+      invoice.id,
+      { invoiceNo: invoice.invoiceNo },
+      guard
+    );
+  }
+
   async cancelSalesInvoice(
     businessId: string,
     userId: string,
-    invoiceId: string
+    invoiceId: string,
+    options: DocumentMutationOptions = {}
   ): Promise<void> {
-    await this.auth.requirePermission(businessId, userId, "sales.manage");
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Invoice not found.");
     if (invoice.status === "cancelled") return;
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "sales_invoice",
+      action: "cancel",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    await this.assertSalesNotConsumed(businessId, invoice);
 
     const wasDraft = invoice.status === "draft";
     await this.repos.transactions.updateSalesInvoiceStatus(businessId, invoiceId, "cancelled");
 
     if (!wasDraft) {
-      for (const item of invoice.items) {
-        await this.inventory.recordReturnMovement(
-          businessId,
-          userId,
-          item.productId,
-          item.variantId ?? null,
-          item.baseQuantity ?? item.quantity,
-          invoiceId,
-          null,
-          item.batchId ?? null
-        );
-      }
+      await this.reverseDocumentStock(businessId, userId, invoiceId);
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: "invoice.cancelled",
-      entityType: "sales_invoice",
-      entityId: invoiceId,
-      metadata: { invoiceNo: invoice.invoiceNo },
-    });
+      "invoice.cancelled",
+      "sales_invoice",
+      invoiceId,
+      { invoiceNo: invoice.invoiceNo },
+      guard
+    );
   }
 
   async createPurchaseOrder(
@@ -718,7 +1014,11 @@ export class TransactionService {
     billNo: string,
     input: PurchaseInput
   ): Promise<PurchaseInvoice> {
-    await this.auth.requirePermission(businessId, userId, "purchase.manage");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "purchase_invoice",
+      action: "create",
+      documentDate: input.invoiceDate,
+    });
     this.validateItems(input.items);
     const asDraft = input.asDraft === true;
     const convertedItems: CartItemInput[] = [];
@@ -743,7 +1043,7 @@ export class TransactionService {
         billNo,
         supplierId: input.supplierId ?? null,
         purchaseOrderId: null,
-        invoiceDate: input.invoiceDate ?? new Date().toISOString().slice(0, 10),
+        invoiceDate: guard.documentDate,
         dueDate: input.dueDate ?? null,
         status: asDraft ? "draft" : "unpaid",
         subtotal: totals.subtotal,
@@ -772,14 +1072,15 @@ export class TransactionService {
       }
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: asDraft ? "purchase_invoice.drafted" : "purchase_invoice.created",
-      entityType: "purchase_invoice",
-      entityId: invoice.id,
-      metadata: { billNo, total: totals.total, draft: asDraft },
-    });
+      asDraft ? "purchase_invoice.drafted" : "purchase_invoice.created",
+      "purchase_invoice",
+      invoice.id,
+      { billNo, total: totals.total, draft: asDraft },
+      guard
+    );
     return invoice;
   }
 
@@ -794,10 +1095,16 @@ export class TransactionService {
     invoiceId: string,
     warehouseId?: string | null
   ): Promise<PurchaseInvoice> {
-    await this.auth.requirePermission(businessId, userId, "purchase.manage");
     const invoice = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Purchase invoice not found.");
     if (invoice.status !== "draft") return invoice;
+    await this.guardDocument(businessId, userId, {
+      kind: "purchase_invoice",
+      action: "edit",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+    });
 
     for (const item of invoice.items) {
       await this.inventory.recordPurchaseMovement(
@@ -834,13 +1141,157 @@ export class TransactionService {
     return this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
   }
 
+  async updatePurchaseInvoice(
+    businessId: string,
+    userId: string,
+    invoiceId: string,
+    input: PurchaseInput,
+    options: DocumentMutationOptions = {}
+  ): Promise<PurchaseInvoice> {
+    const existing = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
+    if (!existing) throw AppError.notFound("Purchase invoice not found.");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "purchase_invoice",
+      action: "edit",
+      documentDate: input.invoiceDate ?? existing.invoiceDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    this.validateItems(input.items);
+    if (isPostedStatus(existing.status)) {
+      await this.assertPurchaseNotConsumed(businessId, existing);
+      await this.reverseDocumentStock(businessId, userId, existing.id);
+    }
+
+    const asDraft = isDraftStatus(existing.status) && input.asDraft === true;
+    const convertedItems: CartItemInput[] = [];
+    for (const item of input.items) {
+      convertedItems.push(await this.convertCartItem(businessId, item, "purchase"));
+    }
+    const totals = this.gst.computeTotals(
+      convertedItems,
+      await this.taxComputeOptions(businessId, { ...input, discount: input.discount ?? 0 })
+    );
+    const persistedItems: CartItemInput[] = [];
+    for (const item of convertedItems) {
+      const batchId = await this.ensurePurchaseBatch(businessId, item);
+      persistedItems.push({ ...item, batchId });
+    }
+    const status = asDraft ? "draft" : existing.status === "draft" ? "unpaid" : existing.status;
+    const invoice = await this.repos.transactions.updatePurchaseInvoice(
+      businessId,
+      invoiceId,
+      this.composePurchaseHeader(existing.billNo, input, totals, status, guard.documentDate),
+      persistedItems.map(this.toLineItemInput)
+    );
+    if (!asDraft) {
+      for (const item of persistedItems) {
+        await this.inventory.recordPurchaseMovement(
+          businessId,
+          userId,
+          item.productId,
+          item.variantId ?? null,
+          this.stockQuantity(item),
+          invoice.id,
+          "purchase_invoice",
+          input.warehouseId ?? null,
+          item.batchId ?? null
+        );
+      }
+    }
+    await this.auditDocument(
+      businessId,
+      userId,
+      "purchase_invoice.updated",
+      "purchase_invoice",
+      invoice.id,
+      { billNo: invoice.billNo, total: invoice.total },
+      guard
+    );
+    return invoice;
+  }
+
+  async deletePurchaseInvoice(
+    businessId: string,
+    userId: string,
+    invoiceId: string,
+    options: DocumentMutationOptions = {}
+  ): Promise<void> {
+    const invoice = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
+    if (!invoice) throw AppError.notFound("Purchase invoice not found.");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "purchase_invoice",
+      action: "delete",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    if (isPostedStatus(invoice.status)) {
+      await this.assertPurchaseNotConsumed(businessId, invoice);
+      await this.reverseDocumentStock(businessId, userId, invoice.id);
+    }
+    await this.repos.transactions.deletePaymentsForDocument(businessId, { purchaseInvoiceId: invoice.id });
+    await this.repos.transactions.deletePurchaseInvoice(businessId, invoice.id);
+    await this.auditDocument(
+      businessId,
+      userId,
+      "purchase_invoice.deleted",
+      "purchase_invoice",
+      invoice.id,
+      { billNo: invoice.billNo },
+      guard
+    );
+  }
+
+  async cancelPurchaseInvoice(
+    businessId: string,
+    userId: string,
+    invoiceId: string,
+    options: DocumentMutationOptions = {}
+  ): Promise<void> {
+    const invoice = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
+    if (!invoice) throw AppError.notFound("Purchase invoice not found.");
+    if (invoice.status === "cancelled") return;
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "purchase_invoice",
+      action: "cancel",
+      documentDate: invoice.invoiceDate,
+      createdAt: invoice.createdAt,
+      status: invoice.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    await this.assertPurchaseNotConsumed(businessId, invoice);
+    if (isPostedStatus(invoice.status)) {
+      await this.reverseDocumentStock(businessId, userId, invoice.id);
+    }
+    await this.repos.transactions.updatePurchaseInvoiceStatus(businessId, invoiceId, "cancelled");
+    await this.auditDocument(
+      businessId,
+      userId,
+      "purchase_invoice.cancelled",
+      "purchase_invoice",
+      invoice.id,
+      { billNo: invoice.billNo },
+      guard
+    );
+  }
+
   async createPurchaseReturn(
     businessId: string,
     userId: string,
     returnNo: string,
     input: PurchaseReturnInput
   ): Promise<PurchaseReturn> {
-    await this.auth.requirePermission(businessId, userId, "purchase.manage");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "purchase_return",
+      action: "create",
+      documentDate: input.returnDate,
+    });
     if (input.items.length === 0) {
       throw AppError.validation("Add at least one returned item.");
     }
@@ -869,7 +1320,7 @@ export class TransactionService {
         purchaseInvoiceId: input.purchaseInvoiceId ?? null,
         supplierId: input.supplierId ?? null,
         returnNo,
-        returnDate: input.returnDate ?? new Date().toISOString().slice(0, 10),
+        returnDate: guard.documentDate,
         reason: input.reason ?? null,
         total,
         notes: input.notes ?? null,
@@ -893,14 +1344,15 @@ export class TransactionService {
       );
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: "purchase_return.created",
-      entityType: "purchase_return",
-      entityId: result.id,
-      metadata: { returnNo, total },
-    });
+      "purchase_return.created",
+      "purchase_return",
+      result.id,
+      { returnNo, total },
+      guard
+    );
     return result;
   }
 
@@ -914,7 +1366,11 @@ export class TransactionService {
     returnNo: string,
     input: SalesReturnInput
   ): Promise<SalesReturn> {
-    await this.auth.requirePermission(businessId, userId, "sales.manage");
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "sales_return",
+      action: "create",
+      documentDate: input.returnDate,
+    });
     if (!input.salesInvoiceId) {
       throw AppError.validation("Select the original sales invoice.");
     }
@@ -994,7 +1450,7 @@ export class TransactionService {
         salesInvoiceId: input.salesInvoiceId ?? null,
         customerId,
         returnNo,
-        returnDate: input.returnDate ?? new Date().toISOString().slice(0, 10),
+        returnDate: guard.documentDate,
         reason: input.reason ?? null,
         total,
         notes: input.notes ?? null,
@@ -1024,14 +1480,15 @@ export class TransactionService {
       await this.repos.transactions.updateSalesInvoiceStatus(businessId, input.salesInvoiceId, "returned");
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: "sales_return.created",
-      entityType: "sales_return",
-      entityId: result.id,
-      metadata: { returnNo, total },
-    });
+      "sales_return.created",
+      "sales_return",
+      result.id,
+      { returnNo, total },
+      guard
+    );
     return result;
   }
 
@@ -1043,11 +1500,25 @@ export class TransactionService {
     return this.repos.transactions.listPayments(businessId);
   }
 
+  async deletePaymentsForDocument(
+    businessId: string,
+    input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
+  ): Promise<void> {
+    await this.repos.transactions.deletePaymentsForDocument(businessId, input);
+  }
+
   async createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment> {
-    await this.auth.requirePermission(
+    const guard = await this.guardDocument(
       businessId,
       userId,
-      input.direction === "in" ? "sales.manage" : "purchase.manage"
+      {
+        kind: "payment",
+        action: "create",
+        documentDate: input.paymentDate,
+        overrideLock: input.overrideLock,
+        overrideReason: input.overrideReason,
+      },
+      input.direction
     );
     if (input.amount <= 0) {
       throw AppError.validation("Payment amount must be positive.");
@@ -1074,7 +1545,7 @@ export class TransactionService {
       amount: input.amount,
       mode: input.mode,
       reference: input.reference ?? null,
-      paymentDate: input.paymentDate ?? new Date().toISOString().slice(0, 10),
+      paymentDate: guard.documentDate,
       notes: input.notes ?? null,
     });
 
@@ -1086,14 +1557,15 @@ export class TransactionService {
       await this.reconcilePurchasePayment(businessId, input.purchaseInvoiceId);
     }
 
-    await this.audits.log({
+    await this.auditDocument(
       businessId,
       userId,
-      action: "payment.created",
-      entityType: "payment",
-      entityId: payment.id,
-      metadata: { amount: input.amount, mode: input.mode },
-    });
+      "payment.created",
+      "payment",
+      payment.id,
+      { amount: input.amount, mode: input.mode },
+      guard
+    );
     return payment;
   }
 

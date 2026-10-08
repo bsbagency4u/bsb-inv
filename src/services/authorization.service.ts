@@ -41,4 +41,17 @@ export class AuthorizationService {
       );
     }
   }
+
+  async requireAnyPermission(
+    businessId: string,
+    userId: string,
+    permissions: string[]
+  ): Promise<void> {
+    for (const permission of permissions) {
+      if (await this.can(businessId, userId, permission)) return;
+    }
+    throw AppError.authorization(
+      `You do not have permission to do this (requires "${permissions[0] ?? "permission"}").`
+    );
+  }
 }

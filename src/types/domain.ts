@@ -116,7 +116,47 @@ export interface TaxDefaults {
   pricesIncludeTax: boolean;
 }
 
-export type InvoicePaperSize = "a4" | "a5" | "thermal";
+export type DocumentControlKind =
+  | "sales_invoice"
+  | "purchase_invoice"
+  | "sales_return"
+  | "purchase_return"
+  | "payment";
+
+export interface DocumentNumberingRule {
+  prefix: string;
+}
+
+export interface DocumentControlDefaults {
+  allowBackdate: boolean;
+  maxBackdateDays: number;
+  allowFutureDate: boolean;
+  maxFutureDays: number;
+  lockEnabled: boolean;
+  lockAfterDays: number;
+  allowOverrideLock: boolean;
+  allowEditPosted: boolean;
+  allowDeleteDraft: boolean;
+  allowDeletePosted: boolean;
+  allowCancelPosted: boolean;
+  numbering: Record<DocumentControlKind, DocumentNumberingRule>;
+}
+
+export type InvoicePaperSize = "a4" | "a5" | "thermal" | "custom";
+export type InvoiceOrientation = "portrait" | "landscape";
+export type InvoicePrintOutput = "print" | "pdf";
+export type PrintDocumentType =
+  | "sales_invoice"
+  | "sales_return"
+  | "purchase_invoice"
+  | "purchase_return"
+  | "payment_receipt"
+  | "quotation"
+  | "delivery_challan";
+
+export interface InvoiceDocumentTypeSetting {
+  enabled: boolean;
+}
 
 export interface InvoiceDefaults {
   showLogo: boolean;
@@ -127,6 +167,24 @@ export interface InvoiceDefaults {
   termsAndConditions: string;
   footerNote: string;
   paperSize: InvoicePaperSize;
+  orientation: InvoiceOrientation;
+  customWidthMm: number;
+  customHeightMm: number;
+  showSku: boolean;
+  showBatch: boolean;
+  showMrp: boolean;
+  showDiscount: boolean;
+  showTaxBreakup: boolean;
+  showPaidBalance: boolean;
+  showNotes: boolean;
+  showSignature: boolean;
+  signatureLabel: string;
+  autoPrintOnSave: boolean;
+  copies: number;
+  defaultOutput: InvoicePrintOutput;
+  whatsappEnabled: boolean;
+  messageTemplate: string;
+  documentTypes: Record<PrintDocumentType, InvoiceDocumentTypeSetting>;
 }
 
 export interface SessionState {

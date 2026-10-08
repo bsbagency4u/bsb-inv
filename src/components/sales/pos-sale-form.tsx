@@ -31,7 +31,8 @@ import { EmptyState } from "@/components/states/empty-state";
 import { useToast } from "@/components/ui/toast";
 import { GstEngine } from "@/services/gst.service";
 import { normalizeError } from "@/lib/errors";
-import { printSalesInvoice } from "@/lib/invoice-print";
+import { autoOutputDocument, printDocument, type PrintDocumentModel } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
 import { settleTender } from "@/lib/tender";
 import { cn, formatCurrency } from "@/lib/utils";
 import { businessShowsMrp, businessTracksBatches } from "@/config/business-types";
@@ -43,11 +44,14 @@ import {
   resolveUnitKind,
   saleUnitOptions,
   toBaseQuantity,
+  unitKindFromSaleUnit,
   type UnitKind,
   validateSaleQuantity,
 } from "@/lib/packaging";
-import type { ProductVariant, ProductWithStock, SellableLot } from "@/types/domain";
+import type { ProductVariant, ProductWithStock, SalesInvoice, SellableLot } from "@/types/domain";
 import type { PartyValues } from "@/lib/validation/schemas";
+import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
+import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
 
 type CustomerMode = "existing" | "walkin";
 type DiscountKind = "amount" | "percent";
@@ -90,19 +94,27 @@ function lineDiscountAmount(line: SaleLine, pricesIncludeTax = false, gstEnabled
   return Math.min(gross, Math.max(0, line.discountValue));
 }
 
+function walkInNameFromNotes(notes: string | null): string | null {
+  if (!notes) return null;
+  const match = notes.match(/^Walk-in:\s*(.+)$/m);
+  return match?.[1]?.trim() || null;
+}
+
 export function PosSaleForm({
   title = "Point of Sale",
   description = "Record a sale. Drafts do not reduce stock; completing the sale does.",
   afterSaveHref,
+  invoiceId,
 }: {
   title?: string;
   description?: string;
   afterSaveHref?: string;
+  invoiceId?: string;
 }) {
   const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
 
   const [customerMode, setCustomerMode] = React.useState<CustomerMode>("walkin");
   const [customerId, setCustomerId] = React.useState<string | null>(null);
@@ -124,6 +136,10 @@ export function PosSaleForm({
   const [notes, setNotes] = React.useState<string | null>(null);
   const [attachmentNames, setAttachmentNames] = React.useState<string[]>([]);
   const [saving, setSaving] = React.useState<"draft" | "complete" | null>(null);
+  const [existingInvoice, setExistingInvoice] = React.useState<SalesInvoice | null>(null);
+  const [hydrated, setHydrated] = React.useState(!invoiceId);
+  const [lockReasonOpen, setLockReasonOpen] = React.useState(false);
+  const [pendingDraft, setPendingDraft] = React.useState(false);
   const [createCustomerOpen, setCreateCustomerOpen] = React.useState(false);
   const [newCustomer, setNewCustomer] = React.useState({
     name: "",
@@ -236,6 +252,24 @@ export function PosSaleForm({
     enabled: Boolean(business),
   });
 
+  const { data: loadedInvoice, isLoading: invoiceLoading } = useQuery({
+    queryKey: ["sales-invoice", business?.id, invoiceId],
+    queryFn: async () => {
+      if (!business || !invoiceId) throw new Error("No invoice.");
+      return getClientServices().transactions.getSalesInvoice(business.id, invoiceId);
+    },
+    enabled: Boolean(business && invoiceId),
+  });
+
+  const { data: documentControl } = useQuery({
+    queryKey: ["document-control", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getDocumentControlDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const currency = business?.currency ?? "INR";
   const tracksBatches = businessTracksBatches(business?.type);
   const showsMrp = businessShowsMrp(business?.type);
@@ -270,6 +304,45 @@ export function PosSaleForm({
     }
     return map;
   }, [variants]);
+
+  if (invoiceId && loadedInvoice && !hydrated && products) {
+    setExistingInvoice(loadedInvoice);
+    setInvoiceDate(loadedInvoice.invoiceDate.slice(0, 10));
+    if (loadedInvoice.customerId) {
+      setCustomerMode("existing");
+      setCustomerId(loadedInvoice.customerId);
+      setWalkInName("");
+    } else {
+      setCustomerMode("walkin");
+      setCustomerId(null);
+      setWalkInName(walkInNameFromNotes(loadedInvoice.notes) ?? "");
+    }
+    setNotes(loadedInvoice.notes);
+    setInvoiceDiscountKind("amount");
+    setInvoiceDiscountValue(String(loadedInvoice.discount ?? 0));
+    setInvoiceDiscountTouched(true);
+    if (loadedInvoice.paidAmount > 0) setPaidAmount(String(loadedInvoice.paidAmount));
+    if (loadedInvoice.paymentMode) setPaymentModeOverride(loadedInvoice.paymentMode);
+    setLines(
+      loadedInvoice.items.map((item) => {
+        const product = products.find((row) => row.id === item.productId);
+        return {
+          key: newLineKey(),
+          productId: item.productId,
+          variantId: item.variantId ?? null,
+          batchId: item.batchId ?? null,
+          mrp: product?.mrp ?? null,
+          quantity: item.quantity,
+          unitKind: unitKindFromSaleUnit(item.saleUnit, packagingFromProduct(product ?? { unit: "pcs" })),
+          unitPrice: item.unitPrice,
+          gstRate: item.gstRate,
+          discountKind: "amount" as DiscountKind,
+          discountValue: item.discount ?? 0,
+        };
+      })
+    );
+    setHydrated(true);
+  }
 
   const lotsForLine = React.useCallback(
     (productId: string, variantId: string | null): SellableLot[] => {
@@ -386,60 +459,61 @@ export function PosSaleForm({
     setPaymentSplits(next);
   };
 
-  const printSale = (invoiceNo?: string) => {
-    if (!business) return;
+  const salePrintModel = (invoiceNo?: string): PrintDocumentModel => {
     const partyLabel =
       customerMode === "existing"
         ? customer?.name ?? "Customer"
         : walkInName.trim() || "Walk-in customer";
-    printSalesInvoice(
+    return {
+      kind: "sales_invoice",
+      docNo: invoiceNo || "Preview",
+      docDate: invoiceDate,
+      partyLabel,
+      partyGstin: customer?.gstin ?? null,
+      partyPhone: customer?.phone ?? null,
+      notes,
+      paymentMode: tender.payments[0]?.mode ?? paymentMode,
+      paidAmount: recordedPaid,
+      lines: lines.map((line, index) => {
+        const product = productById.get(line.productId);
+        const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+        const lot = lotsForLine(line.productId, line.variantId).find((item) => item.batchId === line.batchId);
+        return {
+          name: product?.name ?? "Item",
+          sku: product?.sku ?? null,
+          hsn: product?.hsn ?? taxDefaults?.defaultHsnCode ?? null,
+          batchNo: lot?.batchNo ?? null,
+          quantity: line.quantity,
+          unit: line.unitKind === "pack" ? packaging.packUnit : packaging.unit,
+          unitPrice: line.unitPrice,
+          discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
+          gstRate: gstEnabled ? line.gstRate : 0,
+          amount: totals.lines[index]?.amount ?? 0,
+          mrp: line.mrp,
+        };
+      }),
+      subtotal: totals.subtotal,
+      discount: totals.discount,
+      taxTotal: totals.taxAmount,
+      total: totals.total,
+      intraState,
+      cgst: totals.cgst,
+      sgst: totals.sgst,
+      igst: totals.igst,
+    };
+  };
+
+  const printSale = (invoiceNo?: string) => {
+    if (!business) return;
+    const result = printDocument(
       business,
-      invoiceDefaults ?? {
-        showLogo: true,
-        showGstin: true,
-        showHsn: false,
-        showBankDetails: false,
-        bankDetails: "",
-        termsAndConditions: "",
-        footerNote: "",
-        paperSize: "a4",
-      },
-      {
-        invoiceNo: invoiceNo || "Preview",
-        invoiceDate,
-        partyLabel,
-        partyGstin: customer?.gstin ?? null,
-        notes,
-        paymentMode: tender.payments[0]?.mode ?? paymentMode,
-        paidAmount: recordedPaid,
-        lines: lines.map((line, index) => {
-          const product = productById.get(line.productId);
-          const packaging = packagingFromProduct(product ?? { unit: "pcs" });
-          const lot = lotsForLine(line.productId, line.variantId).find((item) => item.batchId === line.batchId);
-          return {
-            name: product?.name ?? "Item",
-            hsn: product?.hsn ?? taxDefaults?.defaultHsnCode ?? null,
-            batchNo: lot?.batchNo ?? null,
-            quantity: line.quantity,
-            unit: line.unitKind === "pack" ? packaging.packUnit : packaging.unit,
-            unitPrice: line.unitPrice,
-            discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
-            gstRate: gstEnabled ? line.gstRate : 0,
-            amount: totals.lines[index]?.amount ?? 0,
-            mrp: line.mrp,
-          };
-        }),
-        subtotal: totals.subtotal,
-        discount: totals.discount,
-        taxTotal: totals.taxAmount,
-        total: totals.total,
-        intraState,
-        cgst: totals.cgst,
-        sgst: totals.sgst,
-        igst: totals.igst,
-      },
+      invoiceDefaults ?? DEFAULT_INVOICE,
+      salePrintModel(invoiceNo),
       currency
     );
+    if (!result.ok && result.reason === "blocked") {
+      toastInfo("Print Invoice", "The browser blocked printing. Click Print Invoice again, or open the invoice from Sales Invoices.");
+    }
   };
 
   const addProduct = (product: ProductWithStock) => {
@@ -608,6 +682,103 @@ export function PosSaleForm({
     setBarcodeQuery("");
   };
 
+  const saleNeedsLockReason = Boolean(
+    existingInvoice &&
+      documentIsLocked(
+        documentControl ?? DEFAULT_DOCUMENT_CONTROL,
+        existingInvoice.invoiceDate,
+        existingInvoice.status
+      )
+  );
+
+  const persistSale = async (asDraft: boolean, overrideReason?: string) => {
+    if (!business || !user) return;
+    savingLock.current = true;
+    setSaving(asDraft ? "draft" : "complete");
+    try {
+      const services = getClientServices();
+      const salesperson = (team?.members ?? []).find((member) => member.userId === salesPersonValue);
+      const extraNotes = [
+        salesperson ? `Sales person: ${salesperson.fullName || salesperson.email}` : null,
+        warehouseValue ? `Warehouse: ${(warehouses ?? []).find((w) => w.id === warehouseValue)?.name ?? warehouseValue}` : null,
+        attachmentNames.length > 0 ? `Attachments: ${attachmentNames.join(", ")}` : null,
+        notes,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const payload = {
+        customerId: customerMode === "existing" ? customerId : null,
+        walkInName: customerMode === "walkin" ? walkInName.trim() : null,
+        warehouseId: warehouseValue || null,
+        invoiceDate,
+        notes: extraNotes || null,
+        asDraft,
+        intraState,
+        discount: invoiceDiscountKindResolved === "amount" ? invoiceDiscountInput : undefined,
+        discountPercent: invoiceDiscountKindResolved === "percent" ? invoiceDiscountInput : undefined,
+        items: lines.map((line) => ({
+          productId: line.productId,
+          variantId: line.variantId,
+          batchId: line.batchId,
+          mrp: line.mrp,
+          quantity: line.quantity,
+          unitKind: line.unitKind,
+          unitPrice: line.unitPrice,
+          gstRate: gstEnabled ? line.gstRate : 0,
+          discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
+        })),
+        payments: asDraft ? [] : tender.payments,
+      };
+      const result = existingInvoice
+        ? await services.transactions.updateSalesInvoice(business.id, user.id, existingInvoice.id, payload, {
+            overrideLock: Boolean(overrideReason),
+            overrideReason,
+          })
+        : await services.transactions.createSalesInvoice(
+            business.id,
+            user.id,
+            await services.transactions.nextControlledDocumentNo(business.id, "sales_invoice"),
+            payload
+          );
+      const displayNo = result.invoice.invoiceNo;
+      toastSuccess(
+        existingInvoice ? "Invoice updated" : asDraft ? "Draft saved" : "Sale completed",
+        existingInvoice
+          ? `${displayNo} was updated.`
+          : asDraft
+            ? `${displayNo} was saved as a draft. Stock was not updated.`
+            : changeDue > 0
+              ? `${displayNo} for ${formatCurrency(result.totals.total, currency)} was recorded. Change ${formatCurrency(changeDue, currency)}.`
+              : `${displayNo} for ${formatCurrency(result.totals.total, currency)} was recorded.`
+      );
+      if (!asDraft && !existingInvoice) {
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          salePrintModel(displayNo),
+          currency
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Sale saved. The browser blocked printing. Open the invoice and click Print Invoice.");
+        }
+      }
+      if (!existingInvoice) resetCart();
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["sellable-lots"] });
+      await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      if (afterSaveHref) router.push(afterSaveHref);
+    } catch (err) {
+      toastError(
+        existingInvoice ? "Could not update invoice" : asDraft ? "Could not save draft" : "Could not complete sale",
+        normalizeError(err).userMessage
+      );
+    } finally {
+      savingLock.current = false;
+      setSaving(null);
+    }
+  };
+
   const saveSale = async (asDraft: boolean) => {
     if (!business || !user) return;
     if (savingLock.current) return;
@@ -631,68 +802,12 @@ export function PosSaleForm({
       toastError("Invalid payment", tender.error);
       return;
     }
-    savingLock.current = true;
-    setSaving(asDraft ? "draft" : "complete");
-    try {
-      const services = getClientServices();
-      const invoiceNo = await services.transactions.nextDocumentNo(
-        business.id,
-        business.invoicePrefix || "INV",
-        "sales"
-      );
-      const salesperson = (team?.members ?? []).find((member) => member.userId === salesPersonValue);
-      const extraNotes = [
-        salesperson ? `Sales person: ${salesperson.fullName || salesperson.email}` : null,
-        warehouseValue ? `Warehouse: ${(warehouses ?? []).find((w) => w.id === warehouseValue)?.name ?? warehouseValue}` : null,
-        attachmentNames.length > 0 ? `Attachments: ${attachmentNames.join(", ")}` : null,
-        notes,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      const { totals: saved } = await services.transactions.createSalesInvoice(business.id, user.id, invoiceNo, {
-        customerId: customerMode === "existing" ? customerId : null,
-        walkInName: customerMode === "walkin" ? walkInName.trim() : null,
-        warehouseId: warehouseValue || null,
-        invoiceDate,
-        notes: extraNotes || null,
-        asDraft,
-        intraState,
-        discount: invoiceDiscountKindResolved === "amount" ? invoiceDiscountInput : undefined,
-        discountPercent: invoiceDiscountKindResolved === "percent" ? invoiceDiscountInput : undefined,
-        items: lines.map((line) => ({
-          productId: line.productId,
-          variantId: line.variantId,
-          batchId: line.batchId,
-          mrp: line.mrp,
-          quantity: line.quantity,
-          unitKind: line.unitKind,
-          unitPrice: line.unitPrice,
-          gstRate: gstEnabled ? line.gstRate : 0,
-          discount: lineDiscountAmount(line, pricesIncludeTax, gstEnabled),
-        })),
-        payments: asDraft ? [] : tender.payments,
-      });
-      toastSuccess(
-        asDraft ? "Draft saved" : "Sale completed",
-        asDraft
-          ? `${invoiceNo} was saved as a draft. Stock was not updated.`
-          : changeDue > 0
-            ? `${invoiceNo} for ${formatCurrency(saved.total, currency)} was recorded. Change ${formatCurrency(changeDue, currency)}.`
-            : `${invoiceNo} for ${formatCurrency(saved.total, currency)} was recorded.`
-      );
-      if (!asDraft) printSale(invoiceNo);
-      resetCart();
-      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
-      await queryClient.invalidateQueries({ queryKey: ["sellable-lots"] });
-      await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      if (afterSaveHref) router.push(afterSaveHref);
-    } catch (err) {
-      toastError(asDraft ? "Could not save draft" : "Could not complete sale", normalizeError(err).userMessage);
-    } finally {
-      savingLock.current = false;
-      setSaving(null);
+    if (saleNeedsLockReason) {
+      setPendingDraft(asDraft);
+      setLockReasonOpen(true);
+      return;
     }
+    await persistSale(asDraft);
   };
 
   const createCustomerFromSale = async () => {
@@ -730,7 +845,10 @@ export function PosSaleForm({
   };
 
   if (!business) return <LoadingState label="Loading business…" />;
-  if (isLoading) return <LoadingState label="Loading point of sale…" />;
+  if (isLoading || (invoiceId && (invoiceLoading || !hydrated))) return <LoadingState label="Loading invoice…" />;
+  if (invoiceId && hydrated && !existingInvoice && !loadedInvoice) {
+    return <ErrorState error="Invoice not found." title="Could not load invoice" />;
+  }
   if (isError) {
     return (
       <ErrorState
@@ -779,11 +897,13 @@ export function PosSaleForm({
             <Button variant="outline" className={controlClass} onClick={() => printSale()} disabled={Boolean(saving) || lines.length === 0}>
               Print
             </Button>
-            <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
-              Save draft
-            </Button>
+            {existingInvoice?.status === "draft" ? (
+              <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
+                Save draft
+              </Button>
+            ) : null}
             <Button className="h-11 min-w-[148px] px-5" onClick={() => void saveSale(false)} loading={saving === "complete"} disabled={Boolean(saving)}>
-              Complete sale
+              {existingInvoice ? "Save changes" : "Complete sale"}
             </Button>
           </>
         }
@@ -875,11 +995,20 @@ export function PosSaleForm({
           <Card>
             <CardHeader className="pb-2">
               <CardTitle>Sale details</CardTitle>
-              <CardDescription>Invoice number is assigned from the document sequence when you save.</CardDescription>
+              <CardDescription>
+                {existingInvoice
+                  ? "Invoice number stays the same. Document date is saved separately from created time."
+                  : "Invoice number is assigned from Document Control numbering when you save."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="Invoice number" htmlFor="pos-invoice-no">
-                <Input id="pos-invoice-no" value="Assigned on save" disabled className={controlClass} />
+                <Input
+                  id="pos-invoice-no"
+                  value={existingInvoice?.invoiceNo ?? "Assigned on save"}
+                  disabled
+                  className={controlClass}
+                />
               </Field>
               <Field label="Sale date" htmlFor="pos-date" required>
                 <Input
@@ -1434,13 +1563,19 @@ export function PosSaleForm({
               loading={saving === "complete"}
               disabled={Boolean(saving)}
             >
-              Complete sale
+              {existingInvoice ? "Save changes" : "Complete sale"}
             </Button>
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
-                Save draft
-              </Button>
-              <Button variant="outline" className={controlClass} onClick={() => printSale()} disabled={Boolean(saving) || lines.length === 0}>
+              {!existingInvoice || existingInvoice.status === "draft" ? (
+                <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
+                  Save draft
+                </Button>
+              ) : (
+                <Button variant="outline" className={controlClass} onClick={() => router.push("/sales/invoices")} disabled={Boolean(saving)}>
+                  Back
+                </Button>
+              )}
+              <Button variant="outline" className={controlClass} onClick={() => printSale(existingInvoice?.invoiceNo)} disabled={Boolean(saving) || lines.length === 0}>
                 Print
               </Button>
             </div>
@@ -1526,6 +1661,19 @@ export function PosSaleForm({
           </div>
         </div>
       </Modal>
+      <DocumentConfirmModal
+        open={lockReasonOpen}
+        onClose={() => setLockReasonOpen(false)}
+        title="Locked period"
+        description="This invoice is in a locked period. Enter a reason to override Document Control."
+        confirmLabel="Save with override"
+        reasonRequired
+        loading={Boolean(saving)}
+        onConfirm={async (reason) => {
+          setLockReasonOpen(false);
+          await persistSale(pendingDraft, reason);
+        }}
+      />
     </div>
   );
 }

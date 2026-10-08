@@ -9,17 +9,43 @@ import type {
   SalesInvoice,
 } from "@/types/domain";
 import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
+import { DOCUMENT_CONTROL_KEY, todayIsoDate } from "@/lib/document-control";
 import { AuditService } from "./audit.service";
 import { NotificationService } from "./notification.service";
 import { TransactionService } from "./transaction.service";
 import { AppError } from "@/lib/errors";
 
+function shiftIsoDate(days: number, from = todayIsoDate()): string {
+  const date = new Date(`${from}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 function memoryRepositories() {
   const products: Product[] = [];
   const salesInvoices: SalesInvoice[] = [];
   const purchaseInvoices: PurchaseInvoice[] = [];
-  const payments: Array<{ direction: string; salesInvoiceId: string | null; purchaseInvoiceId: string | null; amount: number; mode: string }> = [];
-  const ledger: Array<{ productId: string; change: number; movementType: string; batchId: string | null; warehouseId: string | null }> = [];
+  const payments: Array<{ id: string; direction: string; salesInvoiceId: string | null; purchaseInvoiceId: string | null; amount: number; mode: string }> = [];
+  const ledger: Array<{
+    id: string;
+    businessId: string;
+    productId: string;
+    change: number;
+    movementType: string;
+    batchId: string | null;
+    warehouseId: string | null;
+    variantId: string | null;
+    locationId: string | null;
+    toWarehouseId: string | null;
+    toLocationId: string | null;
+    reason: string;
+    referenceType: string | null;
+    referenceId: string | null;
+    notes: string | null;
+    createdAt: string;
+  }> = [];
+  const sequences = new Map<string, number>();
+  const memberPermissions: string[] = ["*"];
   const batches: ProductBatch[] = [];
   const auditLogs: AuditEvent[] = [];
   const receipts: unknown[] = [];
@@ -144,14 +170,47 @@ function memoryRepositories() {
           lastMovementAt: null,
         }));
       },
-      async listMovements() { return []; },
+      async listMovements() { return ledger as never[]; },
+      async listMovementsByReference(_b, referenceId) {
+        return ledger
+          .filter((entry) => entry.referenceId === referenceId)
+          .map((entry) => ({
+            id: entry.id,
+            businessId: entry.businessId,
+            productId: entry.productId,
+            variantId: entry.variantId,
+            batchId: entry.batchId,
+            warehouseId: entry.warehouseId,
+            locationId: entry.locationId,
+            toWarehouseId: entry.toWarehouseId,
+            toLocationId: entry.toLocationId,
+            change: entry.change,
+            movementType: entry.movementType as never,
+            reason: entry.reason,
+            referenceType: entry.referenceType,
+            referenceId: entry.referenceId,
+            notes: entry.notes,
+            createdAt: entry.createdAt,
+          }));
+      },
       async addStockMovement(input) {
         ledger.push({
+          id: `mv-${ledger.length + 1}`,
+          businessId: input.businessId,
           productId: input.productId,
           change: input.change,
           movementType: input.movementType,
           batchId: input.batchId ?? null,
           warehouseId: input.warehouseId ?? null,
+          variantId: input.variantId ?? null,
+          locationId: input.locationId ?? null,
+          toWarehouseId: input.toWarehouseId ?? null,
+          toLocationId: input.toLocationId ?? null,
+          reason: input.reason ?? input.movementType.toLowerCase(),
+          referenceType: input.referenceType ?? null,
+          referenceId: input.referenceId ?? null,
+          notes: input.notes ?? null,
+          createdAt: new Date().toISOString(),
         });
       },
       async listVariants() { return []; },
@@ -235,9 +294,47 @@ function memoryRepositories() {
         salesInvoices.push(invoice);
         return invoice;
       },
+      async updateSalesInvoice(_b, invoiceId, header, items) {
+        const index = salesInvoices.findIndex((i) => i.id === invoiceId);
+        if (index === -1) throw new Error("Invoice not found.");
+        salesInvoices[index] = {
+          ...salesInvoices[index],
+          customerId: header.customerId ?? null,
+          invoiceDate: header.invoiceDate,
+          dueDate: header.dueDate ?? null,
+          status: header.status,
+          subtotal: header.subtotal,
+          discount: header.discount,
+          taxTotal: header.taxTotal,
+          total: header.total,
+          paidAmount: header.paidAmount,
+          paymentMode: header.paymentMode ?? null,
+          notes: header.notes ?? null,
+          items: items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            gstRate: item.gstRate,
+            discount: item.discount ?? 0,
+            taxableAmount: item.quantity * item.unitPrice,
+            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
+            amount: item.quantity * item.unitPrice * (1 + item.gstRate / 100),
+            saleUnit: item.saleUnit ?? null,
+            baseQuantity: item.baseQuantity ?? item.quantity,
+          })),
+          updatedAt: new Date().toISOString(),
+        };
+        return salesInvoices[index];
+      },
       async updateSalesInvoiceStatus(_b, id, status) {
         const index = salesInvoices.findIndex((i) => i.id === id);
         if (index !== -1) salesInvoices[index] = { ...salesInvoices[index], status };
+      },
+      async deleteSalesInvoice(_b, invoiceId) {
+        const index = salesInvoices.findIndex((i) => i.id === invoiceId);
+        if (index !== -1) salesInvoices.splice(index, 1);
       },
       async listPurchaseOrders() { return purchaseOrders; },
       async getPurchaseOrder(_b, id) { return purchaseOrders.find((o) => o.id === id) ?? null; },
@@ -326,21 +423,71 @@ function memoryRepositories() {
         purchaseInvoices.push(invoice);
         return invoice;
       },
+      async updatePurchaseInvoice(_b, invoiceId, header, items) {
+        const index = purchaseInvoices.findIndex((i) => i.id === invoiceId);
+        if (index === -1) throw new Error("Purchase invoice not found.");
+        purchaseInvoices[index] = {
+          ...purchaseInvoices[index],
+          supplierId: header.supplierId ?? null,
+          purchaseOrderId: header.purchaseOrderId ?? null,
+          invoiceDate: header.invoiceDate,
+          dueDate: header.dueDate ?? null,
+          status: header.status,
+          subtotal: header.subtotal,
+          discount: header.discount,
+          taxTotal: header.taxTotal,
+          total: header.total,
+          paidAmount: header.paidAmount,
+          notes: header.notes ?? null,
+          items: items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            gstRate: item.gstRate,
+            discount: 0,
+            taxableAmount: item.quantity * item.unitPrice,
+            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
+            amount: item.quantity * item.unitPrice,
+            saleUnit: item.saleUnit ?? null,
+            baseQuantity: item.baseQuantity ?? item.quantity,
+          })),
+          updatedAt: new Date().toISOString(),
+        };
+        return purchaseInvoices[index];
+      },
       async updatePurchaseInvoiceStatus(_b, id, status) {
         const index = purchaseInvoices.findIndex((i) => i.id === id);
         if (index !== -1) purchaseInvoices[index] = { ...purchaseInvoices[index], status };
       },
+      async deletePurchaseInvoice(_b, invoiceId) {
+        const index = purchaseInvoices.findIndex((i) => i.id === invoiceId);
+        if (index !== -1) purchaseInvoices.splice(index, 1);
+      },
       async listPayments() { return payments as never[]; },
+      async deletePaymentsForDocument(_b, input) {
+        for (let i = payments.length - 1; i >= 0; i -= 1) {
+          const payment = payments[i];
+          if (input.salesInvoiceId && payment.salesInvoiceId === input.salesInvoiceId) {
+            payments.splice(i, 1);
+          } else if (input.purchaseInvoiceId && payment.purchaseInvoiceId === input.purchaseInvoiceId) {
+            payments.splice(i, 1);
+          }
+        }
+      },
       async createPayment(_b, _u, input) {
-        payments.push({
+        const payment = {
+          id: `pay-${payments.length + 1}`,
           direction: input.direction,
           salesInvoiceId: input.salesInvoiceId ?? null,
           purchaseInvoiceId: input.purchaseInvoiceId ?? null,
           amount: input.amount,
           mode: input.mode,
-        });
+        };
+        payments.push(payment);
         return {
-          id: `pay-${payments.length}`,
+          id: payment.id,
           businessId: _b,
           direction: input.direction,
           partyType: input.partyType,
@@ -366,7 +513,12 @@ function memoryRepositories() {
         if (index !== -1) paymentModes[index] = { ...paymentModes[index], ...input };
         return paymentModes[index];
       },
-      async nextDocumentNumber() { return "SAL-2026-000001"; },
+      async nextDocumentNumber(_b, kind, prefix) {
+        const key = `${_b}:${kind}`;
+        const next = (sequences.get(key) ?? 0) + 1;
+        sequences.set(key, next);
+        return `${prefix.toUpperCase()}-${new Date().getFullYear()}-${String(next).padStart(6, "0")}`;
+      },
       async createPurchaseReceipt(_b, _u, input, items) {
         const receipt = { id: `rcpt-${receipts.length + 1}`, businessId: _b, ...input, items, createdAt: new Date().toISOString() };
         receipts.push(receipt);
@@ -422,7 +574,7 @@ function memoryRepositories() {
       async create() { throw new Error("not used"); },
       async update() { throw new Error("not used"); },
       async getSetting(businessId, key) { return settings.get(`${businessId}:${key}`) ?? null; },
-      async setSetting(businessId, key, value) { settings.set(`${businessId}:${key}`, value); },
+      async setSetting(businessId, key, value, _userId) { settings.set(`${businessId}:${key}`, value); },
     },
     profiles: {
       async getByUserId() { return null; },
@@ -440,11 +592,11 @@ function memoryRepositories() {
       async cancelInvitation() {},
       async updateMemberRole() {},
       async removeMember() {},
-      async getMemberPermissions() { return ["*"]; },
+      async getMemberPermissions() { return [...memberPermissions]; },
     },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions };
 }
 
 describe("TransactionService", () => {
@@ -663,14 +815,15 @@ describe("TransactionService", () => {
     );
   });
 
-  it("does not restore stock when cancelling a draft sale", async () => {
+  it("does not restore stock when deleting a draft sale", async () => {
     const product = await seedProduct();
     const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000009", {
       asDraft: true,
       items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
     });
-    await transactions.cancelSalesInvoice("b-1", "u-1", invoice.id);
+    await transactions.deleteSalesInvoice("b-1", "u-1", invoice.id);
     expect(services.ledger).toHaveLength(0);
+    expect(services.salesInvoices.find((row) => row.id === invoice.id)).toBeUndefined();
   });
 
   it("rejects payment against a draft sales invoice", async () => {
@@ -1393,5 +1546,252 @@ describe("TransactionService", () => {
       .filter((entry) => entry.productId === product.id)
       .reduce((sum, entry) => sum + entry.change, 0);
     expect(remaining).toBe(103);
+  });
+
+  describe("Document Control", () => {
+    async function setControl(patch: Record<string, unknown>) {
+      await services.repos.businesses.setSetting("b-1", DOCUMENT_CONTROL_KEY, patch, "u-1");
+    }
+
+    function netQty(productId: string) {
+      return services.ledger
+        .filter((entry) => entry.productId === productId)
+        .reduce((sum, entry) => sum + entry.change, 0);
+    }
+
+    it("keeps a backdated document date instead of rewriting it to today", async () => {
+      const product = await seedProduct();
+      const date = shiftIsoDate(-3);
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-BACK", {
+        invoiceDate: date,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      expect(invoice.invoiceDate).toBe(date);
+      expect(invoice.createdAt.slice(0, 10)).toBe(todayIsoDate());
+    });
+
+    it("rejects a backdate beyond the configured window", async () => {
+      await setControl({ allowBackdate: true, maxBackdateDays: 5 });
+      const product = await seedProduct();
+      await expect(
+        transactions.createSalesInvoice("b-1", "u-1", "INV-OLD", {
+          invoiceDate: shiftIsoDate(-10),
+          items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+          payments: [{ mode: "cash", amount: 236 }],
+        })
+      ).rejects.toThrow(/more than 5 day/);
+    });
+
+    it("rejects a future date when future dating is off", async () => {
+      await setControl({ allowFutureDate: false });
+      const product = await seedProduct();
+      await expect(
+        transactions.createSalesInvoice("b-1", "u-1", "INV-FUT", {
+          invoiceDate: shiftIsoDate(2),
+          items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+          payments: [{ mode: "cash", amount: 236 }],
+        })
+      ).rejects.toThrow(/Future document dates/);
+    });
+
+    it("allocates unique numbers from Document Control prefixes", async () => {
+      await setControl({ numbering: { sales_invoice: { prefix: "SI" }, purchase_invoice: { prefix: "PB" } } });
+      const first = await transactions.nextControlledDocumentNo("b-1", "sales_invoice");
+      const second = await transactions.nextControlledDocumentNo("b-1", "sales_invoice");
+      const bill = await transactions.nextControlledDocumentNo("b-1", "purchase_invoice");
+      expect(first).toMatch(/^SI-\d{4}-000001$/);
+      expect(second).toMatch(/^SI-\d{4}-000002$/);
+      expect(bill).toMatch(/^PB-\d{4}-000001$/);
+      expect(first).not.toBe(second);
+    });
+
+    it("does not reuse a number after delete", async () => {
+      await setControl({ allowDeletePosted: true });
+      const product = await seedProduct();
+      const no = await transactions.nextControlledDocumentNo("b-1", "sales_invoice");
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", no, {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      await transactions.deleteSalesInvoice("b-1", "u-1", invoice.id);
+      const next = await transactions.nextControlledDocumentNo("b-1", "sales_invoice");
+      expect(next).not.toBe(no);
+      expect(services.salesInvoices.find((row) => row.invoiceNo === no)).toBeUndefined();
+    });
+
+    it("hard-deletes a draft without touching stock", async () => {
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-DRAFT", {
+        asDraft: true,
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 18 }],
+      });
+      expect(netQty(product.id)).toBe(0);
+      await transactions.deleteSalesInvoice("b-1", "u-1", invoice.id);
+      expect(services.salesInvoices.find((row) => row.id === invoice.id)).toBeUndefined();
+      expect(netQty(product.id)).toBe(0);
+    });
+
+    it("rejects cancelling a draft", async () => {
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-DRAFT-C", {
+        asDraft: true,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      });
+      await expect(transactions.cancelSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/Delete the draft/);
+    });
+
+    it("cancels a posted sale and restores stock via reversal", async () => {
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-STK", {
+        items: [{ productId: product.id, quantity: 5, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-CXL", {
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 400 }],
+      });
+      expect(netQty(product.id)).toBe(3);
+      await transactions.cancelSalesInvoice("b-1", "u-1", invoice.id);
+      expect(services.salesInvoices.find((row) => row.id === invoice.id)?.status).toBe("cancelled");
+      expect(netQty(product.id)).toBe(5);
+      expect(services.ledger).toContainEqual(
+        expect.objectContaining({ productId: product.id, change: 2, movementType: "ADJUSTMENT", reason: "reversal" })
+      );
+    });
+
+    it("edits a posted sale by reversing then reapplying stock and payments", async () => {
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-EDIT", {
+        items: [{ productId: product.id, quantity: 10, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-EDIT", {
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 400 }],
+      });
+      expect(netQty(product.id)).toBe(8);
+      const updated = await transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+        items: [{ productId: product.id, quantity: 3, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 600 }],
+      });
+      expect(updated.invoice.invoiceNo).toBe("INV-EDIT");
+      expect(updated.invoice.items[0].quantity).toBe(3);
+      expect(netQty(product.id)).toBe(7);
+      expect(services.payments.filter((p) => p.salesInvoiceId === invoice.id)).toHaveLength(1);
+      expect(services.payments.find((p) => p.salesInvoiceId === invoice.id)?.amount).toBe(600);
+    });
+
+    it("blocks deleting a posted document when allowDeletePosted is off", async () => {
+      await setControl({ allowDeletePosted: false });
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-KEEP", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      await expect(transactions.deleteSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/cannot be deleted/);
+    });
+
+    it("blocks editing a locked document without an override reason", async () => {
+      await setControl({ lockEnabled: true, lockAfterDays: 1, allowOverrideLock: true });
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-LOCK", {
+        invoiceDate: shiftIsoDate(-8),
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      await expect(
+        transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+          invoiceDate: invoice.invoiceDate,
+          items: [{ productId: product.id, quantity: 1, unitPrice: 180, gstRate: 18 }],
+          payments: [{ mode: "cash", amount: 212.4 }],
+        })
+      ).rejects.toThrow(/override reason/);
+    });
+
+    it("allows a lock override with reason and writes audit metadata", async () => {
+      await setControl({ lockEnabled: true, lockAfterDays: 1, allowOverrideLock: true, allowEditPosted: true });
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-LOCK", {
+        items: [{ productId: product.id, quantity: 5, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-OVR", {
+        invoiceDate: shiftIsoDate(-8),
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 200 }],
+      });
+      await transactions.updateSalesInvoice(
+        "b-1",
+        "u-1",
+        invoice.id,
+        {
+          invoiceDate: invoice.invoiceDate,
+          items: [{ productId: product.id, quantity: 1, unitPrice: 180, gstRate: 0 }],
+          payments: [{ mode: "cash", amount: 180 }],
+        },
+        { overrideLock: true, overrideReason: "year-end correction" }
+      );
+      expect(services.auditLogs.some((log) => log.action === "invoice.updated" && log.metadata.overrideLock === true)).toBe(true);
+    });
+
+    it("blocks sales without edit permission", async () => {
+      services.memberPermissions.splice(0, services.memberPermissions.length, "sales.view");
+      const product = await seedProduct();
+      await expect(
+        transactions.createSalesInvoice("b-1", "u-1", "INV-PERM", {
+          items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+          payments: [{ mode: "cash", amount: 236 }],
+        })
+      ).rejects.toThrow(/permission/);
+    });
+
+    it("blocks deleting a sale that already has a return", async () => {
+      await setControl({ allowDeletePosted: true });
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-RET", {
+        items: [{ productId: product.id, quantity: 5, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-RET", {
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 400 }],
+      });
+      await transactions.createSalesReturn("b-1", "u-1", "SRT-RET", {
+        salesInvoiceId: invoice.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200 }],
+      });
+      await expect(transactions.deleteSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/sales returns/);
+    });
+
+    it("blocks reversing a purchase whose stock was already sold", async () => {
+      await setControl({ allowDeletePosted: true });
+      const product = await seedProduct();
+      const bill = await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-USED", {
+        items: [{ productId: product.id, quantity: 2, unitPrice: 100, gstRate: 0 }],
+      });
+      await transactions.createSalesInvoice("b-1", "u-1", "INV-USED", {
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 0 }],
+        payments: [{ mode: "cash", amount: 400 }],
+      });
+      await expect(transactions.deletePurchaseInvoice("b-1", "u-1", bill.id)).rejects.toThrow(/already been used/);
+    });
+
+    it("keeps remaining a draft on update only when the existing document is a draft", async () => {
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "INV-STAY", {
+        asDraft: true,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      });
+      const stillDraft = await transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+        asDraft: true,
+        items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 18 }],
+      });
+      expect(stillDraft.invoice.status).toBe("draft");
+      expect(netQty(product.id)).toBe(0);
+      const completed = await transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+        asDraft: false,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      expect(completed.invoice.status).not.toBe("draft");
+      expect(netQty(product.id)).toBe(-1);
+    });
   });
 });

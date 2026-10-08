@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CheckCircle2, FileText, Plus, Printer, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, FileText, Pencil, Plus, Trash2, XCircle } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -27,9 +27,14 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
-import { printSalesInvoice } from "@/lib/invoice-print";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { customerContact, paymentReceiptPrintModel, salesInvoicePrintModel } from "@/lib/document-print-models";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
+import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { ProductWithStock, SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
+import type { SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
 
 const STATUS_VARIANTS: Record<SalesInvoiceStatus, "success" | "info" | "warning" | "destructive" | "secondary"> = {
   draft: "secondary",
@@ -50,7 +55,7 @@ export default function SalesInvoicesPage() {
   const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [search, setSearch] = React.useState("");
   const [detail, setDetail] = React.useState<SalesInvoice | null>(null);
   const [paying, setPaying] = React.useState<SalesInvoice | null>(null);
@@ -58,6 +63,8 @@ export default function SalesInvoicesPage() {
   const [payMode, setPayMode] = React.useState("cash");
   const [paySaving, setPaySaving] = React.useState(false);
   const [completingId, setCompletingId] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<SalesInvoice | null>(null);
+  const [deleteSaving, setDeleteSaving] = React.useState(false);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["sales-invoices", business?.id],
@@ -113,6 +120,15 @@ export default function SalesInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: documentControl } = useQuery({
+    queryKey: ["document-control", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getDocumentControlDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -142,10 +158,13 @@ export default function SalesInvoicesPage() {
 
   const openCreate = () => router.push("/sales/invoices/new");
 
-  const cancelInvoice = async (invoice: SalesInvoice) => {
+  const cancelInvoice = async (invoice: SalesInvoice, overrideReason?: string) => {
     if (!business || !user) return;
     try {
-      await getClientServices().transactions.cancelSalesInvoice(business.id, user.id, invoice.id);
+      await getClientServices().transactions.cancelSalesInvoice(business.id, user.id, invoice.id, {
+        overrideLock: Boolean(overrideReason),
+        overrideReason,
+      });
       toastSuccess(
         "Invoice cancelled",
         invoice.status === "draft"
@@ -160,6 +179,30 @@ export default function SalesInvoicesPage() {
       toastError("Could not cancel invoice", normalizeError(err).userMessage);
     }
   };
+
+  const deleteInvoice = async (invoice: SalesInvoice, overrideReason?: string) => {
+    if (!business || !user) return;
+    setDeleteSaving(true);
+    try {
+      await getClientServices().transactions.deleteSalesInvoice(business.id, user.id, invoice.id, {
+        overrideLock: Boolean(overrideReason),
+        overrideReason,
+      });
+      toastSuccess("Invoice deleted", `${invoice.invoiceNo} was deleted.`);
+      setDeleting(null);
+      setDetail(null);
+      await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch (err) {
+      toastError("Could not delete invoice", normalizeError(err).userMessage);
+    } finally {
+      setDeleteSaving(false);
+    }
+  };
+
+  const invoiceLocked = (invoice: SalesInvoice) =>
+    documentIsLocked(documentControl ?? DEFAULT_DOCUMENT_CONTROL, invoice.invoiceDate, invoice.status);
 
   const completeDraft = async (invoice: SalesInvoice) => {
     if (!business || !user) return;
@@ -202,6 +245,40 @@ export default function SalesInvoicesPage() {
         mode: payMode,
       });
       toastSuccess("Payment recorded", "The customer payment was recorded.");
+      const customer = paying.customerId
+        ? customers?.find((item) => item.id === paying.customerId)
+        : null;
+      const receipt = paymentReceiptPrintModel(
+        {
+          id: paying.id,
+          businessId: paying.businessId,
+          direction: "in",
+          partyType: "customer",
+          partyId: paying.customerId,
+          salesInvoiceId: paying.id,
+          purchaseInvoiceId: null,
+          amount,
+          mode: payMode,
+          reference: paying.invoiceNo,
+          paymentDate: new Date().toISOString().slice(0, 10),
+          notes: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          partyLabel: partyLabel(paying),
+          ...customerContact(customer),
+          referenceNo: paying.invoiceNo,
+        }
+      );
+      const auto = autoOutputDocument(
+        business,
+        invoiceDefaults ?? DEFAULT_INVOICE,
+        receipt,
+        business.currency ?? "INR"
+      );
+      if (!auto.ok && auto.reason === "blocked") {
+        toastInfo("Print Invoice", "Payment saved. Click Print on the invoice if the browser blocked the receipt.");
+      }
       setPaying(null);
       await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["payments"] });
@@ -213,55 +290,22 @@ export default function SalesInvoicesPage() {
     }
   };
 
-  const printInvoice = (invoice: SalesInvoice) => {
-    if (!business) return;
-    const productById = new Map((products ?? []).map((product: ProductWithStock) => [product.id, product]));
-    printSalesInvoice(
-      business,
-      invoiceDefaults ?? {
-        showLogo: true,
-        showGstin: true,
-        showHsn: false,
-        showBankDetails: false,
-        bankDetails: "",
-        termsAndConditions: "",
-        footerNote: "",
-        paperSize: "a4",
-      },
-      {
-        invoiceNo: invoice.invoiceNo,
-        invoiceDate: invoice.invoiceDate,
-        partyLabel: partyLabel(invoice),
-        partyGstin: invoice.customerId
-          ? customers?.find((customer) => customer.id === invoice.customerId)?.gstin ?? null
-          : null,
-        notes: invoice.notes,
-        paymentMode: invoice.paymentMode,
-        paidAmount: invoice.paidAmount,
-        lines: invoice.items.map((item) => ({
-          name: productById.get(item.productId)?.name ?? item.productId,
-          hsn: productById.get(item.productId)?.hsn ?? null,
-          quantity: item.quantity,
-          unit: item.saleUnit,
-          unitPrice: item.unitPrice,
-          discount: item.discount,
-          gstRate: item.gstRate,
-          amount: item.amount,
-        })),
-        subtotal: invoice.subtotal,
-        discount: invoice.discount,
-        taxTotal: invoice.taxTotal,
-        total: invoice.total,
-      },
-      business.currency ?? "INR"
-    );
-  };
-
   const partyLabel = (invoice: SalesInvoice) => {
     if (invoice.customerId) {
       return customers?.find((c) => c.id === invoice.customerId)?.name ?? "Customer";
     }
     return walkInNameFromNotes(invoice.notes) ?? "Walk-in customer";
+  };
+
+  const invoiceModel = (invoice: SalesInvoice) => {
+    const customer = invoice.customerId
+      ? customers?.find((item) => item.id === invoice.customerId)
+      : null;
+    return salesInvoicePrintModel(invoice, {
+      partyLabel: partyLabel(invoice),
+      ...customerContact(customer),
+      products,
+    });
   };
 
   return (
@@ -346,10 +390,30 @@ export default function SalesInvoicesPage() {
                             Pay
                           </Button>
                         ) : null}
-                        <Button variant="outline" size="sm" onClick={() => printInvoice(invoice)}>
-                          <Printer className="size-4" />
-                          Print
-                        </Button>
+                        {invoice.status !== "cancelled" && invoice.status !== "returned" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => router.push(`/sales/invoices/${invoice.id}/edit`)}
+                          >
+                            <Pencil className="size-4" />
+                            Edit
+                          </Button>
+                        ) : null}
+                        {invoice.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+                          <Button variant="outline" size="sm" onClick={() => setDeleting(invoice)}>
+                            <Trash2 className="size-4" />
+                            Delete
+                          </Button>
+                        ) : null}
+                        {business ? (
+                          <DocumentPrintActions
+                            business={business}
+                            defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                            model={invoiceModel(invoice)}
+                            currency={business.currency ?? "INR"}
+                          />
+                        ) : null}
                         <Button variant="outline" size="sm" onClick={() => setDetail(invoice)}>
                           View
                         </Button>
@@ -375,9 +439,20 @@ export default function SalesInvoicesPage() {
               <Button variant="outline" onClick={() => setDetail(null)}>
                 Close
               </Button>
-              <Button variant="outline" onClick={() => printInvoice(detail)}>
-                <Printer className="size-4" />
-                Print
+              {business ? (
+                <DocumentPrintActions
+                  business={business}
+                  defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                  model={invoiceModel(detail)}
+                  currency={business.currency ?? "INR"}
+                />
+              ) : null}
+              <Button
+                variant="outline"
+                onClick={() => router.push(`/sales/invoices/${detail.id}/edit`)}
+              >
+                <Pencil className="size-4" />
+                Edit
               </Button>
               {detail.status === "draft" ? (
                 <Button
@@ -393,10 +468,18 @@ export default function SalesInvoicesPage() {
                   Record payment
                 </Button>
               ) : null}
-              <Button variant="destructive" onClick={() => void cancelInvoice(detail)}>
-                <XCircle className="size-4" />
-                Cancel invoice
-              </Button>
+              {detail.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+                <Button variant="outline" onClick={() => setDeleting(detail)}>
+                  <Trash2 className="size-4" />
+                  Delete
+                </Button>
+              ) : null}
+              {detail.status !== "draft" ? (
+                <Button variant="destructive" onClick={() => void cancelInvoice(detail)}>
+                  <XCircle className="size-4" />
+                  Cancel invoice
+                </Button>
+              ) : null}
             </>
           ) : (
             <Button variant="outline" onClick={() => setDetail(null)}>
@@ -467,6 +550,24 @@ export default function SalesInvoicesPage() {
           </div>
         ) : null}
       </Modal>
+
+      <DocumentConfirmModal
+        open={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        title={deleting ? `Delete ${deleting.invoiceNo}?` : "Delete invoice"}
+        description={
+          deleting?.status === "draft"
+            ? "This draft will be removed. The invoice number will not be reused."
+            : "Posted stock and payments will be reversed. The invoice number will not be reused."
+        }
+        confirmLabel="Delete"
+        destructive
+        reasonRequired={Boolean(deleting && invoiceLocked(deleting))}
+        loading={deleteSaving}
+        onConfirm={async (reason) => {
+          if (deleting) await deleteInvoice(deleting, reason || undefined);
+        }}
+      />
     </div>
   );
 }

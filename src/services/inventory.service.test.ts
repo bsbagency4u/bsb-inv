@@ -116,6 +116,7 @@ function memoryRepositories() {
           lastMovementAt: null,
         }));
       },
+      async listMovementsByReference() { return []; },
       async listMovements() {
         return ledger.map((entry, index) => ({
           id: `mv-${index}`,
@@ -192,7 +193,9 @@ function memoryRepositories() {
       async listSalesInvoices() { return []; },
       async getSalesInvoice() { return null; },
       async createSalesInvoice() { throw new Error("not used"); },
+      async updateSalesInvoice() { throw new Error("not used"); },
       async updateSalesInvoiceStatus() {},
+      async deleteSalesInvoice() {},
       async listPurchaseOrders() { return []; },
       async getPurchaseOrder() { return null; },
       async createPurchaseOrder() { throw new Error("not used"); },
@@ -200,9 +203,12 @@ function memoryRepositories() {
       async listPurchaseInvoices() { return []; },
       async getPurchaseInvoice() { return null; },
       async createPurchaseInvoice() { throw new Error("not used"); },
+      async updatePurchaseInvoice() { throw new Error("not used"); },
       async updatePurchaseInvoiceStatus() {},
+      async deletePurchaseInvoice() {},
       async listPayments() { return []; },
       async createPayment() { throw new Error("not used"); },
+      async deletePaymentsForDocument() {},
       async listPaymentModes() { return []; },
       async createPaymentMode() { throw new Error("not used"); },
       async updatePaymentMode() { throw new Error("not used"); },

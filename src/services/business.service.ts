@@ -7,20 +7,29 @@ import {
   purchaseDefaultsSchema,
   salesDefaultsSchema,
   taxDefaultsSchema,
+  documentControlDefaultsSchema,
   type BusinessProfileValues,
   type InvoiceDefaultsValues,
   type InvoiceNumberingValues,
   type PurchaseDefaultsValues,
   type SalesDefaultsValues,
   type TaxDefaultsValues,
+  type DocumentControlDefaultsValues,
 } from "@/lib/validation/schemas";
 import type {
   BusinessProfile,
+  DocumentControlDefaults,
   InvoiceDefaults,
   PurchaseDefaults,
   SalesDefaults,
   TaxDefaults,
 } from "@/types/domain";
+import { DEFAULT_INVOICE, parseInvoiceDefaults } from "@/lib/invoice-settings";
+import {
+  DEFAULT_DOCUMENT_CONTROL,
+  DOCUMENT_CONTROL_KEY,
+  parseDocumentControlDefaults,
+} from "@/lib/document-control";
 import { readStorage, writeStorage } from "@/repositories/local/local-data";
 import type { AuditService } from "./audit.service";
 import { AuthorizationService } from "./authorization.service";
@@ -47,16 +56,7 @@ export const DEFAULT_TAX: TaxDefaults = {
   pricesIncludeTax: false,
 };
 
-export const DEFAULT_INVOICE: InvoiceDefaults = {
-  showLogo: true,
-  showGstin: true,
-  showHsn: false,
-  showBankDetails: false,
-  bankDetails: "",
-  termsAndConditions: "",
-  footerNote: "",
-  paperSize: "a4",
-};
+export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL };
 
 const SALES_KEY = "sales.defaults";
 const PURCHASE_KEY = "purchase.defaults";
@@ -338,18 +338,7 @@ export class BusinessService {
 
   async getInvoiceDefaults(businessId: string): Promise<InvoiceDefaults> {
     const stored = await this.repos.businesses.getSetting(businessId, INVOICE_KEY);
-    if (!stored || typeof stored !== "object") return { ...DEFAULT_INVOICE };
-    const value = stored as Partial<InvoiceDefaults>;
-    return {
-      showLogo: value.showLogo ?? DEFAULT_INVOICE.showLogo,
-      showGstin: value.showGstin ?? DEFAULT_INVOICE.showGstin,
-      showHsn: value.showHsn ?? DEFAULT_INVOICE.showHsn,
-      showBankDetails: value.showBankDetails ?? DEFAULT_INVOICE.showBankDetails,
-      bankDetails: value.bankDetails ?? DEFAULT_INVOICE.bankDetails,
-      termsAndConditions: value.termsAndConditions ?? DEFAULT_INVOICE.termsAndConditions,
-      footerNote: value.footerNote ?? DEFAULT_INVOICE.footerNote,
-      paperSize: value.paperSize ?? DEFAULT_INVOICE.paperSize,
-    };
+    return parseInvoiceDefaults(stored);
   }
 
   async updateInvoiceDefaults(
@@ -365,16 +354,14 @@ export class BusinessService {
         parsed.error.flatten().fieldErrors
       );
     }
-    const value: InvoiceDefaults = {
-      showLogo: parsed.data.showLogo,
-      showGstin: parsed.data.showGstin,
-      showHsn: parsed.data.showHsn,
-      showBankDetails: parsed.data.showBankDetails,
+    const value = parseInvoiceDefaults({
+      ...parsed.data,
       bankDetails: parsed.data.bankDetails || "",
       termsAndConditions: parsed.data.termsAndConditions || "",
       footerNote: parsed.data.footerNote || "",
-      paperSize: parsed.data.paperSize,
-    };
+      signatureLabel: parsed.data.signatureLabel || DEFAULT_INVOICE.signatureLabel,
+      messageTemplate: parsed.data.messageTemplate || DEFAULT_INVOICE.messageTemplate,
+    });
     await this.repos.businesses.setSetting(businessId, INVOICE_KEY, value, userId);
     await this.audits.log({
       businessId,
@@ -417,5 +404,36 @@ export class BusinessService {
       },
     });
     return business;
+  }
+
+  async getDocumentControlDefaults(businessId: string): Promise<DocumentControlDefaults> {
+    const stored = await this.repos.businesses.getSetting(businessId, DOCUMENT_CONTROL_KEY);
+    return parseDocumentControlDefaults(stored);
+  }
+
+  async updateDocumentControlDefaults(
+    userId: string,
+    businessId: string,
+    input: DocumentControlDefaultsValues
+  ): Promise<DocumentControlDefaults> {
+    await this.auth.requirePermission(businessId, userId, "settings.manage");
+    const parsed = documentControlDefaultsSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(
+        "Please fix the highlighted fields.",
+        parsed.error.flatten().fieldErrors
+      );
+    }
+    const value = parseDocumentControlDefaults(parsed.data);
+    await this.repos.businesses.setSetting(businessId, DOCUMENT_CONTROL_KEY, value, userId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "settings.document_control.updated",
+      entityType: "business_settings",
+      entityId: businessId,
+      metadata: value as unknown as Record<string, unknown>,
+    });
+    return value;
   }
 }

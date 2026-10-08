@@ -133,6 +133,7 @@ export interface ProductRepository {
   listStock(businessId: string): Promise<ProductStock[]>;
   listBalances(businessId: string, productId?: string): Promise<StockBalance[]>;
   listMovements(businessId: string, productId?: string, limit?: number): Promise<StockMovement[]>;
+  listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]>;
   addStockMovement(input: StockMovementInput): Promise<void>;
   listVariants(businessId: string, productId?: string): Promise<ProductVariant[]>;
   createVariant(businessId: string, input: { productId: string; sku?: string | null; barcode?: string | null; attributes?: Record<string, string | number | boolean | null>; salePrice?: number | null; purchasePrice?: number | null; mrp?: number | null }): Promise<ProductVariant>;
@@ -480,6 +481,17 @@ export class SupabaseProductRepository implements ProductRepository {
       .limit(limit);
     if (productId) query = query.eq("product_id", productId);
     const { data, error } = await query;
+    if (error) throw error;
+    return (data ?? []).map(mapStockMovement);
+  }
+
+  async listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]> {
+    const { data, error } = await this.client
+      .from("stock_ledger")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("reference_id", referenceId)
+      .order("created_at", { ascending: true });
     if (error) throw error;
     return (data ?? []).map(mapStockMovement);
   }

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CheckCircle2, Plus, Receipt } from "lucide-react";
+import { Banknote, CheckCircle2, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -27,6 +27,12 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { paymentReceiptPrintModel, purchaseInvoicePrintModel, supplierContact } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
+import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { PurchaseInvoice } from "@/types/domain";
 
@@ -41,13 +47,15 @@ export default function PurchaseInvoicesPage() {
   const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [search, setSearch] = React.useState("");
   const [paying, setPaying] = React.useState<PurchaseInvoice | null>(null);
   const [payAmount, setPayAmount] = React.useState("");
   const [payMode, setPayMode] = React.useState("cash");
   const [paySaving, setPaySaving] = React.useState(false);
   const [completingId, setCompletingId] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<PurchaseInvoice | null>(null);
+  const [deleteSaving, setDeleteSaving] = React.useState(false);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-invoices", business?.id],
@@ -85,6 +93,33 @@ export default function PurchaseInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: products } = useQuery({
+    queryKey: ["products-with-stock", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().products.listProductsWithStock(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: documentControl } = useQuery({
+    queryKey: ["document-control", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getDocumentControlDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -106,6 +141,29 @@ export default function PurchaseInvoicesPage() {
   }
 
   const openCreate = () => router.push("/purchase/invoices/new");
+
+  const invoiceLocked = (invoice: PurchaseInvoice) =>
+    documentIsLocked(documentControl ?? DEFAULT_DOCUMENT_CONTROL, invoice.invoiceDate, invoice.status);
+
+  const deleteInvoice = async (invoice: PurchaseInvoice, overrideReason?: string) => {
+    if (!business || !user) return;
+    setDeleteSaving(true);
+    try {
+      await getClientServices().transactions.deletePurchaseInvoice(business.id, user.id, invoice.id, {
+        overrideLock: Boolean(overrideReason),
+        overrideReason,
+      });
+      toastSuccess("Bill deleted", `${invoice.billNo} was deleted.`);
+      setDeleting(null);
+      await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch (err) {
+      toastError("Could not delete bill", normalizeError(err).userMessage);
+    } finally {
+      setDeleteSaving(false);
+    }
+  };
 
   const openPay = (invoice: PurchaseInvoice) => {
     setPaying(invoice);
@@ -152,6 +210,40 @@ export default function PurchaseInvoicesPage() {
         mode: payMode,
       });
       toastSuccess("Payment recorded", "The supplier payment was recorded.");
+      const supplier = paying.supplierId
+        ? suppliers?.find((item) => item.id === paying.supplierId)
+        : null;
+      const receipt = paymentReceiptPrintModel(
+        {
+          id: paying.id,
+          businessId: paying.businessId,
+          direction: "out",
+          partyType: "supplier",
+          partyId: paying.supplierId,
+          salesInvoiceId: null,
+          purchaseInvoiceId: paying.id,
+          amount,
+          mode: payMode,
+          reference: paying.billNo,
+          paymentDate: new Date().toISOString().slice(0, 10),
+          notes: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          partyLabel: supplier?.name ?? "Supplier",
+          ...supplierContact(supplier),
+          referenceNo: paying.billNo,
+        }
+      );
+      const auto = autoOutputDocument(
+        business,
+        invoiceDefaults ?? DEFAULT_INVOICE,
+        receipt,
+        business.currency ?? "INR"
+      );
+      if (!auto.ok && auto.reason === "blocked") {
+        toastInfo("Print Invoice", "Payment saved. Click Print on the bill if the browser blocked the receipt.");
+      }
       setPaying(null);
       await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["payments"] });
@@ -248,11 +340,39 @@ export default function PurchaseInvoicesPage() {
                             Receive
                           </Button>
                         ) : null}
-                        {invoice.status !== "paid" && invoice.status !== "draft" ? (
+                        {invoice.status !== "paid" && invoice.status !== "draft" && invoice.status !== "cancelled" ? (
                           <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
                             <Banknote className="size-4" />
                             Pay
                           </Button>
+                        ) : null}
+                        {invoice.status !== "cancelled" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => router.push(`/purchase/invoices/${invoice.id}/edit`)}
+                          >
+                            <Pencil className="size-4" />
+                            Edit
+                          </Button>
+                        ) : null}
+                        {invoice.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+                          <Button variant="outline" size="sm" onClick={() => setDeleting(invoice)}>
+                            <Trash2 className="size-4" />
+                            Delete
+                          </Button>
+                        ) : null}
+                        {business ? (
+                          <DocumentPrintActions
+                            business={business}
+                            defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                            model={purchaseInvoicePrintModel(invoice, {
+                              partyLabel: suppliers?.find((s) => s.id === invoice.supplierId)?.name ?? "Supplier",
+                              ...supplierContact(suppliers?.find((s) => s.id === invoice.supplierId)),
+                              products,
+                            })}
+                            currency={business.currency ?? "INR"}
+                          />
                         ) : null}
                       </div>
                     </TableCell>
@@ -321,6 +441,24 @@ export default function PurchaseInvoicesPage() {
           </div>
         ) : null}
       </Modal>
+
+      <DocumentConfirmModal
+        open={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        title={deleting ? `Delete ${deleting.billNo}?` : "Delete bill"}
+        description={
+          deleting?.status === "draft"
+            ? "This draft will be removed. The bill number will not be reused."
+            : "Posted stock and payments will be reversed. The bill number will not be reused."
+        }
+        confirmLabel="Delete"
+        destructive
+        reasonRequired={Boolean(deleting && invoiceLocked(deleting))}
+        loading={deleteSaving}
+        onConfirm={async (reason) => {
+          if (deleting) await deleteInvoice(deleting, reason || undefined);
+        }}
+      />
     </div>
   );
 }

@@ -322,6 +322,13 @@ export class LocalProductRepository implements ProductRepository {
       .map((entry) => ({ ...entry, id: entry.id }));
   }
 
+  async listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]> {
+    return this.readLedger()
+      .filter((entry) => entry.businessId === businessId && entry.referenceId === referenceId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((entry) => ({ ...entry, id: entry.id }));
+  }
+
   async addStockMovement(input: StockMovementInput): Promise<void> {
     const ledger = this.readLedger();
     ledger.push({

@@ -130,6 +130,7 @@ function createMemoryRepositories(): Repositories {
       async addStockMovement() {},
       async listBalances() { return []; },
       async listMovements() { return []; },
+      async listMovementsByReference() { return []; },
       async listVariants() { return []; },
       async createVariant() { throw new Error("not used in test"); },
       async updateVariant() { throw new Error("not used in test"); },
@@ -176,7 +177,9 @@ function createMemoryRepositories(): Repositories {
       async listSalesInvoices() { return []; },
       async getSalesInvoice() { return null; },
       async createSalesInvoice() { throw new Error("not used in test"); },
+      async updateSalesInvoice() { throw new Error("not used in test"); },
       async updateSalesInvoiceStatus() {},
+      async deleteSalesInvoice() {},
       async listPurchaseOrders() { return []; },
       async getPurchaseOrder() { return null; },
       async createPurchaseOrder() { throw new Error("not used in test"); },
@@ -184,9 +187,12 @@ function createMemoryRepositories(): Repositories {
       async listPurchaseInvoices() { return []; },
       async getPurchaseInvoice() { return null; },
       async createPurchaseInvoice() { throw new Error("not used in test"); },
+      async updatePurchaseInvoice() { throw new Error("not used in test"); },
       async updatePurchaseInvoiceStatus() {},
+      async deletePurchaseInvoice() {},
       async listPayments() { return []; },
       async createPayment() { throw new Error("not used"); },
+      async deletePaymentsForDocument() {},
       async listPaymentModes() { return []; },
       async createPaymentMode() { throw new Error("not used"); },
       async updatePaymentMode() { throw new Error("not used"); },
@@ -385,6 +391,8 @@ describe("BusinessService", () => {
     const invoice = await businesses.getInvoiceDefaults(created.id);
     expect(invoice.showLogo).toBe(true);
     expect(invoice.paperSize).toBe("a4");
+    expect(invoice.copies).toBe(1);
+    expect(invoice.documentTypes.sales_invoice.enabled).toBe(true);
   });
 
   it("persists invoice layout defaults", async () => {
@@ -406,7 +414,37 @@ describe("BusinessService", () => {
     });
     expect(invoice.paperSize).toBe("thermal");
     expect(invoice.showHsn).toBe(true);
+    expect(invoice.autoPrintOnSave).toBe(true);
     expect(await businesses.getInvoiceDefaults(created.id)).toEqual(invoice);
+  });
+
+  it("keeps print settings isolated per business", async () => {
+    const first = await businesses.createBusiness("u-1", {
+      name: "Store A",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    const second = await businesses.createBusiness("u-1", {
+      name: "Store B",
+      type: "retail",
+      country: "India",
+      currency: "INR",
+    });
+    await businesses.updateInvoiceDefaults("u-1", first.id, {
+      showLogo: true,
+      showGstin: true,
+      showHsn: false,
+      showBankDetails: false,
+      bankDetails: "",
+      termsAndConditions: "",
+      footerNote: "",
+      paperSize: "thermal",
+      copies: 2,
+    });
+    const other = await businesses.getInvoiceDefaults(second.id);
+    expect(other.paperSize).toBe("a4");
+    expect(other.copies).toBe(1);
   });
 
   it("updates invoice numbering on the business profile", async () => {

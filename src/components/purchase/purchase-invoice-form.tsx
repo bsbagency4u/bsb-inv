@@ -45,11 +45,16 @@ import {
   rateBasisOptions,
   resolvePurchaseUnitKind,
   resolveRateBasis,
+  unitKindFromSaleUnit,
   type RateBasis,
   type UnitKind,
 } from "@/lib/packaging";
 import type { PartyValues } from "@/lib/validation/schemas";
-import type { ProductVariant, ProductWithStock, Supplier } from "@/types/domain";
+import type { ProductVariant, ProductWithStock, PurchaseInvoice, Supplier } from "@/types/domain";
+import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
+import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
+import { autoOutputDocument, printDocument, type PrintDocumentModel } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
 
 interface PurchaseLine {
   key: string;
@@ -94,11 +99,11 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function PurchaseInvoiceForm() {
+export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) {
   const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
 
   const [supplierId, setSupplierId] = React.useState<string | null>(null);
   const [invoiceDate, setInvoiceDate] = React.useState(() => new Date().toISOString().slice(0, 10));
@@ -112,6 +117,10 @@ export function PurchaseInvoiceForm() {
   const [barcodeQuery, setBarcodeQuery] = React.useState("");
   const [attachmentNames, setAttachmentNames] = React.useState<string[]>([]);
   const [saving, setSaving] = React.useState<"draft" | "complete" | null>(null);
+  const [existingInvoice, setExistingInvoice] = React.useState<PurchaseInvoice | null>(null);
+  const [hydrated, setHydrated] = React.useState(!invoiceId);
+  const [lockReasonOpen, setLockReasonOpen] = React.useState(false);
+  const [pendingDraft, setPendingDraft] = React.useState(false);
   const [vendorInvoiceNo, setVendorInvoiceNo] = React.useState("");
   const [reverseCharge, setReverseCharge] = React.useState(false);
   const [placeOfSupplyOverride, setPlaceOfSupplyOverride] = React.useState<string | null>(null);
@@ -215,6 +224,33 @@ export function PurchaseInvoiceForm() {
     enabled: Boolean(business),
   });
 
+  const { data: loadedInvoice, isLoading: invoiceLoading } = useQuery({
+    queryKey: ["purchase-invoice", business?.id, invoiceId],
+    queryFn: async () => {
+      if (!business || !invoiceId) throw new Error("No invoice.");
+      return getClientServices().transactions.getPurchaseInvoice(business.id, invoiceId);
+    },
+    enabled: Boolean(business && invoiceId),
+  });
+
+  const { data: documentControl } = useQuery({
+    queryKey: ["document-control", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getDocumentControlDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: productBatches } = useQuery({
+    queryKey: ["product-batches", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().products.listBatches(business.id);
+    },
+    enabled: Boolean(business && invoiceId),
+  });
+
   const warehouseId = warehouseOverride ?? purchaseDefaults?.defaultWarehouseId ?? "";
   const notes = notesOverride === undefined ? (purchaseDefaults?.defaultPaymentTerms || null) : notesOverride;
   const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? taxDefaults?.defaultIntraState ?? true;
@@ -244,6 +280,40 @@ export function PurchaseInvoiceForm() {
     }
     return map;
   }, [variants]);
+
+  if (invoiceId && loadedInvoice && !hydrated && products && productBatches) {
+    setExistingInvoice(loadedInvoice);
+    setSupplierId(loadedInvoice.supplierId);
+    setInvoiceDate(loadedInvoice.invoiceDate.slice(0, 10));
+    setDueDate(loadedInvoice.dueDate?.slice(0, 10) ?? "");
+    setDiscount(String(loadedInvoice.discount ?? 0));
+    setNotesOverride(loadedInvoice.notes);
+    const vendorMatch = loadedInvoice.notes?.match(/^Vendor invoice:\s*(.+)$/m);
+    if (vendorMatch?.[1]) setVendorInvoiceNo(vendorMatch[1].trim());
+    if (loadedInvoice.paidAmount > 0) setPaidAmount(String(loadedInvoice.paidAmount));
+    setLines(
+      loadedInvoice.items.map((item) => {
+        const product = products.find((row) => row.id === item.productId);
+        const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+        const batch = productBatches.find((row) => row.id === item.batchId);
+        return {
+          key: newLineKey(),
+          productId: item.productId,
+          variantId: item.variantId ?? null,
+          quantity: item.quantity,
+          unitKind: unitKindFromSaleUnit(item.saleUnit, packaging),
+          rateBasis: item.saleUnit && packaging.packUnit && item.saleUnit.toUpperCase() === packaging.packUnit.toUpperCase() ? "pack" : "base",
+          unitPrice: item.unitPrice,
+          gstRate: item.gstRate,
+          discount: item.discount ?? 0,
+          batchNo: batch?.batchNo ?? "",
+          expiryDate: batch?.expiryDate?.slice(0, 10) ?? "",
+          mrp: batch?.mrp != null ? String(batch.mrp) : "",
+        };
+      })
+    );
+    setHydrated(true);
+  }
 
   const taxRateOptions = React.useMemo(() => {
     const rates = new Set<number>(GST_RATE_OPTIONS);
@@ -292,6 +362,51 @@ export function PurchaseInvoiceForm() {
   const amountPaid = splitPayment ? splitPaid : simplePaid;
   const balance = Math.max(0, amountToPay - amountPaid);
   const paymentStatus = amountPaid <= 0 ? "Credit / Unpaid" : amountPaid >= amountToPay && amountToPay > 0 ? "Paid" : "Partially paid";
+
+  const billPrintModel = (billNo?: string): PrintDocumentModel => ({
+    kind: "purchase_invoice",
+    docNo: billNo || "Preview",
+    docDate: invoiceDate,
+    partyLabel: supplier?.name ?? "Supplier",
+    partyGstin: supplier?.gstin ?? null,
+    partyPhone: supplier?.phone ?? null,
+    notes: notes,
+    paymentMode,
+    paidAmount: amountPaid,
+    lines: lines.map((line, index) => {
+      const product = productById.get(line.productId);
+      const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+      return {
+        name: product?.name ?? "Item",
+        sku: product?.sku ?? null,
+        hsn: product?.hsn ?? taxDefaults?.defaultHsnCode ?? null,
+        batchNo: line.batchNo.trim() || null,
+        quantity: line.quantity,
+        unit: line.unitKind === "pack" ? packaging.packUnit : packaging.unit,
+        unitPrice: line.unitPrice,
+        discount: line.discount,
+        gstRate: gstEnabled ? line.gstRate : 0,
+        amount: totals.lines[index]?.amount ?? 0,
+        mrp: line.mrp === "" ? null : Number(line.mrp),
+      };
+    }),
+    subtotal: totals.subtotal,
+    discount: totals.discount,
+    taxTotal: totals.taxAmount,
+    total: totals.total,
+    intraState,
+    cgst: totals.cgst,
+    sgst: totals.sgst,
+    igst: totals.igst,
+  });
+
+  const printBill = (billNo?: string) => {
+    if (!business) return;
+    const result = printDocument(business, invoiceDefaults ?? DEFAULT_INVOICE, billPrintModel(billNo), currency);
+    if (!result.ok && result.reason === "blocked") {
+      toastInfo("Print Invoice", "The browser blocked printing. Click Preview again after the bill is saved.");
+    }
+  };
 
   const buildLine = (product: ProductWithStock): PurchaseLine => {
     const productVariants = (variantsByProduct.get(product.id) ?? []).filter((variant) => variant.isActive);
@@ -424,20 +539,20 @@ export function PurchaseInvoiceForm() {
     return amountPaid > 0 ? [{ mode: paymentMode, amount: amountPaid }] : [];
   };
 
-  const saveInvoice = async (asDraft: boolean) => {
+  const billNeedsLockReason = Boolean(
+    existingInvoice &&
+      documentIsLocked(
+        documentControl ?? DEFAULT_DOCUMENT_CONTROL,
+        existingInvoice.invoiceDate,
+        existingInvoice.status
+      )
+  );
+
+  const persistInvoice = async (asDraft: boolean, overrideReason?: string) => {
     if (!business || !user) return;
-    if (lines.length === 0) {
-      toastError("No items", "Add at least one line item to record a bill.");
-      return;
-    }
-    if (!asDraft && amountPaid > amountToPay) {
-      toastError("Invalid payment", "Amount paid cannot exceed the grand total.");
-      return;
-    }
     setSaving(asDraft ? "draft" : "complete");
     try {
       const services = getClientServices();
-      const billNo = await services.transactions.nextDocumentNo(business.id, "BILL", "purchase_invoice");
       const extraNotes = [
         vendorInvoiceNo.trim() ? `Vendor invoice: ${vendorInvoiceNo.trim()}` : null,
         paymentTerms ? `Payment terms: ${paymentTerms}` : null,
@@ -449,7 +564,7 @@ export function PurchaseInvoiceForm() {
       ]
         .filter(Boolean)
         .join("\n");
-      const invoice = await services.transactions.createPurchaseInvoice(business.id, user.id, billNo, {
+      const payload = {
         supplierId,
         warehouseId: warehouseId || purchaseDefaults?.defaultWarehouseId || null,
         invoiceDate,
@@ -471,8 +586,22 @@ export function PurchaseInvoiceForm() {
           expiryDate: line.expiryDate || null,
           mrp: line.mrp === "" ? null : Number(line.mrp),
         })),
-      });
+      };
+      const invoice = existingInvoice
+        ? await services.transactions.updatePurchaseInvoice(business.id, user.id, existingInvoice.id, payload, {
+            overrideLock: Boolean(overrideReason),
+            overrideReason,
+          })
+        : await services.transactions.createPurchaseInvoice(
+            business.id,
+            user.id,
+            await services.transactions.nextControlledDocumentNo(business.id, "purchase_invoice"),
+            payload
+          );
       if (!asDraft) {
+        if (existingInvoice) {
+          await services.transactions.deletePaymentsForDocument(business.id, { purchaseInvoiceId: invoice.id });
+        }
         for (const allocation of paymentAllocations()) {
           await services.transactions.createPayment(business.id, user.id, {
             direction: "out",
@@ -481,15 +610,30 @@ export function PurchaseInvoiceForm() {
             purchaseInvoiceId: invoice.id,
             amount: allocation.amount,
             mode: allocation.mode,
+            overrideLock: Boolean(overrideReason),
+            overrideReason,
           });
         }
       }
       toastSuccess(
-        asDraft ? "Draft saved" : "Purchase recorded",
-        asDraft
-          ? `Bill ${billNo} was saved as a draft. Stock was not updated.`
-          : `Bill ${billNo} was saved and stock updated.`
+        existingInvoice ? "Bill updated" : asDraft ? "Draft saved" : "Purchase recorded",
+        existingInvoice
+          ? `Bill ${invoice.billNo} was updated.`
+          : asDraft
+            ? `Bill ${invoice.billNo} was saved as a draft. Stock was not updated.`
+            : `Bill ${invoice.billNo} was saved and stock updated.`
       );
+      if (!asDraft && !existingInvoice) {
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          billPrintModel(invoice.billNo),
+          currency
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Bill saved. The browser blocked printing. Open the bill and click Print.");
+        }
+      }
       await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
       await queryClient.invalidateQueries({ queryKey: ["payments"] });
@@ -497,10 +641,31 @@ export function PurchaseInvoiceForm() {
       router.push("/purchase/invoices");
     } catch (err) {
       const normalized = normalizeError(err);
-      toastError(asDraft ? "Could not save draft" : "Could not record purchase", normalized.userMessage);
+      toastError(
+        existingInvoice ? "Could not update bill" : asDraft ? "Could not save draft" : "Could not record purchase",
+        normalized.userMessage
+      );
     } finally {
       setSaving(null);
     }
+  };
+
+  const saveInvoice = async (asDraft: boolean) => {
+    if (!business || !user) return;
+    if (lines.length === 0) {
+      toastError("No items", "Add at least one line item to record a bill.");
+      return;
+    }
+    if (!asDraft && amountPaid > amountToPay) {
+      toastError("Invalid payment", "Amount paid cannot exceed the grand total.");
+      return;
+    }
+    if (billNeedsLockReason) {
+      setPendingDraft(asDraft);
+      setLockReasonOpen(true);
+      return;
+    }
+    await persistInvoice(asDraft);
   };
 
   const createSupplierFromBill = async () => {
@@ -547,7 +712,9 @@ export function PurchaseInvoiceForm() {
   };
 
   if (!business) return <LoadingState label="Loading business…" />;
-  if (suppliersLoading) return <LoadingState label="Loading purchase form…" />;
+  if (suppliersLoading || (invoiceId && (invoiceLoading || !hydrated))) {
+    return <LoadingState label="Loading purchase invoice…" />;
+  }
   if (isError) {
     return (
       <ErrorState
@@ -579,22 +746,28 @@ export function PurchaseInvoiceForm() {
   return (
     <div className="pb-28">
       <PageHeader
-        title="New purchase invoice"
-        description="Record a supplier bill. Drafts do not update stock; Save & Receive Goods does."
+        title={existingInvoice ? "Edit purchase invoice" : "New purchase invoice"}
+        description={
+          existingInvoice
+            ? "Posted edits reverse then reapply stock. The bill number does not change."
+            : "Record a supplier bill. Drafts do not update stock; Save & Receive Goods does."
+        }
         actions={
           <>
             <Button variant="outline" className={controlClass} onClick={() => router.push("/purchase/invoices")} disabled={Boolean(saving)}>
               <ArrowLeft className="size-4" />
               Cancel
             </Button>
-            <Button variant="outline" className={controlClass} onClick={() => window.print()} disabled={Boolean(saving) || lines.length === 0}>
+            <Button variant="outline" className={controlClass} onClick={() => printBill(existingInvoice?.billNo)} disabled={Boolean(saving) || lines.length === 0}>
               Preview
             </Button>
-            <Button variant="outline" className={controlClass} onClick={() => void saveInvoice(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
-              Save as draft
-            </Button>
+            {!existingInvoice || existingInvoice.status === "draft" ? (
+              <Button variant="outline" className={controlClass} onClick={() => void saveInvoice(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
+                Save as draft
+              </Button>
+            ) : null}
             <Button className="h-11 min-w-[180px] px-5" onClick={() => void saveInvoice(false)} loading={saving === "complete"} disabled={Boolean(saving)}>
-              Save & Receive Goods
+              {existingInvoice ? "Save changes" : "Save & Receive Goods"}
             </Button>
           </>
         }
@@ -652,11 +825,20 @@ export function PurchaseInvoiceForm() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle>Bill details</CardTitle>
-              <CardDescription>Bill number is assigned from the document sequence when you save.</CardDescription>
+              <CardDescription>
+                {existingInvoice
+                  ? "Bill number stays the same. Document date is saved separately from created time."
+                  : "Bill number is assigned from Document Control numbering when you save."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Field label="Bill number" htmlFor="purchase-bill-no">
-                <Input id="purchase-bill-no" value="Assigned on save" disabled className={controlClass} />
+                <Input
+                  id="purchase-bill-no"
+                  value={existingInvoice?.billNo ?? "Assigned on save"}
+                  disabled
+                  className={controlClass}
+                />
               </Field>
               <Field label="Vendor invoice number" htmlFor="purchase-vendor-no" required>
                 <Input
@@ -1248,7 +1430,7 @@ export function PurchaseInvoiceForm() {
               <Button variant="outline" className={controlClass} onClick={() => void saveInvoice(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
                 Save as draft
               </Button>
-              <Button variant="outline" className={controlClass} onClick={() => window.print()} disabled={Boolean(saving) || lines.length === 0}>
+              <Button variant="outline" className={controlClass} onClick={() => printBill()} disabled={Boolean(saving) || lines.length === 0}>
                 Preview
               </Button>
             </div>
@@ -1360,6 +1542,19 @@ export function PurchaseInvoiceForm() {
           </Field>
         </div>
       </Modal>
+      <DocumentConfirmModal
+        open={lockReasonOpen}
+        onClose={() => setLockReasonOpen(false)}
+        title="Locked period"
+        description="This bill is in a locked period. Enter a reason to override Document Control."
+        confirmLabel="Save with override"
+        reasonRequired
+        loading={Boolean(saving)}
+        onConfirm={async (reason) => {
+          setLockReasonOpen(false);
+          await persistInvoice(pendingDraft, reason);
+        }}
+      />
     </div>
   );
 }

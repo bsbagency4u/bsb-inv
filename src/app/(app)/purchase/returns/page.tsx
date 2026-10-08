@@ -28,6 +28,10 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { purchaseReturnPrintModel, supplierContact } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
 import {
   defaultPurchaseUnitKind,
   packagingFromProduct,
@@ -48,7 +52,7 @@ interface ReturnLine {
 export default function PurchaseReturnsPage() {
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [invoiceId, setInvoiceId] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
@@ -88,6 +92,15 @@ export default function PurchaseReturnsPage() {
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
       return getClientServices().products.listProductsWithStock(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
     },
     enabled: Boolean(business),
   });
@@ -165,9 +178,8 @@ export default function PurchaseReturnsPage() {
     setSaving(true);
     try {
       const services = getClientServices();
-      const returnNo = await services.transactions.nextDocumentNo(
+      const returnNo = await services.transactions.nextControlledDocumentNo(
         business.id,
-        "PRT",
         "purchase_return"
       );
       const result = await services.transactions.createPurchaseReturn(business.id, user.id, returnNo, {
@@ -183,6 +195,24 @@ export default function PurchaseReturnsPage() {
         })),
       });
       toastSuccess("Return recorded", `${result.returnNo} saved and stock updated.`);
+      if (business) {
+        const supplier = result.supplierId
+          ? suppliers?.find((item) => item.id === result.supplierId)
+          : null;
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          purchaseReturnPrintModel(result, {
+            partyLabel: supplier?.name ?? "Supplier",
+            ...supplierContact(supplier),
+            products,
+          }),
+          business.currency ?? "INR"
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Return saved. Click Print if the browser blocked the dialog.");
+        }
+      }
       setCreateOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["purchase-returns"] });
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
@@ -225,6 +255,7 @@ export default function PurchaseReturnsPage() {
                   <TableHead>Supplier</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Reason</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -236,6 +267,21 @@ export default function PurchaseReturnsPage() {
                       suppliers?.find((s) => s.id === item.supplierId)?.name ?? "—"
                     }
                     currency={business?.currency ?? "INR"}
+                    actions={
+                      business ? (
+                        <DocumentPrintActions
+                          business={business}
+                          defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                          model={purchaseReturnPrintModel(item, {
+                            partyLabel:
+                              suppliers?.find((s) => s.id === item.supplierId)?.name ?? "Supplier",
+                            ...supplierContact(suppliers?.find((s) => s.id === item.supplierId)),
+                            products,
+                          })}
+                          currency={business.currency ?? "INR"}
+                        />
+                      ) : null
+                    }
                   />
                 ))}
               </TableBody>
@@ -418,10 +464,12 @@ function PurchaseReturnRow({
   item,
   supplierName,
   currency,
+  actions,
 }: {
   item: PurchaseReturn;
   supplierName: string;
   currency: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <TableRow>
@@ -434,6 +482,7 @@ function PurchaseReturnRow({
       <TableCell>
         <Badge variant="secondary">{item.reason ?? "—"}</Badge>
       </TableCell>
+      <TableCell className="text-right">{actions}</TableCell>
     </TableRow>
   );
 }

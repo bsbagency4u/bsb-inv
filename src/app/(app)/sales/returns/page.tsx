@@ -28,6 +28,11 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { customerContact, salesReturnPrintModel } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import type { SalesReturn } from "@/types/domain";
 import {
   packagingFromProduct,
   resolveUnitKind,
@@ -47,7 +52,7 @@ interface ReturnLine {
 export default function SalesReturnsPage() {
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [invoiceId, setInvoiceId] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
@@ -87,6 +92,15 @@ export default function SalesReturnsPage() {
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
       return getClientServices().products.listProductsWithStock(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
     },
     enabled: Boolean(business),
   });
@@ -159,9 +173,8 @@ export default function SalesReturnsPage() {
     setSaving(true);
     try {
       const services = getClientServices();
-      const returnNo = await services.transactions.nextDocumentNo(
+      const returnNo = await services.transactions.nextControlledDocumentNo(
         business.id,
-        "SRT",
         "sales_return"
       );
       const result = await services.transactions.createSalesReturn(business.id, user.id, returnNo, {
@@ -177,6 +190,24 @@ export default function SalesReturnsPage() {
         })),
       });
       toastSuccess("Return recorded", `${result.returnNo} saved and stock updated.`);
+      if (business) {
+        const customer = result.customerId
+          ? customers?.find((item) => item.id === result.customerId)
+          : null;
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          salesReturnPrintModel(result, {
+            partyLabel: customer?.name ?? "Customer",
+            ...customerContact(customer),
+            products,
+          }),
+          business.currency ?? "INR"
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Return saved. Click Print if the browser blocked the dialog.");
+        }
+      }
       setCreateOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["sales-returns"] });
       await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
@@ -220,10 +251,11 @@ export default function SalesReturnsPage() {
                   <TableHead>Customer</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Reason</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {returns.map((item) => (
+                {returns.map((item: SalesReturn) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-medium text-foreground">{item.returnNo}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{formatDate(item.returnDate)}</TableCell>
@@ -235,6 +267,20 @@ export default function SalesReturnsPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary">{item.reason ?? "—"}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {business ? (
+                        <DocumentPrintActions
+                          business={business}
+                          defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                          model={salesReturnPrintModel(item, {
+                            partyLabel: customers?.find((c) => c.id === item.customerId)?.name ?? "Customer",
+                            ...customerContact(customers?.find((c) => c.id === item.customerId)),
+                            products,
+                          })}
+                          currency={business.currency ?? "INR"}
+                        />
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -376,6 +376,20 @@ export const taxDefaultsSchema = z.object({
 
 export type TaxDefaultsValues = z.infer<typeof taxDefaultsSchema>;
 
+const printDocumentTypeSchema = z.enum([
+  "sales_invoice",
+  "sales_return",
+  "purchase_invoice",
+  "purchase_return",
+  "payment_receipt",
+  "quotation",
+  "delivery_challan",
+]);
+
+const invoiceDocumentTypeSettingSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const invoiceDefaultsSchema = z.object({
   showLogo: z.boolean(),
   showGstin: z.boolean(),
@@ -384,7 +398,37 @@ export const invoiceDefaultsSchema = z.object({
   bankDetails: z.string().trim().max(300).optional().or(z.literal("")),
   termsAndConditions: z.string().trim().max(1000).optional().or(z.literal("")),
   footerNote: z.string().trim().max(200).optional().or(z.literal("")),
-  paperSize: z.enum(["a4", "a5", "thermal"]),
+  paperSize: z.enum(["a4", "a5", "thermal", "custom"]),
+  orientation: z.enum(["portrait", "landscape"]).optional(),
+  customWidthMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 210 : Number(v)))
+    .pipe(z.number().min(40).max(400))
+    .optional(),
+  customHeightMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 297 : Number(v)))
+    .pipe(z.number().min(40).max(600))
+    .optional(),
+  showSku: z.boolean().optional(),
+  showBatch: z.boolean().optional(),
+  showMrp: z.boolean().optional(),
+  showDiscount: z.boolean().optional(),
+  showTaxBreakup: z.boolean().optional(),
+  showPaidBalance: z.boolean().optional(),
+  showNotes: z.boolean().optional(),
+  showSignature: z.boolean().optional(),
+  signatureLabel: z.string().trim().max(80).optional().or(z.literal("")),
+  autoPrintOnSave: z.boolean().optional(),
+  copies: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 1 : Number(v)))
+    .pipe(z.number().int().min(1).max(9))
+    .optional(),
+  defaultOutput: z.enum(["print", "pdf"]).optional(),
+  whatsappEnabled: z.boolean().optional(),
+  messageTemplate: z.string().trim().max(500).optional().or(z.literal("")),
+  documentTypes: z.record(printDocumentTypeSchema, invoiceDocumentTypeSettingSchema).optional(),
 });
 
 export type InvoiceDefaultsValues = z.infer<typeof invoiceDefaultsSchema>;
@@ -395,6 +439,50 @@ export const invoiceNumberingSchema = z.object({
 });
 
 export type InvoiceNumberingValues = z.infer<typeof invoiceNumberingSchema>;
+
+const documentControlKindSchema = z.enum([
+  "sales_invoice",
+  "purchase_invoice",
+  "sales_return",
+  "purchase_return",
+  "payment",
+]);
+
+const documentNumberingRuleSchema = z.object({
+  prefix: z
+    .string()
+    .trim()
+    .min(1, "Prefix is required.")
+    .max(12, "Prefix must be 12 characters or fewer.")
+    .regex(/^[A-Za-z0-9]+$/, "Prefix may only contain letters and numbers.")
+    .transform((value) => value.toUpperCase()),
+});
+
+export const documentControlDefaultsSchema = z.object({
+  allowBackdate: z.boolean(),
+  maxBackdateDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
+    .pipe(z.number().int().min(0).max(3650)),
+  allowFutureDate: z.boolean(),
+  maxFutureDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
+    .pipe(z.number().int().min(0).max(365)),
+  lockEnabled: z.boolean(),
+  lockAfterDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0 : Number(v)))
+    .pipe(z.number().int().min(0).max(3650)),
+  allowOverrideLock: z.boolean(),
+  allowEditPosted: z.boolean(),
+  allowDeleteDraft: z.boolean(),
+  allowDeletePosted: z.boolean(),
+  allowCancelPosted: z.boolean(),
+  numbering: z.record(documentControlKindSchema, documentNumberingRuleSchema),
+});
+
+export type DocumentControlDefaultsValues = z.infer<typeof documentControlDefaultsSchema>;
 
 export const inviteMemberSchema = z.object({
   email: EMAIL,

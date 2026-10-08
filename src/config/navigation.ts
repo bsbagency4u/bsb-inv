@@ -19,6 +19,11 @@ import {
   Settings,
   Store,
   ScanBarcode,
+  Bell,
+  Wallet,
+  Monitor,
+  Archive,
+  History,
 } from "lucide-react";
 
 export interface NavItem {
@@ -96,7 +101,8 @@ export const SETTINGS_NAVIGATION: NavItem[] = [
   { title: "Business", href: "/settings/business", icon: Store },
   { title: "Users & Roles", href: "/settings/users", icon: Users },
   { title: "Tax", href: "/settings/tax", icon: Receipt },
-  { title: "Invoice", href: "/settings/invoice", icon: FileText },
+  { title: "Invoice & Print", href: "/settings/invoice", icon: FileText },
+  { title: "Document Control", href: "/settings/document-control", icon: History },
   { title: "Inventory", href: "/settings/inventory", icon: Boxes },
   { title: "Sales", href: "/settings/sales", icon: ShoppingCart },
   { title: "Purchase", href: "/settings/purchase", icon: ShoppingBag },
@@ -108,11 +114,3 @@ export const SETTINGS_NAVIGATION: NavItem[] = [
   { title: "Audit Log", href: "/settings/system/audit", icon: History },
   { title: "System", href: "/settings/system", icon: Settings },
 ];
-
-import {
-  Bell,
-  Wallet,
-  Monitor,
-  Archive,
-  History,
-} from "lucide-react";

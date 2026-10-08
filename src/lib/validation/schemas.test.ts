@@ -309,6 +309,27 @@ describe("invoiceDefaultsSchema", () => {
       }).success
     ).toBe(false);
   });
+
+  it("accepts custom paper size and print options", () => {
+    expect(
+      invoiceDefaultsSchema.safeParse({
+        showLogo: true,
+        showGstin: true,
+        showHsn: false,
+        showBankDetails: false,
+        bankDetails: "",
+        termsAndConditions: "",
+        footerNote: "",
+        paperSize: "custom",
+        orientation: "landscape",
+        customWidthMm: 72,
+        customHeightMm: 200,
+        copies: 2,
+        defaultOutput: "pdf",
+        autoPrintOnSave: false,
+      }).success
+    ).toBe(true);
+  });
 });
 
 describe("invoiceNumberingSchema", () => {

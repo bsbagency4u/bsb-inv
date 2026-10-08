@@ -32,7 +32,8 @@ const SETTINGS_GROUPS = [
     title: "Billing & tax",
     items: [
       { label: "Tax", href: "/settings/tax", icon: Receipt, available: true },
-      { label: "Invoice", href: "/settings/invoice", icon: FileText, available: true },
+      { label: "Invoice & Print", href: "/settings/invoice", icon: FileText, available: true },
+      { label: "Document Control", href: "/settings/document-control", icon: FileText, available: true },
       { label: "Payments", href: "/settings/payments", icon: Wallet, available: true },
     ],
   },
