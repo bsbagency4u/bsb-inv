@@ -4,7 +4,10 @@ export const SITE = {
   tagline: "Smart Inventory. Simple Business.",
   description:
     "BSB StockFlow is a scalable inventory, POS and business management platform.",
-  url: "https://bsb-stockflow.vercel.app",
+  url: (process.env.NEXT_PUBLIC_SITE_URL ?? "https://bsb-stockflow.vercel.app").replace(
+    /\/$/,
+    ""
+  ),
 } as const;
 
 export const APP_DEFAULT_CURRENCY = "INR";

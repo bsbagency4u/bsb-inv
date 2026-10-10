@@ -25,13 +25,23 @@ import {
   mapSalesReturn,
   mapSalesReturnItem,
 } from "./mappers";
+import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
+import { annotateDatabaseError } from "@/lib/errors";
+import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
 
 export interface LineItemInput {
   productId: string;
+  variantId?: string | null;
+  batchId?: string | null;
   quantity: number;
   unitPrice: number;
   gstRate: number;
   discount?: number;
+  taxableAmount?: number;
+  taxAmount?: number;
+  amount?: number;
+  saleUnit?: string | null;
+  baseQuantity?: number | null;
 }
 
 export interface SalesHeaderInput {
@@ -109,15 +119,26 @@ export interface TransactionRepository {
   listSalesInvoices(businessId: string): Promise<SalesInvoice[]>;
   getSalesInvoice(businessId: string, invoiceId: string): Promise<SalesInvoice | null>;
   createSalesInvoice(businessId: string, userId: string, header: SalesHeaderInput, items: LineItemInput[]): Promise<SalesInvoice>;
+  updateSalesInvoice(businessId: string, invoiceId: string, header: SalesHeaderInput, items: LineItemInput[]): Promise<SalesInvoice>;
   updateSalesInvoiceStatus(businessId: string, invoiceId: string, status: SalesInvoiceStatus): Promise<void>;
+  deleteSalesInvoice(businessId: string, invoiceId: string): Promise<void>;
   listPurchaseOrders(businessId: string): Promise<PurchaseOrder[]>;
+  getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null>;
   createPurchaseOrder(businessId: string, userId: string, header: PurchaseOrderHeaderInput, items: LineItemInput[]): Promise<PurchaseOrder>;
+  applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder>;
   listPurchaseInvoices(businessId: string): Promise<PurchaseInvoice[]>;
   getPurchaseInvoice(businessId: string, invoiceId: string): Promise<PurchaseInvoice | null>;
   createPurchaseInvoice(businessId: string, userId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
+  updatePurchaseInvoice(businessId: string, invoiceId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
   updatePurchaseInvoiceStatus(businessId: string, invoiceId: string, status: string): Promise<void>;
+  deletePurchaseInvoice(businessId: string, invoiceId: string): Promise<void>;
   listPayments(businessId: string): Promise<Payment[]>;
   createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment>;
+  deletePaymentsForDocument(businessId: string, input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }): Promise<void>;
   listPaymentModes(businessId: string): Promise<PaymentMode[]>;
   createPaymentMode(businessId: string, input: { code: string; name: string; sortOrder?: number }): Promise<PaymentMode>;
   updatePaymentMode(businessId: string, modeId: string, input: { name?: string; isActive?: boolean }): Promise<PaymentMode>;
@@ -132,25 +153,36 @@ export interface TransactionRepository {
   listPurchaseInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; billNo: string; supplierName: string | null }>>;
 }
 
-const lineItemToSalesRow = (invoiceId: string, item: LineItemInput) => ({
-  sales_invoice_id: invoiceId,
-  product_id: item.productId,
-  quantity: item.quantity,
-  unit_price: item.unitPrice,
-  gst_rate: item.gstRate,
-  discount: item.discount ?? 0,
-  taxable_amount: item.quantity * item.unitPrice,
-  tax_amount: item.quantity * item.unitPrice * (item.gstRate / 100),
-  amount: item.quantity * item.unitPrice + item.quantity * item.unitPrice * (item.gstRate / 100),
-});
+const lineItemToSalesRow = (invoiceId: string, item: LineItemInput) => {
+  const gross = item.quantity * item.unitPrice;
+  const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+  const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+  return {
+    sales_invoice_id: invoiceId,
+    product_id: item.productId,
+    batch_id: item.batchId ?? null,
+    quantity: item.quantity,
+    unit_price: item.unitPrice,
+    gst_rate: item.gstRate,
+    discount: item.discount ?? 0,
+    taxable_amount: taxable,
+    tax_amount: tax,
+    amount: item.amount ?? taxable + tax,
+    sale_unit: item.saleUnit ?? null,
+    base_quantity: item.baseQuantity ?? item.quantity,
+  };
+};
 
 const lineItemToPurchaseRow = (invoiceId: string, item: LineItemInput) => ({
   purchase_invoice_id: invoiceId,
   product_id: item.productId,
+  batch_id: item.batchId ?? null,
   quantity: item.quantity,
   unit_price: item.unitPrice,
   gst_rate: item.gstRate,
   amount: item.quantity * item.unitPrice,
+  sale_unit: item.saleUnit ?? null,
+  base_quantity: item.baseQuantity ?? item.quantity,
 });
 
 const lineItemToOrderRow = (orderId: string, item: LineItemInput) => ({
@@ -174,6 +206,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     if (error) throw error;
     return (data ?? []).map((row) => ({
       productId: row.product_id ?? "",
+      variantId: null,
+      batchId: row.batch_id ?? null,
       quantity: row.quantity,
       unitPrice: row.unit_price,
       gstRate: row.gst_rate,
@@ -181,6 +215,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       taxableAmount: row.taxable_amount,
       taxAmount: row.tax_amount,
       amount: row.amount,
+      saleUnit: row.sale_unit ?? null,
+      baseQuantity: row.base_quantity ?? row.quantity,
     }));
   }
 
@@ -249,6 +285,49 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     return { ...mapSalesInvoice(data), items: await this.fetchSalesItems(data.id) };
   }
 
+  async updateSalesInvoice(
+    businessId: string,
+    invoiceId: string,
+    header: SalesHeaderInput,
+    items: LineItemInput[]
+  ): Promise<SalesInvoice> {
+    const { data, error } = await this.client
+      .from("sales_invoices")
+      .update({
+        customer_id: header.customerId ?? null,
+        invoice_date: header.invoiceDate,
+        due_date: header.dueDate ?? null,
+        status: header.status,
+        subtotal: header.subtotal,
+        discount: header.discount,
+        tax_total: header.taxTotal,
+        total: header.total,
+        paid_amount: header.paidAmount,
+        payment_mode: header.paymentMode ?? null,
+        notes: header.notes ?? null,
+      })
+      .eq("business_id", businessId)
+      .eq("id", invoiceId)
+      .select()
+      .single();
+    if (error) throw error;
+
+    const { error: deleteError } = await this.client
+      .from("sales_invoice_items")
+      .delete()
+      .eq("sales_invoice_id", invoiceId);
+    if (deleteError) throw deleteError;
+
+    if (items.length > 0) {
+      const { error: itemError } = await this.client
+        .from("sales_invoice_items")
+        .insert(items.map((item) => lineItemToSalesRow(invoiceId, item)));
+      if (itemError) throw itemError;
+    }
+
+    return { ...mapSalesInvoice(data), items: await this.fetchSalesItems(invoiceId) };
+  }
+
   async updateSalesInvoiceStatus(
     businessId: string,
     invoiceId: string,
@@ -257,6 +336,15 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     const { error } = await this.client
       .from("sales_invoices")
       .update({ status })
+      .eq("business_id", businessId)
+      .eq("id", invoiceId);
+    if (error) throw error;
+  }
+
+  async deleteSalesInvoice(businessId: string, invoiceId: string): Promise<void> {
+    const { error } = await this.client
+      .from("sales_invoices")
+      .delete()
       .eq("business_id", businessId)
       .eq("id", invoiceId);
     if (error) throw error;
@@ -277,6 +365,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       taxableAmount: row.quantity * row.unit_price,
       taxAmount: row.quantity * row.unit_price * (row.gst_rate / 100),
       amount: row.amount,
+      receivedQuantity: row.received_quantity ?? 0,
     }));
   }
 
@@ -332,6 +421,56 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     return { ...mapPurchaseOrder(data), items: await this.fetchOrderItems(data.id) };
   }
 
+  async getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null> {
+    const { data, error } = await this.client
+      .from("purchase_orders")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", orderId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { ...mapPurchaseOrder(data), items: await this.fetchOrderItems(data.id) };
+  }
+
+  async applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder> {
+    const { data: rows, error: fetchError } = await this.client
+      .from("purchase_order_items")
+      .select("*")
+      .eq("purchase_order_id", purchaseOrderId);
+    if (fetchError) throw fetchError;
+    const allocated = allocateReceivedQuantities(
+      (rows ?? []).map((row) => ({
+        id: row.id,
+        productId: row.product_id ?? "",
+        quantity: row.quantity,
+        receivedQuantity: row.received_quantity ?? 0,
+      })),
+      items
+    );
+    for (const line of allocated) {
+      const { error: updateError } = await this.client
+        .from("purchase_order_items")
+        .update({ received_quantity: line.receivedQuantity })
+        .eq("id", line.id);
+      if (updateError) throw updateError;
+    }
+    const order = await this.getPurchaseOrder(businessId, purchaseOrderId);
+    if (!order) throw new Error("Purchase order not found.");
+    const status = receivingStatusForItems(order.items);
+    const { error: statusError } = await this.client
+      .from("purchase_orders")
+      .update({ status })
+      .eq("business_id", businessId)
+      .eq("id", purchaseOrderId);
+    if (statusError) throw statusError;
+    return { ...order, status };
+  }
+
   private async fetchPurchaseItems(invoiceId: string): Promise<LineItem[]> {
     const { data, error } = await this.client
       .from("purchase_invoice_items")
@@ -340,6 +479,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     if (error) throw error;
     return (data ?? []).map((row) => ({
       productId: row.product_id ?? "",
+      variantId: null,
+      batchId: row.batch_id ?? null,
       quantity: row.quantity,
       unitPrice: row.unit_price,
       gstRate: row.gst_rate,
@@ -347,6 +488,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       taxableAmount: row.quantity * row.unit_price,
       taxAmount: row.quantity * row.unit_price * (row.gst_rate / 100),
       amount: row.amount,
+      saleUnit: row.sale_unit ?? null,
+      baseQuantity: row.base_quantity ?? row.quantity,
     }));
   }
 
@@ -391,16 +534,73 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       })
       .select()
       .single();
-    if (error) throw error;
+    if (error) throw annotateDatabaseError(error, "purchase_invoices", "insert");
 
     if (items.length > 0) {
-      const { error: itemError } = await this.client
-        .from("purchase_invoice_items")
-        .insert(items.map((item) => lineItemToPurchaseRow(data.id, item)));
-      if (itemError) throw itemError;
+      const rows = items.map((item) => lineItemToPurchaseRow(data.id, item));
+      const first = await this.client.from("purchase_invoice_items").insert(rows);
+      if (first.error) {
+        if (!isMissingColumnError(first.error)) {
+          throw annotateDatabaseError(first.error, "purchase_invoice_items", "insert");
+        }
+        const fallback = await this.client
+          .from("purchase_invoice_items")
+          .insert(rows.map((row) => omitColumns(row, ["sale_unit", "base_quantity"])));
+        if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
+      }
     }
 
     return { ...mapPurchaseInvoice(data), items: await this.fetchPurchaseItems(data.id) };
+  }
+
+  async updatePurchaseInvoice(
+    businessId: string,
+    invoiceId: string,
+    header: PurchaseInvoiceHeaderInput,
+    items: LineItemInput[]
+  ): Promise<PurchaseInvoice> {
+    const { data, error } = await this.client
+      .from("purchase_invoices")
+      .update({
+        supplier_id: header.supplierId ?? null,
+        purchase_order_id: header.purchaseOrderId ?? null,
+        invoice_date: header.invoiceDate,
+        due_date: header.dueDate ?? null,
+        status: header.status,
+        subtotal: header.subtotal,
+        discount: header.discount,
+        tax_total: header.taxTotal,
+        total: header.total,
+        paid_amount: header.paidAmount,
+        notes: header.notes ?? null,
+      })
+      .eq("business_id", businessId)
+      .eq("id", invoiceId)
+      .select()
+      .single();
+    if (error) throw annotateDatabaseError(error, "purchase_invoices", "update");
+
+    const { error: deleteError } = await this.client
+      .from("purchase_invoice_items")
+      .delete()
+      .eq("purchase_invoice_id", invoiceId);
+    if (deleteError) throw annotateDatabaseError(deleteError, "purchase_invoice_items", "delete");
+
+    if (items.length > 0) {
+      const rows = items.map((item) => lineItemToPurchaseRow(invoiceId, item));
+      const first = await this.client.from("purchase_invoice_items").insert(rows);
+      if (first.error) {
+        if (!isMissingColumnError(first.error)) {
+          throw annotateDatabaseError(first.error, "purchase_invoice_items", "insert");
+        }
+        const fallback = await this.client
+          .from("purchase_invoice_items")
+          .insert(rows.map((row) => omitColumns(row, ["sale_unit", "base_quantity"])));
+        if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
+      }
+    }
+
+    return { ...mapPurchaseInvoice(data), items: await this.fetchPurchaseItems(invoiceId) };
   }
 
   async listPayments(businessId: string): Promise<Payment[]> {
@@ -438,6 +638,18 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       .single();
     if (error) throw error;
     return mapPayment(data);
+  }
+
+  async deletePaymentsForDocument(
+    businessId: string,
+    input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
+  ): Promise<void> {
+    let query = this.client.from("payments").delete().eq("business_id", businessId);
+    if (input.salesInvoiceId) query = query.eq("sales_invoice_id", input.salesInvoiceId);
+    else if (input.purchaseInvoiceId) query = query.eq("purchase_invoice_id", input.purchaseInvoiceId);
+    else return;
+    const { error } = await query;
+    if (error) throw error;
   }
 
   async listPaymentModes(businessId: string): Promise<PaymentMode[]> {
@@ -725,6 +937,15 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     const { error } = await this.client
       .from("purchase_invoices")
       .update({ status })
+      .eq("business_id", businessId)
+      .eq("id", invoiceId);
+    if (error) throw error;
+  }
+
+  async deletePurchaseInvoice(businessId: string, invoiceId: string): Promise<void> {
+    const { error } = await this.client
+      .from("purchase_invoices")
+      .delete()
       .eq("business_id", businessId)
       .eq("id", invoiceId);
     if (error) throw error;

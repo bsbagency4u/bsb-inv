@@ -20,6 +20,7 @@ import type {
   LineItemInput,
   TransactionRepository,
 } from "../transaction.repository";
+import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { readStorage, writeStorage } from "./local-data";
 import { LocalPartyRepository } from "./party.repository";
 
@@ -32,19 +33,31 @@ const RECEIPTS_KEY = "demo-purchase-receipts";
 const PURCHASE_RETURNS_KEY = "demo-purchase-returns";
 const SALES_RETURNS_KEY = "demo-sales-returns";
 
-const lineToModel = (item: LineItemInput): LineItem => ({
-  productId: item.productId,
-  quantity: item.quantity,
-  unitPrice: item.unitPrice,
-  gstRate: item.gstRate,
-  discount: item.discount ?? 0,
-  taxableAmount: item.quantity * item.unitPrice,
-  taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-  amount: item.quantity * item.unitPrice + item.quantity * item.unitPrice * (item.gstRate / 100),
-});
+const lineToModel = (item: LineItemInput): LineItem => {
+  const gross = item.quantity * item.unitPrice;
+  const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+  const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+  return {
+    productId: item.productId,
+    variantId: item.variantId ?? null,
+    batchId: item.batchId ?? null,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    gstRate: item.gstRate,
+    discount: item.discount ?? 0,
+    taxableAmount: taxable,
+    taxAmount: tax,
+    amount: item.amount ?? taxable + tax,
+    saleUnit: item.saleUnit ?? null,
+    baseQuantity: item.baseQuantity ?? item.quantity,
+    receivedQuantity: 0,
+  };
+};
 
 const lineToPurchaseModel = (item: LineItemInput): LineItem => ({
   productId: item.productId,
+  variantId: item.variantId ?? null,
+  batchId: item.batchId ?? null,
   quantity: item.quantity,
   unitPrice: item.unitPrice,
   gstRate: item.gstRate,
@@ -52,6 +65,8 @@ const lineToPurchaseModel = (item: LineItemInput): LineItem => ({
   taxableAmount: item.quantity * item.unitPrice,
   taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
   amount: item.quantity * item.unitPrice,
+  saleUnit: item.saleUnit ?? null,
+  baseQuantity: item.baseQuantity ?? item.quantity,
 });
 
 export class LocalTransactionRepository implements TransactionRepository {
@@ -160,6 +175,36 @@ export class LocalTransactionRepository implements TransactionRepository {
     return invoice;
   }
 
+  async updateSalesInvoice(
+    businessId: string,
+    invoiceId: string,
+    header: SalesHeaderInput,
+    items: LineItemInput[]
+  ): Promise<SalesInvoice> {
+    const all = this.readSales();
+    const index = all.findIndex((i) => i.businessId === businessId && i.id === invoiceId);
+    if (index === -1) throw new Error("Invoice not found.");
+    const now = new Date().toISOString();
+    all[index] = {
+      ...all[index],
+      customerId: header.customerId ?? null,
+      invoiceDate: header.invoiceDate,
+      dueDate: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      taxTotal: header.taxTotal,
+      total: header.total,
+      paidAmount: header.paidAmount,
+      paymentMode: header.paymentMode ?? null,
+      notes: header.notes ?? null,
+      items: items.map(lineToModel),
+      updatedAt: now,
+    };
+    this.saveSales(all);
+    return all[index];
+  }
+
   async updateSalesInvoiceStatus(
     businessId: string,
     invoiceId: string,
@@ -170,6 +215,10 @@ export class LocalTransactionRepository implements TransactionRepository {
     if (index === -1) throw new Error("Invoice not found.");
     all[index] = { ...all[index], status, updatedAt: new Date().toISOString() };
     this.saveSales(all);
+  }
+
+  async deleteSalesInvoice(businessId: string, invoiceId: string): Promise<void> {
+    this.saveSales(this.readSales().filter((i) => !(i.businessId === businessId && i.id === invoiceId)));
   }
 
   async listPurchaseOrders(businessId: string): Promise<PurchaseOrder[]> {
@@ -207,6 +256,32 @@ export class LocalTransactionRepository implements TransactionRepository {
     all.push(order);
     this.saveOrders(all);
     return order;
+  }
+
+  async getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null> {
+    return this.readOrders().find((order) => order.businessId === businessId && order.id === orderId) ?? null;
+  }
+
+  async applyPurchaseReceiptQuantities(
+    businessId: string,
+    purchaseOrderId: string,
+    items: Array<{ productId: string; quantity: number }>
+  ): Promise<PurchaseOrder> {
+    const all = this.readOrders();
+    const index = all.findIndex((order) => order.businessId === businessId && order.id === purchaseOrderId);
+    if (index === -1) throw new Error("Purchase order not found.");
+    const order = all[index];
+    const nextItems = allocateReceivedQuantities(order.items, items);
+    const status = receivingStatusForItems(nextItems);
+    const updated: PurchaseOrder = {
+      ...order,
+      items: nextItems,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    all[index] = updated;
+    this.saveOrders(all);
+    return updated;
   }
 
   async listPurchaseInvoices(businessId: string): Promise<PurchaseInvoice[]> {
@@ -253,6 +328,36 @@ export class LocalTransactionRepository implements TransactionRepository {
     return invoice;
   }
 
+  async updatePurchaseInvoice(
+    businessId: string,
+    invoiceId: string,
+    header: PurchaseInvoiceHeaderInput,
+    items: LineItemInput[]
+  ): Promise<PurchaseInvoice> {
+    const all = this.readPurchases();
+    const index = all.findIndex((i) => i.businessId === businessId && i.id === invoiceId);
+    if (index === -1) throw new Error("Purchase invoice not found.");
+    const now = new Date().toISOString();
+    all[index] = {
+      ...all[index],
+      supplierId: header.supplierId ?? null,
+      purchaseOrderId: header.purchaseOrderId ?? null,
+      invoiceDate: header.invoiceDate,
+      dueDate: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      taxTotal: header.taxTotal,
+      total: header.total,
+      paidAmount: header.paidAmount,
+      notes: header.notes ?? null,
+      items: items.map(lineToPurchaseModel),
+      updatedAt: now,
+    };
+    this.savePurchases(all);
+    return all[index];
+  }
+
   async updatePurchaseInvoiceStatus(
     businessId: string,
     invoiceId: string,
@@ -263,6 +368,10 @@ export class LocalTransactionRepository implements TransactionRepository {
     if (index === -1) throw new Error("Purchase invoice not found.");
     all[index] = { ...all[index], status, updatedAt: new Date().toISOString() };
     this.savePurchases(all);
+  }
+
+  async deletePurchaseInvoice(businessId: string, invoiceId: string): Promise<void> {
+    this.savePurchases(this.readPurchases().filter((i) => !(i.businessId === businessId && i.id === invoiceId)));
   }
 
   async listPayments(businessId: string): Promise<Payment[]> {
@@ -291,6 +400,20 @@ export class LocalTransactionRepository implements TransactionRepository {
     all.push(payment);
     this.savePayments(all);
     return payment;
+  }
+
+  async deletePaymentsForDocument(
+    businessId: string,
+    input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
+  ): Promise<void> {
+    this.savePayments(
+      this.readPayments().filter((payment) => {
+        if (payment.businessId !== businessId) return true;
+        if (input.salesInvoiceId) return payment.salesInvoiceId !== input.salesInvoiceId;
+        if (input.purchaseInvoiceId) return payment.purchaseInvoiceId !== input.purchaseInvoiceId;
+        return true;
+      })
+    );
   }
 
   async listPaymentModes(businessId: string): Promise<PaymentMode[]> {
@@ -346,21 +469,13 @@ export class LocalTransactionRepository implements TransactionRepository {
 
   async nextDocumentNumber(businessId: string, kind: string, prefix: string): Promise<string> {
     const year = new Date().getFullYear();
-    const collections: Record<string, string[]> = {
-      sales: this.readSales().filter((i) => i.businessId === businessId).map((i) => i.invoiceNo),
-      purchase_order: this.readOrders().filter((o) => o.businessId === businessId).map((o) => o.orderNo),
-      purchase_invoice: this.readPurchases().filter((i) => i.businessId === businessId).map((i) => i.billNo),
-      sales_return: this.readSalesReturns().filter((r) => r.businessId === businessId).map((r) => r.returnNo),
-      purchase_return: this.readPurchaseReturns().filter((r) => r.businessId === businessId).map((r) => r.returnNo),
-    };
-    const existing = collections[kind] ?? [];
-    const re = new RegExp(`^${prefix.toUpperCase()}-\\d{4}-(\\d+)$`);
-    let max = 0;
-    for (const number of existing) {
-      const match = re.exec(number.toUpperCase());
-      if (match) max = Math.max(max, Number(match[1]));
-    }
-    return `${prefix.toUpperCase()}-${year}-${String(max + 1).padStart(6, "0")}`;
+    const key = `demo-document-sequences`;
+    const sequences = readStorage<Record<string, number>>(key, {});
+    const sequenceKey = `${businessId}:${kind}`;
+    const next = (sequences[sequenceKey] ?? 0) + 1;
+    sequences[sequenceKey] = next;
+    writeStorage(key, sequences);
+    return `${prefix.toUpperCase()}-${year}-${String(next).padStart(6, "0")}`;
   }
 
   async createPurchaseReceipt(

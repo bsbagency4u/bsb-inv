@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Plus, Receipt } from "lucide-react";
+import { Banknote, CheckCircle2, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
-import { TransactionBuilder, type CartLine } from "@/components/transactions/transaction-builder";
 import {
   Table,
   TableBody,
@@ -27,28 +27,35 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { paymentReceiptPrintModel, purchaseInvoicePrintModel, supplierContact } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
+import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { PurchaseInvoice } from "@/types/domain";
 
+function statusVariant(status: string): "success" | "info" | "warning" | "secondary" {
+  if (status === "paid") return "success";
+  if (status === "unpaid") return "warning";
+  if (status === "draft") return "secondary";
+  return "info";
+}
+
 export default function PurchaseInvoicesPage() {
+  const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [search, setSearch] = React.useState("");
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-
   const [paying, setPaying] = React.useState<PurchaseInvoice | null>(null);
   const [payAmount, setPayAmount] = React.useState("");
   const [payMode, setPayMode] = React.useState("cash");
   const [paySaving, setPaySaving] = React.useState(false);
-
-  const [supplierId, setSupplierId] = React.useState<string | null>(null);
-  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [dueDate, setDueDate] = React.useState<string | null>(null);
-  const [intraState, setIntraState] = React.useState(true);
-  const [lines, setLines] = React.useState<CartLine[]>([]);
-  const [notes, setNotes] = React.useState<string | null>(null);
+  const [completingId, setCompletingId] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<PurchaseInvoice | null>(null);
+  const [deleteSaving, setDeleteSaving] = React.useState(false);
 
   const { data: invoices, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-invoices", business?.id],
@@ -68,6 +75,33 @@ export default function PurchaseInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: paymentModes } = useQuery({
+    queryKey: ["payment-modes", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().transactions.listPaymentModes(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: purchaseDefaults } = useQuery({
+    queryKey: ["purchase-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getPurchaseDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const { data: products } = useQuery({
     queryKey: ["products-with-stock", business?.id],
     queryFn: async () => {
@@ -77,11 +111,11 @@ export default function PurchaseInvoicesPage() {
     enabled: Boolean(business),
   });
 
-  const { data: paymentModes } = useQuery({
-    queryKey: ["payment-modes", business?.id],
+  const { data: documentControl } = useQuery({
+    queryKey: ["document-control", business?.id],
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
-      return getClientServices().transactions.listPaymentModes(business.id);
+      return getClientServices().businesses.getDocumentControlDefaults(business.id);
     },
     enabled: Boolean(business),
   });
@@ -106,52 +140,28 @@ export default function PurchaseInvoicesPage() {
     );
   }
 
-  const resetForm = () => {
-    setSupplierId(null);
-    setDate(new Date().toISOString().slice(0, 10));
-    setDueDate(null);
-    setIntraState(true);
-    setLines([]);
-    setNotes(null);
-  };
+  const openCreate = () => router.push("/purchase/invoices/new");
 
-  const createInvoice = async () => {
+  const invoiceLocked = (invoice: PurchaseInvoice) =>
+    documentIsLocked(documentControl ?? DEFAULT_DOCUMENT_CONTROL, invoice.invoiceDate, invoice.status);
+
+  const deleteInvoice = async (invoice: PurchaseInvoice, overrideReason?: string) => {
     if (!business || !user) return;
-    if (lines.length === 0) {
-      toastError("No items", "Add at least one line item to record a bill.");
-      return;
-    }
-    setSaving(true);
+    setDeleteSaving(true);
     try {
-      const services = getClientServices();
-      const billNo = await services.transactions.nextDocumentNo(
-        business.id,
-        "BILL",
-        "purchase_invoice"
-      );
-      await services.transactions.createPurchaseInvoice(business.id, user.id, billNo, {
-        supplierId,
-        invoiceDate: date,
-        dueDate,
-        notes,
-        items: lines.map((line) => ({
-          productId: line.productId,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-          gstRate: line.gstRate,
-        })),
-        intraState,
+      await getClientServices().transactions.deletePurchaseInvoice(business.id, user.id, invoice.id, {
+        overrideLock: Boolean(overrideReason),
+        overrideReason,
       });
-      toastSuccess("Purchase recorded", `Bill ${billNo} was saved and stock updated.`);
-      setCreateOpen(false);
-      resetForm();
+      toastSuccess("Bill deleted", `${invoice.billNo} was deleted.`);
+      setDeleting(null);
       await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
     } catch (err) {
-      toastError("Could not record purchase", normalizeError(err).userMessage);
+      toastError("Could not delete bill", normalizeError(err).userMessage);
     } finally {
-      setSaving(false);
+      setDeleteSaving(false);
     }
   };
 
@@ -159,6 +169,27 @@ export default function PurchaseInvoicesPage() {
     setPaying(invoice);
     setPayAmount(String(invoice.total - invoice.paidAmount));
     setPayMode("cash");
+  };
+
+  const completeDraft = async (invoice: PurchaseInvoice) => {
+    if (!business || !user) return;
+    setCompletingId(invoice.id);
+    try {
+      await getClientServices().transactions.completePurchaseInvoice(
+        business.id,
+        user.id,
+        invoice.id,
+        purchaseDefaults?.defaultWarehouseId ?? null
+      );
+      toastSuccess("Bill received", `${invoice.billNo} was completed and stock updated.`);
+      await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch (err) {
+      toastError("Could not complete bill", normalizeError(err).userMessage);
+    } finally {
+      setCompletingId(null);
+    }
   };
 
   const submitPayment = async () => {
@@ -179,6 +210,40 @@ export default function PurchaseInvoicesPage() {
         mode: payMode,
       });
       toastSuccess("Payment recorded", "The supplier payment was recorded.");
+      const supplier = paying.supplierId
+        ? suppliers?.find((item) => item.id === paying.supplierId)
+        : null;
+      const receipt = paymentReceiptPrintModel(
+        {
+          id: paying.id,
+          businessId: paying.businessId,
+          direction: "out",
+          partyType: "supplier",
+          partyId: paying.supplierId,
+          salesInvoiceId: null,
+          purchaseInvoiceId: paying.id,
+          amount,
+          mode: payMode,
+          reference: paying.billNo,
+          paymentDate: new Date().toISOString().slice(0, 10),
+          notes: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          partyLabel: supplier?.name ?? "Supplier",
+          ...supplierContact(supplier),
+          referenceNo: paying.billNo,
+        }
+      );
+      const auto = autoOutputDocument(
+        business,
+        invoiceDefaults ?? DEFAULT_INVOICE,
+        receipt,
+        business.currency ?? "INR"
+      );
+      if (!auto.ok && auto.reason === "blocked") {
+        toastInfo("Print Invoice", "Payment saved. Click Print on the bill if the browser blocked the receipt.");
+      }
       setPaying(null);
       await queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       await queryClient.invalidateQueries({ queryKey: ["payments"] });
@@ -196,12 +261,7 @@ export default function PurchaseInvoicesPage() {
         title="Purchase Invoices"
         description="Bills received from suppliers."
         actions={
-          <Button
-            onClick={() => {
-              resetForm();
-              setCreateOpen(true);
-            }}
-          >
+          <Button onClick={openCreate}>
             <Plus className="size-4" />
             Record purchase
           </Button>
@@ -228,7 +288,7 @@ export default function PurchaseInvoicesPage() {
             icon={<Receipt className="size-6" />}
             title="No purchase invoices yet"
             description="Record a supplier bill to bring stock into the business."
-            action={{ label: "Record purchase", onClick: () => { resetForm(); setCreateOpen(true); } }}
+            action={{ label: "Record purchase", onClick: openCreate }}
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
@@ -260,20 +320,61 @@ export default function PurchaseInvoicesPage() {
                       {formatCurrency(invoice.total, business?.currency ?? "INR")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={invoice.status === "paid" ? "success" : invoice.status === "unpaid" ? "warning" : "info"}>
+                      <Badge variant={statusVariant(invoice.status)}>
                         {invoice.status}
-                        {invoice.status !== "paid" && invoice.paidAmount > 0
+                        {invoice.status !== "paid" && invoice.status !== "draft" && invoice.paidAmount > 0
                           ? ` · paid ${formatCurrency(invoice.paidAmount, business?.currency ?? "INR")}`
                           : ""}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      {invoice.status !== "paid" ? (
-                        <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
-                          <Banknote className="size-4" />
-                          Pay
-                        </Button>
-                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        {invoice.status === "draft" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void completeDraft(invoice)}
+                            loading={completingId === invoice.id}
+                          >
+                            <CheckCircle2 className="size-4" />
+                            Receive
+                          </Button>
+                        ) : null}
+                        {invoice.status !== "paid" && invoice.status !== "draft" && invoice.status !== "cancelled" ? (
+                          <Button variant="outline" size="sm" onClick={() => openPay(invoice)}>
+                            <Banknote className="size-4" />
+                            Pay
+                          </Button>
+                        ) : null}
+                        {invoice.status !== "cancelled" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => router.push(`/purchase/invoices/${invoice.id}/edit`)}
+                          >
+                            <Pencil className="size-4" />
+                            Edit
+                          </Button>
+                        ) : null}
+                        {invoice.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+                          <Button variant="outline" size="sm" onClick={() => setDeleting(invoice)}>
+                            <Trash2 className="size-4" />
+                            Delete
+                          </Button>
+                        ) : null}
+                        {business ? (
+                          <DocumentPrintActions
+                            business={business}
+                            defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                            model={purchaseInvoicePrintModel(invoice, {
+                              partyLabel: suppliers?.find((s) => s.id === invoice.supplierId)?.name ?? "Supplier",
+                              ...supplierContact(suppliers?.find((s) => s.id === invoice.supplierId)),
+                              products,
+                            })}
+                            currency={business.currency ?? "INR"}
+                          />
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -282,45 +383,6 @@ export default function PurchaseInvoicesPage() {
           </div>
         )}
       </div>
-
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="Record purchase"
-        description="Enter the supplier bill; stock increases automatically."
-        size="xl"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void createInvoice()} loading={saving}>
-              Save bill
-            </Button>
-          </>
-        }
-      >
-        <TransactionBuilder
-          currency={business?.currency ?? "INR"}
-          products={products ?? []}
-          partyType="supplier"
-          parties={(suppliers ?? []).map((s) => ({ id: s.id, name: s.name, gstin: s.gstin }))}
-          partyLabel="Supplier"
-          partyValue={supplierId}
-          onPartyChange={setSupplierId}
-          intraState={intraState}
-          onIntraStateChange={setIntraState}
-          lines={lines}
-          onLinesChange={setLines}
-          notes={notes}
-          onNotesChange={setNotes}
-          date={date}
-          onDateChange={setDate}
-          dueDate={dueDate}
-          onDueDateChange={setDueDate}
-          showDueDate
-        />
-      </Modal>
 
       <Modal
         open={Boolean(paying)}
@@ -379,6 +441,24 @@ export default function PurchaseInvoicesPage() {
           </div>
         ) : null}
       </Modal>
+
+      <DocumentConfirmModal
+        open={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        title={deleting ? `Delete ${deleting.billNo}?` : "Delete bill"}
+        description={
+          deleting?.status === "draft"
+            ? "This draft will be removed. The bill number will not be reused."
+            : "Posted stock and payments will be reversed. The bill number will not be reused."
+        }
+        confirmLabel="Delete"
+        destructive
+        reasonRequired={Boolean(deleting && invoiceLocked(deleting))}
+        loading={deleteSaving}
+        onConfirm={async (reason) => {
+          if (deleting) await deleteInvoice(deleting, reason || undefined);
+        }}
+      />
     </div>
   );
 }

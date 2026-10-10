@@ -6,6 +6,7 @@ export interface SessionUser {
   id: string;
   email: string;
   fullName: string;
+  username: string | null;
   phone?: string | null;
   avatarUrl?: string | null;
   /** Role slug within the active business. */
@@ -46,6 +47,144 @@ export interface BusinessMembership {
   userId: string;
   roleSlug: string | null;
   isOwner: boolean;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  isSystem: boolean;
+}
+
+export interface Permission {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+}
+
+export interface RolePermissionMap {
+  roleId: string;
+  permissionId: string;
+}
+
+export type TeamMemberStatus = "active" | "pending";
+
+export interface TeamMember {
+  businessId: string;
+  userId: string;
+  email: string;
+  fullName: string;
+  roleId: string | null;
+  roleSlug: string | null;
+  roleName: string | null;
+  isOwner: boolean;
+  status: TeamMemberStatus;
+  createdAt: string;
+}
+
+export interface TeamInvitation {
+  id: string;
+  businessId: string;
+  email: string;
+  fullName: string;
+  roleSlug: string;
+  invitedBy: string;
+  createdAt: string;
+}
+
+export interface SalesDefaults {
+  defaultPaymentMode: string;
+  defaultIntraState: boolean;
+  defaultDiscountPercent: number;
+  allowLineDiscount: boolean;
+  allowExpired: boolean;
+}
+
+export interface PurchaseDefaults {
+  defaultWarehouseId: string | null;
+  defaultPaymentTerms: string;
+  defaultIntraState: boolean;
+}
+
+export interface TaxDefaults {
+  gstEnabled: boolean;
+  defaultGstRate: number;
+  defaultIntraState: boolean;
+  defaultHsnCode: string;
+  pricesIncludeTax: boolean;
+}
+
+export type DocumentControlKind =
+  | "sales_invoice"
+  | "purchase_invoice"
+  | "sales_return"
+  | "purchase_return"
+  | "payment";
+
+export interface DocumentNumberingRule {
+  prefix: string;
+}
+
+export interface DocumentControlDefaults {
+  allowBackdate: boolean;
+  maxBackdateDays: number;
+  allowFutureDate: boolean;
+  maxFutureDays: number;
+  lockEnabled: boolean;
+  lockAfterDays: number;
+  allowOverrideLock: boolean;
+  allowEditPosted: boolean;
+  allowDeleteDraft: boolean;
+  allowDeletePosted: boolean;
+  allowCancelPosted: boolean;
+  numbering: Record<DocumentControlKind, DocumentNumberingRule>;
+}
+
+export type InvoicePaperSize = "a4" | "a5" | "thermal" | "custom";
+export type InvoiceOrientation = "portrait" | "landscape";
+export type InvoicePrintOutput = "print" | "pdf";
+export type PrintDocumentType =
+  | "sales_invoice"
+  | "sales_return"
+  | "purchase_invoice"
+  | "purchase_return"
+  | "payment_receipt"
+  | "quotation"
+  | "delivery_challan";
+
+export interface InvoiceDocumentTypeSetting {
+  enabled: boolean;
+}
+
+export interface InvoiceDefaults {
+  showLogo: boolean;
+  showGstin: boolean;
+  showHsn: boolean;
+  showBankDetails: boolean;
+  bankDetails: string;
+  termsAndConditions: string;
+  footerNote: string;
+  paperSize: InvoicePaperSize;
+  orientation: InvoiceOrientation;
+  customWidthMm: number;
+  customHeightMm: number;
+  showSku: boolean;
+  showBatch: boolean;
+  showMrp: boolean;
+  showDiscount: boolean;
+  showTaxBreakup: boolean;
+  showPaidBalance: boolean;
+  showNotes: boolean;
+  showSignature: boolean;
+  signatureLabel: string;
+  autoPrintOnSave: boolean;
+  copies: number;
+  defaultOutput: InvoicePrintOutput;
+  whatsappEnabled: boolean;
+  messageTemplate: string;
+  documentTypes: Record<PrintDocumentType, InvoiceDocumentTypeSetting>;
 }
 
 export interface SessionState {
@@ -198,6 +337,15 @@ export interface Product {
   brandId: string | null;
   unitId: string | null;
   unit: string;
+  packUnit: string | null;
+  packUnitId: string | null;
+  unitsPerPack: number;
+  minSaleQty: number;
+  maxSaleQty: number | null;
+  allowBaseSale: boolean;
+  allowPackSale: boolean;
+  allowPackPurchase: boolean;
+  fixedPacking: boolean;
   /** Dynamic attributes resolved from the business-type attribute registry. */
   attributes: Record<string, string | number | boolean | null>;
   gstRate: number;
@@ -226,6 +374,7 @@ export interface ProductStock {
 export interface StockBalance {
   productId: string;
   variantId: string | null;
+  batchId: string | null;
   warehouseId: string | null;
   locationId: string | null;
   quantity: number;
@@ -244,8 +393,23 @@ export interface ProductBatch {
   batchNo: string;
   expiryDate: string | null;
   mrp: number | null;
+  purchasePrice: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** On-hand lot used to resolve MRP and stock OUT on sale. */
+export interface SellableLot {
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  batchNo: string | null;
+  expiryDate: string | null;
+  mrp: number | null;
+  purchasePrice: number | null;
+  quantity: number;
+  warehouseId: string | null;
+  locationId: string | null;
 }
 
 export type StockMovementType =
@@ -383,6 +547,8 @@ export interface SalesReturn {
 
 export interface LineItem {
   productId: string;
+  variantId?: string | null;
+  batchId?: string | null;
   quantity: number;
   unitPrice: number;
   gstRate: number;
@@ -390,6 +556,9 @@ export interface LineItem {
   taxableAmount: number;
   taxAmount: number;
   amount: number;
+  saleUnit?: string | null;
+  baseQuantity?: number | null;
+  receivedQuantity?: number;
 }
 
 export interface PurchaseOrder {
@@ -502,9 +671,16 @@ export interface GstLine {
 
 export interface InvoiceTotals {
   subtotal: number;
+  /** Sum of line-item discounts, applied before invoice discount and GST. */
+  itemDiscount: number;
+  /** Invoice-level discount, applied after item discounts and before GST. */
   discount: number;
   taxableAmount: number;
   taxAmount: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  roundOff: number;
   total: number;
   /** Per-rate GST breakdown. */
   gstLines: GstLine[];

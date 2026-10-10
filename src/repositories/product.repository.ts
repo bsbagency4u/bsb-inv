@@ -12,6 +12,12 @@ import type {
   StockMovementType,
 } from "@/types/domain";
 import {
+  mergeAttributesWithPackaging,
+  storedPackagingFromInput,
+} from "@/lib/packaging";
+import { annotateDatabaseError } from "@/lib/errors";
+import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
+import {
   mapCategory,
   mapProduct,
   mapProductBatch,
@@ -22,6 +28,41 @@ import {
   mapStockMovement,
 } from "./mappers";
 
+const PACKING_COLUMN_KEYS = [
+  "pack_unit",
+  "pack_unit_id",
+  "units_per_pack",
+  "min_sale_qty",
+  "max_sale_qty",
+  "allow_base_sale",
+  "allow_pack_sale",
+  "allow_pack_purchase",
+  "fixed_packing",
+] as const;
+
+function omitPackingColumns<T extends Record<string, unknown>>(payload: T): T {
+  return omitColumns(payload, PACKING_COLUMN_KEYS);
+}
+
+function productWritePayload(input: ProductCreateInput | ProductUpdateInput) {
+  const packing = storedPackagingFromInput({
+    unit: input.unit,
+    packUnit: input.packUnit,
+    packUnitId: input.packUnitId,
+    unitsPerPack: input.unitsPerPack,
+    minSaleQty: input.minSaleQty,
+    maxSaleQty: input.maxSaleQty,
+    allowBaseSale: input.allowBaseSale,
+    allowPackSale: input.allowPackSale,
+    allowPackPurchase: input.allowPackPurchase,
+    fixedPacking: input.fixedPacking,
+  });
+  return {
+    packing,
+    attributes: mergeAttributesWithPackaging(input.attributes ?? {}, packing),
+  };
+}
+
 export interface ProductCreateInput {
   name: string;
   description?: string | null;
@@ -31,6 +72,15 @@ export interface ProductCreateInput {
   brandId?: string | null;
   unitId?: string | null;
   unit?: string;
+  packUnitId?: string | null;
+  packUnit?: string | null;
+  unitsPerPack?: number;
+  minSaleQty?: number;
+  maxSaleQty?: number | null;
+  allowBaseSale?: boolean;
+  allowPackSale?: boolean;
+  allowPackPurchase?: boolean;
+  fixedPacking?: boolean;
   attributes?: Record<string, string | number | boolean | null>;
   gstRate?: number;
   hsn?: string | null;
@@ -78,10 +128,12 @@ export interface ProductRepository {
   updateProduct(businessId: string, productId: string, input: ProductUpdateInput): Promise<Product>;
   deleteProduct(businessId: string, productId: string): Promise<void>;
   listBatches(businessId: string, productId?: string): Promise<ProductBatch[]>;
-  createBatch(businessId: string, input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null }): Promise<ProductBatch>;
+  createBatch(businessId: string, input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }): Promise<ProductBatch>;
+  updateBatch(businessId: string, batchId: string, input: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }): Promise<ProductBatch>;
   listStock(businessId: string): Promise<ProductStock[]>;
   listBalances(businessId: string, productId?: string): Promise<StockBalance[]>;
   listMovements(businessId: string, productId?: string, limit?: number): Promise<StockMovement[]>;
+  listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]>;
   addStockMovement(input: StockMovementInput): Promise<void>;
   listVariants(businessId: string, productId?: string): Promise<ProductVariant[]>;
   createVariant(businessId: string, input: { productId: string; sku?: string | null; barcode?: string | null; attributes?: Record<string, string | number | boolean | null>; salePrice?: number | null; purchasePrice?: number | null; mrp?: number | null }): Promise<ProductVariant>;
@@ -181,38 +233,52 @@ export class SupabaseProductRepository implements ProductRepository {
     userId: string,
     input: ProductCreateInput
   ): Promise<Product> {
-    const { data, error } = await this.client
+    const { attributes } = productWritePayload(input);
+    const payload = {
+      business_id: businessId,
+      name: input.name,
+      description: input.description ?? null,
+      sku: input.sku ?? null,
+      barcode: input.barcode ?? null,
+      category_id: input.categoryId ?? null,
+      brand_id: input.brandId ?? null,
+      unit_id: input.unitId ?? null,
+      unit: input.unit ?? "pcs",
+      pack_unit_id: input.packUnitId ?? null,
+      pack_unit: input.packUnit ?? null,
+      units_per_pack: input.unitsPerPack ?? 1,
+      min_sale_qty: input.minSaleQty ?? 1,
+      max_sale_qty: input.maxSaleQty ?? null,
+      allow_base_sale: input.allowBaseSale ?? true,
+      allow_pack_sale: input.allowPackSale ?? false,
+      allow_pack_purchase: input.allowPackPurchase ?? true,
+      fixed_packing: input.fixedPacking ?? true,
+      attributes,
+      gst_rate: input.gstRate ?? 0,
+      hsn: input.hsn ?? null,
+      purchase_price: input.purchasePrice ?? 0,
+      sale_price: input.salePrice ?? 0,
+      mrp: input.mrp ?? null,
+      low_stock_threshold: input.lowStockThreshold ?? 0,
+      min_stock: input.minStock ?? 0,
+      max_stock: input.maxStock ?? null,
+      reorder_level: input.reorderLevel ?? 0,
+      track_inventory: input.trackInventory ?? true,
+      taxable: input.taxable ?? true,
+      product_status: input.productStatus ?? "active",
+      is_active: input.isActive ?? true,
+      created_by: userId,
+    };
+    const first = await this.client.from("products").insert(payload).select().single();
+    if (!first.error) return mapProduct(first.data);
+    if (!isMissingColumnError(first.error)) throw first.error;
+    const fallback = await this.client
       .from("products")
-      .insert({
-        business_id: businessId,
-        name: input.name,
-        description: input.description ?? null,
-        sku: input.sku ?? null,
-        barcode: input.barcode ?? null,
-        category_id: input.categoryId ?? null,
-        brand_id: input.brandId ?? null,
-        unit_id: input.unitId ?? null,
-        unit: input.unit ?? "pcs",
-        attributes: input.attributes ?? {},
-        gst_rate: input.gstRate ?? 0,
-        hsn: input.hsn ?? null,
-        purchase_price: input.purchasePrice ?? 0,
-        sale_price: input.salePrice ?? 0,
-        mrp: input.mrp ?? null,
-        low_stock_threshold: input.lowStockThreshold ?? 0,
-        min_stock: input.minStock ?? 0,
-        max_stock: input.maxStock ?? null,
-        reorder_level: input.reorderLevel ?? 0,
-        track_inventory: input.trackInventory ?? true,
-        taxable: input.taxable ?? true,
-        product_status: input.productStatus ?? "active",
-        is_active: input.isActive ?? true,
-        created_by: userId,
-      })
+      .insert(omitPackingColumns(payload))
       .select()
       .single();
-    if (error) throw error;
-    return mapProduct(data);
+    if (fallback.error) throw fallback.error;
+    return mapProduct(fallback.data);
   }
 
   async updateProduct(
@@ -220,38 +286,58 @@ export class SupabaseProductRepository implements ProductRepository {
     productId: string,
     input: ProductUpdateInput
   ): Promise<Product> {
-    const { data, error } = await this.client
+    const { attributes } = productWritePayload(input);
+    const payload = {
+      name: input.name,
+      description: input.description === undefined ? undefined : input.description,
+      sku: input.sku === undefined ? undefined : input.sku,
+      barcode: input.barcode === undefined ? undefined : input.barcode,
+      category_id: input.categoryId === undefined ? undefined : input.categoryId,
+      brand_id: input.brandId === undefined ? undefined : input.brandId,
+      unit_id: input.unitId === undefined ? undefined : input.unitId,
+      unit: input.unit,
+      pack_unit_id: input.packUnitId === undefined ? undefined : input.packUnitId,
+      pack_unit: input.packUnit === undefined ? undefined : input.packUnit,
+      units_per_pack: input.unitsPerPack,
+      min_sale_qty: input.minSaleQty,
+      max_sale_qty: input.maxSaleQty === undefined ? undefined : input.maxSaleQty,
+      allow_base_sale: input.allowBaseSale,
+      allow_pack_sale: input.allowPackSale,
+      allow_pack_purchase: input.allowPackPurchase,
+      fixed_packing: input.fixedPacking,
+      attributes,
+      gst_rate: input.gstRate,
+      hsn: input.hsn === undefined ? undefined : input.hsn,
+      purchase_price: input.purchasePrice,
+      sale_price: input.salePrice,
+      mrp: input.mrp === undefined ? undefined : input.mrp,
+      low_stock_threshold: input.lowStockThreshold,
+      min_stock: input.minStock,
+      max_stock: input.maxStock === undefined ? undefined : input.maxStock,
+      reorder_level: input.reorderLevel,
+      track_inventory: input.trackInventory,
+      taxable: input.taxable,
+      product_status: input.productStatus,
+      is_active: input.isActive,
+    };
+    const first = await this.client
       .from("products")
-      .update({
-        name: input.name,
-        description: input.description === undefined ? undefined : input.description,
-        sku: input.sku === undefined ? undefined : input.sku,
-        barcode: input.barcode === undefined ? undefined : input.barcode,
-        category_id: input.categoryId === undefined ? undefined : input.categoryId,
-        brand_id: input.brandId === undefined ? undefined : input.brandId,
-        unit_id: input.unitId === undefined ? undefined : input.unitId,
-        unit: input.unit,
-        attributes: input.attributes,
-        gst_rate: input.gstRate,
-        hsn: input.hsn === undefined ? undefined : input.hsn,
-        purchase_price: input.purchasePrice,
-        sale_price: input.salePrice,
-        mrp: input.mrp === undefined ? undefined : input.mrp,
-        low_stock_threshold: input.lowStockThreshold,
-        min_stock: input.minStock,
-        max_stock: input.maxStock === undefined ? undefined : input.maxStock,
-        reorder_level: input.reorderLevel,
-        track_inventory: input.trackInventory,
-        taxable: input.taxable,
-        product_status: input.productStatus,
-        is_active: input.isActive,
-      })
+      .update(payload)
       .eq("business_id", businessId)
       .eq("id", productId)
       .select()
       .single();
-    if (error) throw error;
-    return mapProduct(data);
+    if (!first.error) return mapProduct(first.data);
+    if (!isMissingColumnError(first.error)) throw first.error;
+    const fallback = await this.client
+      .from("products")
+      .update(omitPackingColumns(payload))
+      .eq("business_id", businessId)
+      .eq("id", productId)
+      .select()
+      .single();
+    if (fallback.error) throw fallback.error;
+    return mapProduct(fallback.data);
   }
 
   async deleteProduct(businessId: string, productId: string): Promise<void> {
@@ -277,21 +363,71 @@ export class SupabaseProductRepository implements ProductRepository {
 
   async createBatch(
     businessId: string,
-    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null }
+    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
   ): Promise<ProductBatch> {
-    const { data, error } = await this.client
+    const payload = {
+      business_id: businessId,
+      product_id: input.productId,
+      batch_no: input.batchNo,
+      expiry_date: input.expiryDate ?? null,
+      mrp: input.mrp ?? null,
+      purchase_price: input.purchasePrice ?? null,
+    };
+    const first = await this.client.from("product_batches").insert(payload).select().single();
+    if (!first.error) return mapProductBatch(first.data);
+    if (!isMissingColumnError(first.error)) throw annotateDatabaseError(first.error, "product_batches", "insert");
+    const fallback = await this.client
       .from("product_batches")
-      .insert({
-        business_id: businessId,
-        product_id: input.productId,
-        batch_no: input.batchNo,
-        expiry_date: input.expiryDate ?? null,
-        mrp: input.mrp ?? null,
-      })
+      .insert(omitColumns(payload, ["purchase_price"]))
       .select()
       .single();
-    if (error) throw error;
-    return mapProductBatch(data);
+    if (fallback.error) throw annotateDatabaseError(fallback.error, "product_batches", "insert");
+    return mapProductBatch(fallback.data);
+  }
+
+  async updateBatch(
+    businessId: string,
+    batchId: string,
+    input: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
+  ): Promise<ProductBatch> {
+    const patch: Database["public"]["Tables"]["product_batches"]["Update"] = {};
+    if (input.expiryDate !== undefined) patch.expiry_date = input.expiryDate;
+    if (input.mrp !== undefined) patch.mrp = input.mrp;
+    if (input.purchasePrice !== undefined) patch.purchase_price = input.purchasePrice;
+    const first = await this.client
+      .from("product_batches")
+      .update(patch)
+      .eq("business_id", businessId)
+      .eq("id", batchId)
+      .select()
+      .single();
+    if (!first.error) return mapProductBatch(first.data);
+    if (!isMissingColumnError(first.error) || input.purchasePrice === undefined) {
+      throw annotateDatabaseError(first.error, "product_batches", "update");
+    }
+    const fallbackPatch: Database["public"]["Tables"]["product_batches"]["Update"] = {
+      expiry_date: patch.expiry_date,
+      mrp: patch.mrp,
+    };
+    if (fallbackPatch.expiry_date === undefined && fallbackPatch.mrp === undefined) {
+      const existing = await this.client
+        .from("product_batches")
+        .select("*")
+        .eq("business_id", businessId)
+        .eq("id", batchId)
+        .single();
+      if (existing.error) throw existing.error;
+      return mapProductBatch(existing.data);
+    }
+    const fallback = await this.client
+      .from("product_batches")
+      .update(fallbackPatch)
+      .eq("business_id", businessId)
+      .eq("id", batchId)
+      .select()
+      .single();
+    if (fallback.error) throw fallback.error;
+    return mapProductBatch(fallback.data);
   }
 
   async listStock(businessId: string): Promise<ProductStock[]> {
@@ -321,7 +457,7 @@ export class SupabaseProductRepository implements ProductRepository {
       notes: input.notes ?? null,
       created_by: input.userId ?? null,
     });
-    if (error) throw error;
+    if (error) throw annotateDatabaseError(error, "stock_ledger", "insert");
   }
 
   async listBalances(businessId: string, productId?: string): Promise<StockBalance[]> {
@@ -345,6 +481,17 @@ export class SupabaseProductRepository implements ProductRepository {
       .limit(limit);
     if (productId) query = query.eq("product_id", productId);
     const { data, error } = await query;
+    if (error) throw error;
+    return (data ?? []).map(mapStockMovement);
+  }
+
+  async listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]> {
+    const { data, error } = await this.client
+      .from("stock_ledger")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("reference_id", referenceId)
+      .order("created_at", { ascending: true });
     if (error) throw error;
     return (data ?? []).map(mapStockMovement);
   }

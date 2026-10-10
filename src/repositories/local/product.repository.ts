@@ -51,7 +51,18 @@ export class LocalProductRepository implements ProductRepository {
     writeStorage(CATEGORIES_KEY, categories);
   }
   private readProducts(): Product[] {
-    return readStorage<Product[]>(PRODUCTS_KEY, []);
+    return readStorage<Product[]>(PRODUCTS_KEY, []).map((product) => ({
+      ...product,
+      packUnit: product.packUnit ?? null,
+      packUnitId: product.packUnitId ?? null,
+      unitsPerPack: product.unitsPerPack ?? 1,
+      minSaleQty: product.minSaleQty ?? 1,
+      maxSaleQty: product.maxSaleQty ?? null,
+      allowBaseSale: product.allowBaseSale ?? true,
+      allowPackSale: product.allowPackSale ?? false,
+      allowPackPurchase: product.allowPackPurchase ?? true,
+      fixedPacking: product.fixedPacking ?? true,
+    }));
   }
   private saveProducts(products: Product[]): void {
     writeStorage(PRODUCTS_KEY, products);
@@ -160,6 +171,15 @@ export class LocalProductRepository implements ProductRepository {
       brandId: input.brandId ?? null,
       unitId: input.unitId ?? null,
       unit: input.unit ?? "pcs",
+      packUnit: input.packUnit ?? null,
+      packUnitId: input.packUnitId ?? null,
+      unitsPerPack: input.unitsPerPack ?? 1,
+      minSaleQty: input.minSaleQty ?? 1,
+      maxSaleQty: input.maxSaleQty ?? null,
+      allowBaseSale: input.allowBaseSale ?? true,
+      allowPackSale: input.allowPackSale ?? false,
+      allowPackPurchase: input.allowPackPurchase ?? true,
+      fixedPacking: input.fixedPacking ?? true,
       attributes: input.attributes ?? {},
       gstRate: input.gstRate ?? 0,
       hsn: input.hsn ?? null,
@@ -213,7 +233,7 @@ export class LocalProductRepository implements ProductRepository {
 
   async createBatch(
     businessId: string,
-    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null }
+    input: { productId: string; batchNo: string; expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
   ): Promise<ProductBatch> {
     const now = new Date().toISOString();
     const batch: ProductBatch = {
@@ -223,6 +243,7 @@ export class LocalProductRepository implements ProductRepository {
       batchNo: input.batchNo,
       expiryDate: input.expiryDate ?? null,
       mrp: input.mrp ?? null,
+      purchasePrice: input.purchasePrice ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -230,6 +251,27 @@ export class LocalProductRepository implements ProductRepository {
     all.push(batch);
     this.saveBatches(all);
     return batch;
+  }
+
+  async updateBatch(
+    businessId: string,
+    batchId: string,
+    input: { expiryDate?: string | null; mrp?: number | null; purchasePrice?: number | null }
+  ): Promise<ProductBatch> {
+    const all = this.readBatches();
+    const index = all.findIndex((batch) => batch.businessId === businessId && batch.id === batchId);
+    if (index === -1) throw new Error("Batch not found.");
+    const current = all[index];
+    const updated: ProductBatch = {
+      ...current,
+      expiryDate: input.expiryDate === undefined ? current.expiryDate : input.expiryDate,
+      mrp: input.mrp === undefined ? current.mrp : input.mrp,
+      purchasePrice: input.purchasePrice === undefined ? current.purchasePrice : input.purchasePrice,
+      updatedAt: new Date().toISOString(),
+    };
+    all[index] = updated;
+    this.saveBatches(all);
+    return updated;
   }
 
   async listStock(businessId: string): Promise<ProductStock[]> {
@@ -253,10 +295,11 @@ export class LocalProductRepository implements ProductRepository {
     for (const entry of this.readLedger()) {
       if (entry.businessId !== businessId) continue;
       if (productId && entry.productId !== productId) continue;
-      const key = `${entry.productId}|${entry.variantId ?? ""}|${entry.warehouseId ?? ""}|${entry.locationId ?? ""}`;
+      const key = `${entry.productId}|${entry.variantId ?? ""}|${entry.batchId ?? ""}|${entry.warehouseId ?? ""}|${entry.locationId ?? ""}`;
       const current = balances.get(key) ?? {
         productId: entry.productId,
         variantId: entry.variantId,
+        batchId: entry.batchId,
         warehouseId: entry.warehouseId,
         locationId: entry.locationId,
         quantity: 0,
@@ -276,6 +319,13 @@ export class LocalProductRepository implements ProductRepository {
       .filter((entry) => entry.businessId === businessId && (!productId || entry.productId === productId))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit)
+      .map((entry) => ({ ...entry, id: entry.id }));
+  }
+
+  async listMovementsByReference(businessId: string, referenceId: string): Promise<StockMovement[]> {
+    return this.readLedger()
+      .filter((entry) => entry.businessId === businessId && entry.referenceId === referenceId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map((entry) => ({ ...entry, id: entry.id }));
   }
 

@@ -27,6 +27,7 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
+import { remainingOnLine, remainingOnOrder } from "@/lib/purchase-receiving";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { PurchaseOrder } from "@/types/domain";
 
@@ -47,9 +48,9 @@ export default function PurchaseOrdersPage() {
   const [supplierId, setSupplierId] = React.useState<string | null>(null);
   const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [expectedDate, setExpectedDate] = React.useState<string | null>(null);
-  const [intraState, setIntraState] = React.useState(true);
+  const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [lines, setLines] = React.useState<CartLine[]>([]);
-  const [notes, setNotes] = React.useState<string | null>(null);
+  const [notesOverride, setNotesOverride] = React.useState<string | null | undefined>(undefined);
 
   const [receiving, setReceiving] = React.useState<PurchaseOrder | null>(null);
   const [receiveLines, setReceiveLines] = React.useState<ReceiveLine[]>([]);
@@ -92,6 +93,27 @@ export default function PurchaseOrdersPage() {
     enabled: Boolean(business),
   });
 
+  const { data: purchaseDefaults } = useQuery({
+    queryKey: ["purchase-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getPurchaseDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const { data: taxDefaults } = useQuery({
+    queryKey: ["tax-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getTaxDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
+  const intraState = intraStateOverride ?? purchaseDefaults?.defaultIntraState ?? taxDefaults?.defaultIntraState ?? true;
+  const notes = notesOverride === undefined ? (purchaseDefaults?.defaultPaymentTerms || null) : notesOverride;
+
   const filtered = React.useMemo(() => {
     if (!orders) return [];
     const q = search.trim().toLowerCase();
@@ -116,9 +138,9 @@ export default function PurchaseOrdersPage() {
     setSupplierId(null);
     setDate(new Date().toISOString().slice(0, 10));
     setExpectedDate(null);
-    setIntraState(true);
+    setIntraStateOverride(null);
     setLines([]);
-    setNotes(null);
+    setNotesOverride(undefined);
   };
 
   const openReceive = (order: PurchaseOrder) => {
@@ -126,11 +148,11 @@ export default function PurchaseOrdersPage() {
     setReceiveLines(
       order.items.map((item) => ({
         productId: item.productId,
-        quantity: String(item.quantity),
+        quantity: String(remainingOnLine(item)),
         unitCost: String(item.unitPrice),
       }))
     );
-    setReceiveWarehouse(order.warehouseId ?? "");
+    setReceiveWarehouse(order.warehouseId ?? purchaseDefaults?.defaultWarehouseId ?? "");
   };
 
   const receiveUpdateLine = (index: number, patch: Partial<ReceiveLine>) => {
@@ -141,6 +163,26 @@ export default function PurchaseOrdersPage() {
 
   const submitReceiving = async () => {
     if (!business || !user || !receiving) return;
+    const items = receiveLines
+      .map((line, index) => {
+        const remaining = remainingOnLine(receiving.items[index] ?? { quantity: 0, receivedQuantity: 0 });
+        return {
+          productId: line.productId,
+          quantity: Number(line.quantity) || 0,
+          unitCost: Number(line.unitCost) || 0,
+          remaining,
+        };
+      })
+      .filter((line) => line.quantity > 0);
+    if (items.length === 0) {
+      toastError("Nothing to receive", "Enter a quantity greater than zero for at least one line.");
+      return;
+    }
+    const over = items.find((line) => line.quantity > line.remaining + 1e-9);
+    if (over) {
+      toastError("Quantity too high", "This receipt cannot exceed the remaining ordered quantity.");
+      return;
+    }
     setReceiveSaving(true);
     try {
       const services = getClientServices();
@@ -153,10 +195,10 @@ export default function PurchaseOrdersPage() {
         purchaseOrderId: receiving.id,
         warehouseId: receiveWarehouse || null,
         notes: null,
-        items: receiveLines.map((line) => ({
+        items: items.map((line) => ({
           productId: line.productId,
-          quantity: Number(line.quantity) || 0,
-          unitCost: Number(line.unitCost) || 0,
+          quantity: line.quantity,
+          unitCost: line.unitCost,
         })),
       });
       toastSuccess("Goods received", `${receiptNo} recorded and stock increased.`);
@@ -189,6 +231,7 @@ export default function PurchaseOrdersPage() {
       );
       await services.transactions.createPurchaseOrder(business.id, user.id, orderNo, {
         supplierId,
+        warehouseId: purchaseDefaults?.defaultWarehouseId ?? null,
         orderDate: date,
         expectedDate,
         notes,
@@ -259,6 +302,7 @@ export default function PurchaseOrdersPage() {
                   <TableHead>Order</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Expected</TableHead>
+                  <TableHead className="text-right">Remaining</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -281,23 +325,40 @@ export default function PurchaseOrdersPage() {
                     <TableCell className="text-sm text-muted-foreground">
                       {order.expectedDate ? formatDate(order.expectedDate) : "—"}
                     </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {remainingOnOrder(order.items)}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(order.total, business?.currency ?? "INR")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={order.status === "draft" ? "secondary" : "info"}>
+                      <Badge
+                        variant={
+                          order.status === "received"
+                            ? "success"
+                            : order.status === "partial"
+                              ? "warning"
+                              : order.status === "draft"
+                                ? "secondary"
+                                : "info"
+                        }
+                      >
                         {order.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openReceive(order)}
-                      >
-                        <PackageCheck className="size-4" />
-                        Receive
-                      </Button>
+                      {order.status === "received" ? (
+                        <span className="text-xs text-muted-foreground">Fully received</span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openReceive(order)}
+                        >
+                          <PackageCheck className="size-4" />
+                          {order.status === "partial" ? "Receive remaining" : "Receive"}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -333,16 +394,17 @@ export default function PurchaseOrdersPage() {
           partyValue={supplierId}
           onPartyChange={setSupplierId}
           intraState={intraState}
-          onIntraStateChange={setIntraState}
+          onIntraStateChange={setIntraStateOverride}
           lines={lines}
           onLinesChange={setLines}
           notes={notes}
-          onNotesChange={setNotes}
+          onNotesChange={setNotesOverride}
           date={date}
           onDateChange={setDate}
           dueDate={expectedDate}
           onDueDateChange={setExpectedDate}
           showDueDate
+          pricesIncludeTax={taxDefaults?.pricesIncludeTax ?? false}
         />
       </Modal>
 
@@ -350,7 +412,7 @@ export default function PurchaseOrdersPage() {
         open={Boolean(receiving)}
         onClose={() => setReceiving(null)}
         title={receiving ? `Receive goods: ${receiving.orderNo}` : "Receive goods"}
-        description="Enter the quantities actually received; only these enter stock."
+        description="Enter quantities for this receipt. Remaining ordered qty stays open for later receipts."
         size="lg"
         footer={
           <>
@@ -365,6 +427,9 @@ export default function PurchaseOrdersPage() {
       >
         {receiving ? (
           <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {remainingOnOrder(receiving.items)} remaining across this order.
+            </p>
             <Field label="Warehouse" htmlFor="receive-warehouse">
               <Select
                 id="receive-warehouse"
@@ -384,33 +449,45 @@ export default function PurchaseOrdersPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Item</TableHead>
-                    <TableHead className="w-24 text-right">Ordered</TableHead>
-                    <TableHead className="w-24 text-right">Received</TableHead>
-                    <TableHead className="w-32 text-right">Unit cost</TableHead>
+                    <TableHead className="w-20 text-right">Ordered</TableHead>
+                    <TableHead className="w-20 text-right">Already in</TableHead>
+                    <TableHead className="w-20 text-right">Remaining</TableHead>
+                    <TableHead className="w-24 text-right">This receipt</TableHead>
+                    <TableHead className="w-28 text-right">Unit cost</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {receiveLines.map((line, index) => {
                     const product = products?.find((p) => p.id === line.productId);
+                    const orderLine = receiving.items[index];
+                    const remaining = orderLine ? remainingOnLine(orderLine) : 0;
                     return (
                       <TableRow key={index}>
                         <TableCell className="font-medium text-foreground">
                           {product?.name ?? line.productId}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {receiving.items[index]?.quantity ?? "—"}
+                          {orderLine?.quantity ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {orderLine?.receivedQuantity ?? 0}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {remaining}
                         </TableCell>
                         <TableCell>
                           <Input
                             type="number"
                             step="any"
                             min={0}
+                            max={remaining}
                             value={line.quantity}
                             onChange={(event) =>
                               receiveUpdateLine(index, { quantity: event.target.value })
                             }
                             className="h-8 text-right"
-                            aria-label="Received quantity"
+                            aria-label="Quantity to receive now"
+                            disabled={remaining <= 0}
                           />
                         </TableCell>
                         <TableCell>

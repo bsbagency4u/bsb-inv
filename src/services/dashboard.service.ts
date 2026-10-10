@@ -24,11 +24,11 @@ export class DashboardService {
     ]);
 
     const todaySales = invoices
-      .filter((i) => i.invoiceDate === today && i.status !== "cancelled")
+      .filter((i) => i.invoiceDate === today && i.status !== "cancelled" && i.status !== "draft")
       .reduce((sum, i) => sum + i.total, 0);
 
     const todayPurchase = purchases
-      .filter((i) => i.invoiceDate === today)
+      .filter((i) => i.invoiceDate === today && i.status !== "draft")
       .reduce((sum, i) => sum + i.total, 0);
 
     const stockByProduct = new Map(stock.map((s) => [s.productId, s.quantity]));

@@ -77,6 +77,15 @@ export default function ProductsPage() {
     enabled: Boolean(business),
   });
 
+  const { data: taxDefaults } = useQuery({
+    queryKey: ["tax-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getTaxDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   const { data: variants } = useQuery({
     queryKey: ["product-variants", business?.id, variantsFor?.id],
     queryFn: async () => {
@@ -205,11 +214,13 @@ export default function ProductsPage() {
       >
         {business && user ? (
           <ProductForm
+            key={editing?.id ?? `new-${taxDefaults?.defaultGstRate ?? "x"}-${taxDefaults?.defaultHsnCode ?? ""}`}
             businessType={business.type}
             categories={categories ?? []}
             brands={brands ?? []}
             units={units ?? []}
             product={editing}
+            taxDefaults={taxDefaults}
             submitLabel={editing ? "Save changes" : "Add product"}
             onSubmit={async (values) => {
               try {

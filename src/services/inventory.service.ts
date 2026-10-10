@@ -1,8 +1,9 @@
 import type { Repositories } from "@/repositories/types";
-import type { StockBalance, StockMovement } from "@/types/domain";
+import type { SellableLot, StockBalance, StockMovement } from "@/types/domain";
 import { AppError } from "@/lib/errors";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
+import { AuthorizationService } from "./authorization.service";
 
 export interface OpeningStockInput {
   productId: string;
@@ -63,11 +64,20 @@ export interface StockValuationRow {
  * derived by summing the ledger.
  */
 export class InventoryService {
+  private auth: AuthorizationService;
+
   constructor(
     private repos: Repositories,
     private audits: AuditService,
-    private notifications: NotificationService
-  ) {}
+    private notifications: NotificationService,
+    auth?: AuthorizationService
+  ) {
+    this.auth = auth ?? new AuthorizationService(repos);
+  }
+
+  private requireInventoryManage(businessId: string, userId: string): Promise<void> {
+    return this.auth.requirePermission(businessId, userId, "inventory.manage");
+  }
 
   async listBalances(businessId: string, productId?: string): Promise<StockBalance[]> {
     return this.repos.products.listBalances(businessId, productId);
@@ -77,11 +87,63 @@ export class InventoryService {
     return this.repos.products.listMovements(businessId, productId, limit);
   }
 
+  /**
+   * On-hand lots with MRP resolved from batch, then variant, then product master.
+   * FEFO (earliest expiry) then FIFO (batch number / oldest lot).
+   */
+  async listSellableLots(
+    businessId: string,
+    filter?: { productId?: string; variantId?: string | null; warehouseId?: string | null }
+  ): Promise<SellableLot[]> {
+    const [balances, batches, products, variants] = await Promise.all([
+      this.repos.products.listBalances(businessId, filter?.productId),
+      this.repos.products.listBatches(businessId, filter?.productId),
+      filter?.productId
+        ? this.repos.products.getProduct(businessId, filter.productId).then((product) => (product ? [product] : []))
+        : this.repos.products.listProducts(businessId),
+      this.repos.products.listVariants(businessId, filter?.productId),
+    ]);
+    const batchById = new Map(batches.map((batch) => [batch.id, batch]));
+    const productById = new Map(products.map((product) => [product.id, product]));
+    const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+
+    const lots: SellableLot[] = [];
+    for (const balance of balances) {
+      if (balance.quantity <= 0) continue;
+      if (filter?.variantId !== undefined && (balance.variantId ?? null) !== (filter.variantId ?? null)) continue;
+      if (filter?.warehouseId && balance.warehouseId && balance.warehouseId !== filter.warehouseId) continue;
+      const batch = balance.batchId ? batchById.get(balance.batchId) : undefined;
+      const product = productById.get(balance.productId);
+      const variant = balance.variantId ? variantById.get(balance.variantId) : undefined;
+      lots.push({
+        productId: balance.productId,
+        variantId: balance.variantId,
+        batchId: balance.batchId,
+        batchNo: batch?.batchNo ?? null,
+        expiryDate: batch?.expiryDate ?? null,
+        mrp: batch?.mrp ?? variant?.mrp ?? product?.mrp ?? null,
+        purchasePrice: batch?.purchasePrice ?? variant?.purchasePrice ?? product?.purchasePrice ?? null,
+        quantity: balance.quantity,
+        warehouseId: balance.warehouseId,
+        locationId: balance.locationId,
+      });
+    }
+
+    lots.sort((a, b) => {
+      const expiryA = a.expiryDate || "9999-99-99";
+      const expiryB = b.expiryDate || "9999-99-99";
+      if (expiryA !== expiryB) return expiryA.localeCompare(expiryB);
+      return (a.batchNo || "").localeCompare(b.batchNo || "");
+    });
+    return lots;
+  }
+
   async listWarehouses(businessId: string) {
     return this.repos.inventory.listWarehouses(businessId);
   }
 
   async createWarehouse(businessId: string, userId: string, input: { name: string; code: string; address?: string | null }) {
+    await this.requireInventoryManage(businessId, userId);
     const warehouse = await this.repos.inventory.createWarehouse(businessId, input);
     await this.audits.log({
       businessId,
@@ -100,6 +162,7 @@ export class InventoryService {
     warehouseId: string,
     input: { name?: string; code?: string; address?: string | null; isActive?: boolean }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const warehouse = await this.repos.inventory.updateWarehouse(businessId, warehouseId, input);
     await this.audits.log({
       businessId,
@@ -113,6 +176,7 @@ export class InventoryService {
   }
 
   async deleteWarehouse(businessId: string, userId: string, warehouseId: string): Promise<void> {
+    await this.requireInventoryManage(businessId, userId);
     await this.repos.inventory.deleteWarehouse(businessId, warehouseId);
     await this.audits.log({
       businessId,
@@ -132,6 +196,7 @@ export class InventoryService {
     userId: string,
     input: { warehouseId: string; name: string; code: string; parentId?: string | null }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const location = await this.repos.inventory.createLocation(businessId, input);
     await this.audits.log({
       businessId,
@@ -150,6 +215,7 @@ export class InventoryService {
     locationId: string,
     input: { name?: string; code?: string; parentId?: string | null; isActive?: boolean }
   ) {
+    await this.requireInventoryManage(businessId, userId);
     const location = await this.repos.inventory.updateLocation(businessId, locationId, input);
     await this.audits.log({
       businessId,
@@ -163,6 +229,7 @@ export class InventoryService {
   }
 
   async deleteLocation(businessId: string, userId: string, locationId: string): Promise<void> {
+    await this.requireInventoryManage(businessId, userId);
     await this.repos.inventory.deleteLocation(businessId, locationId);
     await this.audits.log({
       businessId,
@@ -185,6 +252,7 @@ export class InventoryService {
     userId: string,
     input: OpeningStockInput
   ): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity < 0) {
       throw AppError.validation("Opening stock quantity cannot be negative.");
@@ -223,6 +291,7 @@ export class InventoryService {
     userId: string,
     input: StockAdjustmentInput
   ): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (!Number.isFinite(input.change) || input.change === 0) {
       throw AppError.validation("Adjustment quantity must be a non-zero number.");
@@ -259,6 +328,7 @@ export class InventoryService {
     userId: string,
     input: StockTransferInput
   ): Promise<StockMovement[]> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity <= 0) {
       throw AppError.validation("Transfer quantity must be positive.");
@@ -309,6 +379,7 @@ export class InventoryService {
 
   /** Writes off damaged/waste stock as a SCRAP movement. */
   async scrapStock(businessId: string, userId: string, input: ScrapInput): Promise<StockMovement> {
+    await this.requireInventoryManage(businessId, userId);
     const product = await this.ensureProduct(businessId, input.productId);
     if (input.quantity <= 0) {
       throw AppError.validation("Scrap quantity must be positive.");
@@ -430,12 +501,18 @@ export class InventoryService {
     productId: string,
     variantId: string | null,
     quantity: number,
-    referenceId?: string | null
+    referenceId?: string | null,
+    warehouseId?: string | null,
+    batchId?: string | null,
+    locationId?: string | null
   ): Promise<void> {
     await this.repos.products.addStockMovement({
       businessId,
       productId,
       variantId,
+      batchId: batchId ?? null,
+      warehouseId: warehouseId ?? null,
+      locationId: locationId ?? null,
       change: -quantity,
       movementType: "SALE",
       reason: "sale",
@@ -454,12 +531,16 @@ export class InventoryService {
     variantId: string | null,
     quantity: number,
     referenceId?: string | null,
-    referenceType?: "purchase_receipt" | "purchase_invoice"
+    referenceType?: "purchase_receipt" | "purchase_invoice",
+    warehouseId?: string | null,
+    batchId?: string | null
   ): Promise<void> {
     await this.repos.products.addStockMovement({
       businessId,
       productId,
       variantId,
+      batchId: batchId ?? null,
+      warehouseId: warehouseId ?? null,
       change: quantity,
       movementType: "PURCHASE",
       reason: "purchase",
@@ -476,15 +557,16 @@ export class InventoryService {
     productId: string,
     variantId: string | null,
     quantity: number,
-    referenceId?: string | null
+    referenceId?: string | null,
+    warehouseId?: string | null,
+    batchId?: string | null
   ): Promise<void> {
-    // Sale returns and cancelled sales restore stock (+), purchase returns
-    // send stock back to the supplier (-). The sign is decided by the caller
-    // through the sign of quantity.
     await this.repos.products.addStockMovement({
       businessId,
       productId,
       variantId,
+      batchId: batchId ?? null,
+      warehouseId: warehouseId ?? null,
       change: quantity,
       movementType: quantity < 0 ? "PURCHASE_RETURN" : "SALE_RETURN",
       reason: "return",

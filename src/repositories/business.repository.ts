@@ -9,6 +9,8 @@ export interface BusinessRepository {
   getByUserAndId(userId: string, businessId: string): Promise<BusinessProfile | null>;
   create(userId: string, input: Partial<BusinessProfile> & { name: string }): Promise<BusinessProfile>;
   update(userId: string, businessId: string, input: Partial<BusinessProfile>): Promise<BusinessProfile>;
+  getSetting(businessId: string, key: string): Promise<unknown | null>;
+  setSetting(businessId: string, key: string, value: unknown, userId: string): Promise<void>;
 }
 
 export class SupabaseBusinessRepository implements BusinessRepository {
@@ -131,5 +133,32 @@ export class SupabaseBusinessRepository implements BusinessRepository {
 
     if (error) throw error;
     return mapBusiness(data);
+  }
+
+  async getSetting(businessId: string, key: string): Promise<unknown | null> {
+    const { data, error } = await this.client
+      .from("business_settings")
+      .select("value")
+      .eq("business_id", businessId)
+      .eq("key", key)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data?.value ?? null;
+  }
+
+  async setSetting(
+    businessId: string,
+    key: string,
+    value: unknown,
+    userId: string
+  ): Promise<void> {
+    const { error } = await this.client.from("business_settings").upsert({
+      business_id: businessId,
+      key,
+      value,
+      updated_by: userId,
+    });
+    if (error) throw error;
   }
 }

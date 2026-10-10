@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { Combobox } from "@/components/ui/combobox";
@@ -27,18 +28,31 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { customerContact, salesReturnPrintModel } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import type { SalesReturn } from "@/types/domain";
+import {
+  packagingFromProduct,
+  resolveUnitKind,
+  saleUnitOptions,
+  unitKindFromSaleUnit,
+  type UnitKind,
+} from "@/lib/packaging";
 import type { SalesInvoice } from "@/types/domain";
 
 interface ReturnLine {
   productId: string;
   quantity: string;
   unitPrice: string;
+  unitKind: UnitKind;
 }
 
 export default function SalesReturnsPage() {
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [invoiceId, setInvoiceId] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
@@ -82,6 +96,15 @@ export default function SalesReturnsPage() {
     enabled: Boolean(business),
   });
 
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   if (isLoading) return <LoadingState label="Loading sales returns…" />;
   if (isError) {
     return (
@@ -104,16 +127,23 @@ export default function SalesReturnsPage() {
   const selectedInvoice: SalesInvoice | null =
     invoices?.find((invoice) => invoice.id === invoiceId) ?? null;
 
+  const lineFromInvoiceItem = (item: SalesInvoice["items"][number]): ReturnLine => {
+    const product = (products ?? []).find((entry) => entry.id === item.productId);
+    const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+    return {
+      productId: item.productId,
+      quantity: String(item.quantity),
+      unitPrice: String(item.unitPrice),
+      unitKind: unitKindFromSaleUnit(item.saleUnit, packaging),
+    };
+  };
+
   const addLine = () => {
-    if (!products || products.length === 0) return;
-    setLines((current) => [
-      ...current,
-      {
-        productId: products[0].id,
-        quantity: "1",
-        unitPrice: String(products[0].salePrice),
-      },
-    ]);
+    if (!selectedInvoice || selectedInvoice.items.length === 0) return;
+    const used = new Set(lines.map((line) => line.productId));
+    const nextItem = selectedInvoice.items.find((item) => !used.has(item.productId));
+    if (!nextItem) return;
+    setLines((current) => [...current, lineFromInvoiceItem(nextItem)]);
   };
 
   const updateLine = (index: number, patch: Partial<ReturnLine>) => {
@@ -126,8 +156,16 @@ export default function SalesReturnsPage() {
     setLines((current) => current.filter((_, i) => i !== index));
   };
 
+  const returnableInvoices = (invoices ?? []).filter(
+    (invoice) => invoice.status !== "draft" && invoice.status !== "cancelled" && invoice.status !== "returned"
+  );
+
   const submit = async () => {
     if (!business || !user) return;
+    if (!selectedInvoice) {
+      toastError("Invoice required", "Select the original sales invoice.");
+      return;
+    }
     if (lines.length === 0) {
       toastError("No items", "Add at least one returned item.");
       return;
@@ -135,9 +173,8 @@ export default function SalesReturnsPage() {
     setSaving(true);
     try {
       const services = getClientServices();
-      const returnNo = await services.transactions.nextDocumentNo(
+      const returnNo = await services.transactions.nextControlledDocumentNo(
         business.id,
-        "SRT",
         "sales_return"
       );
       const result = await services.transactions.createSalesReturn(business.id, user.id, returnNo, {
@@ -149,9 +186,28 @@ export default function SalesReturnsPage() {
           productId: line.productId,
           quantity: Number(line.quantity) || 0,
           unitPrice: Number(line.unitPrice) || 0,
+          unitKind: line.unitKind,
         })),
       });
       toastSuccess("Return recorded", `${result.returnNo} saved and stock updated.`);
+      if (business) {
+        const customer = result.customerId
+          ? customers?.find((item) => item.id === result.customerId)
+          : null;
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          salesReturnPrintModel(result, {
+            partyLabel: customer?.name ?? "Customer",
+            ...customerContact(customer),
+            products,
+          }),
+          business.currency ?? "INR"
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Return saved. Click Print if the browser blocked the dialog.");
+        }
+      }
       setCreateOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["sales-returns"] });
       await queryClient.invalidateQueries({ queryKey: ["sales-invoices"] });
@@ -195,10 +251,11 @@ export default function SalesReturnsPage() {
                   <TableHead>Customer</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Reason</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {returns.map((item) => (
+                {returns.map((item: SalesReturn) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-medium text-foreground">{item.returnNo}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{formatDate(item.returnDate)}</TableCell>
@@ -210,6 +267,20 @@ export default function SalesReturnsPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary">{item.reason ?? "—"}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {business ? (
+                        <DocumentPrintActions
+                          business={business}
+                          defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                          model={salesReturnPrintModel(item, {
+                            partyLabel: customers?.find((c) => c.id === item.customerId)?.name ?? "Customer",
+                            ...customerContact(customers?.find((c) => c.id === item.customerId)),
+                            products,
+                          })}
+                          currency={business.currency ?? "INR"}
+                        />
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -223,7 +294,7 @@ export default function SalesReturnsPage() {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         title="Record sales return"
-        description="Select the invoice and the goods being returned."
+        description="Returns must be against a completed sales invoice."
         size="xl"
         footer={
           <>
@@ -237,18 +308,26 @@ export default function SalesReturnsPage() {
         }
       >
         <div className="space-y-4">
-          <Field label="Sales invoice" htmlFor="sreturn-invoice">
+          <Field label="Sales invoice" htmlFor="sreturn-invoice" required>
             <Combobox
-              options={(invoices ?? []).map((invoice) => ({
+              options={returnableInvoices.map((invoice) => ({
                 value: invoice.id,
                 label: invoice.invoiceNo,
                 description:
                   customers?.find((c) => c.id === invoice.customerId)?.name ?? undefined,
               }))}
               value={invoiceId}
-              onValueChange={setInvoiceId}
+              onValueChange={(value) => {
+                setInvoiceId(value);
+                const invoice = (invoices ?? []).find((item) => item.id === value);
+                if (!invoice) {
+                  setLines([]);
+                  return;
+                }
+                setLines(invoice.items.map((item) => lineFromInvoiceItem(item)));
+              }}
               placeholder="Select a sales invoice…"
-              emptyText="No sales invoices yet."
+              emptyText="No returnable invoices."
             />
           </Field>
           <Field label="Reason" htmlFor="sreturn-reason">
@@ -263,7 +342,7 @@ export default function SalesReturnsPage() {
           <div className="rounded-lg border border-border">
             <div className="flex items-center justify-between border-b border-border p-3">
               <p className="text-sm font-medium text-foreground">Returned items</p>
-              <Button variant="outline" size="sm" onClick={addLine}>
+              <Button variant="outline" size="sm" onClick={addLine} disabled={!selectedInvoice}>
                 <Plus className="size-4" />
                 Add item
               </Button>
@@ -277,6 +356,7 @@ export default function SalesReturnsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Product</TableHead>
+                    <TableHead className="w-28">Unit</TableHead>
                     <TableHead className="w-24 text-right">Qty</TableHead>
                     <TableHead className="w-32 text-right">Unit price</TableHead>
                     <TableHead className="w-12" />
@@ -287,17 +367,49 @@ export default function SalesReturnsPage() {
                     <TableRow key={index}>
                       <TableCell>
                         <Combobox
-                          options={(products ?? []).map((p) => ({
-                            value: p.id,
-                            label: p.name,
-                            description: p.sku ?? undefined,
-                          }))}
+                          options={(selectedInvoice?.items ?? []).map((item) => {
+                            const product = (products ?? []).find((entry) => entry.id === item.productId);
+                            return {
+                              value: item.productId,
+                              label: product?.name ?? item.productId,
+                              description: product?.sku ?? undefined,
+                            };
+                          })}
                           value={line.productId}
-                          onValueChange={(value) =>
-                            updateLine(index, { productId: value ?? "" })
-                          }
+                          onValueChange={(value) => {
+                            const item = selectedInvoice?.items.find((entry) => entry.productId === value);
+                            if (!item) return;
+                            updateLine(index, lineFromInvoiceItem(item));
+                          }}
                           placeholder="Select product…"
                         />
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const product = (products ?? []).find((item) => item.id === line.productId);
+                          const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+                          const options = saleUnitOptions(packaging);
+                          const kind = resolveUnitKind(line.unitKind, packaging);
+                          if (options.length <= 1) {
+                            return <p className="text-sm">{options[0]?.code ?? product?.unit ?? "pcs"}</p>;
+                          }
+                          return (
+                            <Select
+                              value={kind}
+                              onChange={(event) =>
+                                updateLine(index, { unitKind: event.target.value as UnitKind })
+                              }
+                              className="h-8"
+                              aria-label="Return unit"
+                            >
+                              {options.map((option) => (
+                                <option key={option.kind} value={option.kind}>
+                                  {option.code}
+                                </option>
+                              ))}
+                            </Select>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input

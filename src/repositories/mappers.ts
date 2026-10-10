@@ -1,12 +1,14 @@
 import type {
   Brand,
   Business,
+  BusinessInvitation,
   BusinessMember,
   Category,
   Customer,
   Notification,
   Payment,
   PaymentMode,
+  Permission,
   Product,
   ProductBatch,
   ProductImage,
@@ -19,6 +21,7 @@ import type {
   PurchaseReceiptItem,
   PurchaseReturn,
   PurchaseReturnItem,
+  Role,
   SalesInvoice,
   SalesReturn,
   SalesReturnItem,
@@ -29,6 +32,10 @@ import type {
   Unit,
   Warehouse,
 } from "@/lib/supabase/types";
+import {
+  decodePackagingAttribute,
+  stripPackagingAttribute,
+} from "@/lib/packaging";
 import type {
   Brand as BrandModel,
   BusinessMembership,
@@ -38,6 +45,7 @@ import type {
   NotificationItem,
   Payment as PaymentModel,
   PaymentMode as PaymentModeModel,
+  Permission as PermissionModel,
   Product as ProductModel,
   ProductBatch as ProductBatchModel,
   ProductImage as ProductImageModel,
@@ -47,10 +55,12 @@ import type {
   PurchaseOrder as PurchaseOrderModel,
   PurchaseReceipt as PurchaseReceiptModel,
   PurchaseReturn as PurchaseReturnModel,
+  Role as RoleModel,
   SalesInvoice as SalesInvoiceModel,
   SalesReturn as SalesReturnModel,
   SessionUser,
   StockBalance,
+  TeamInvitation,
   StockLocation as StockLocationModel,
   StockMovement,
   Supplier as SupplierModel,
@@ -163,6 +173,11 @@ export function mapProductImage(row: ProductImage): ProductImageModel {
 }
 
 export function mapProduct(row: Product): ProductModel {
+  const rawAttributes = (row.attributes ?? {}) as Record<string, unknown>;
+  const stored = decodePackagingAttribute(rawAttributes);
+  const unitsPerPack = row.units_per_pack ?? stored?.unitsPerPack;
+  const minSaleQty = row.min_sale_qty ?? stored?.minSaleQty;
+  const maxSaleQty = row.max_sale_qty === undefined ? stored?.maxSaleQty : row.max_sale_qty;
   return {
     id: row.id,
     businessId: row.business_id,
@@ -174,7 +189,16 @@ export function mapProduct(row: Product): ProductModel {
     brandId: row.brand_id,
     unitId: row.unit_id,
     unit: row.unit,
-    attributes: (row.attributes ?? {}) as Record<string, string | number | boolean | null>,
+    packUnit: row.pack_unit ?? stored?.packUnit ?? null,
+    packUnitId: row.pack_unit_id ?? stored?.packUnitId ?? null,
+    unitsPerPack: asNumber(unitsPerPack) || 1,
+    minSaleQty: asNumber(minSaleQty) || 1,
+    maxSaleQty: maxSaleQty === null || maxSaleQty === undefined ? null : asNumber(maxSaleQty),
+    allowBaseSale: (row.allow_base_sale ?? stored?.allowBaseSale) !== false,
+    allowPackSale: (row.allow_pack_sale ?? stored?.allowPackSale) === true,
+    allowPackPurchase: (row.allow_pack_purchase ?? stored?.allowPackPurchase) !== false,
+    fixedPacking: (row.fixed_packing ?? stored?.fixedPacking) !== false,
+    attributes: stripPackagingAttribute(rawAttributes),
     gstRate: asNumber(row.gst_rate),
     hsn: row.hsn,
     purchasePrice: asNumber(row.purchase_price),
@@ -201,6 +225,7 @@ export function mapProductBatch(row: ProductBatch): ProductBatchModel {
     batchNo: row.batch_no,
     expiryDate: row.expiry_date,
     mrp: row.mrp === null ? null : asNumber(row.mrp),
+    purchasePrice: row.purchase_price === null || row.purchase_price === undefined ? null : asNumber(row.purchase_price),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -218,6 +243,7 @@ export function mapStockBalance(row: StockBalanceView): StockBalance {
   return {
     productId: row.product_id,
     variantId: row.variant_id,
+    batchId: row.batch_id ?? null,
     warehouseId: row.warehouse_id,
     locationId: row.location_id,
     quantity: asNumber(row.quantity),
@@ -522,12 +548,44 @@ export function mapMembership(row: BusinessMember): BusinessMembership {
 export function mapProfile(row: Profile): SessionUser {
   return {
     id: row.id,
-    email: "",
+    email: row.email ?? "",
     fullName: row.full_name ?? "User",
+    username: row.username ?? null,
     phone: row.phone,
     avatarUrl: row.avatar_url,
     role: null,
     isOwner: false,
     isDemo: false,
+  };
+}
+
+export function mapRole(row: Role): RoleModel {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description,
+    isSystem: row.is_system,
+  };
+}
+
+export function mapPermission(row: Permission): PermissionModel {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+  };
+}
+
+export function mapInvitation(row: BusinessInvitation): TeamInvitation {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    email: row.email,
+    fullName: row.full_name,
+    roleSlug: row.role_slug,
+    invitedBy: row.invited_by ?? "",
+    createdAt: row.created_at,
   };
 }

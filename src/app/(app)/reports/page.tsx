@@ -21,22 +21,15 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/states/empty-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
+import { StockReportsCentre } from "@/components/reports/stock-reports-centre";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { defaultPeriod } from "@/reports/stock-math";
 import type { ReportPeriod } from "@/types/domain";
-
-function defaultPeriod(): ReportPeriod {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), 0, 1);
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: now.toISOString().slice(0, 10),
-  };
-}
 
 export default function ReportsPage() {
   const { business } = useSession();
-  const [tab, setTab] = React.useState("sales");
+  const [tab, setTab] = React.useState("stock");
   const [period, setPeriod] = React.useState<ReportPeriod>(defaultPeriod);
 
   const salesQuery = useQuery({
@@ -48,15 +41,6 @@ export default function ReportsPage() {
     enabled: Boolean(business) && tab === "sales",
   });
 
-  const stockQuery = useQuery({
-    queryKey: ["report-stock", business?.id],
-    queryFn: async () => {
-      if (!business) throw new Error("No active business.");
-      return getClientServices().reports.stockReport(business.id);
-    },
-    enabled: Boolean(business) && tab === "stock",
-  });
-
   const gstQuery = useQuery({
     queryKey: ["report-gst", business?.id, period],
     queryFn: async () => {
@@ -66,71 +50,68 @@ export default function ReportsPage() {
     enabled: Boolean(business) && tab === "gst",
   });
 
-  const query = tab === "sales" ? salesQuery : tab === "stock" ? stockQuery : gstQuery;
+  const query = tab === "sales" ? salesQuery : gstQuery;
   const currency = business?.currency ?? "INR";
 
   const totals = React.useMemo(() => {
     if (tab === "sales" && salesQuery.data) {
       return {
         amount: salesQuery.data.reduce((sum, row) => sum + row.total, 0),
-        tax: salesQuery.data.reduce((sum, row) => sum + row.taxTotal, 0),
         count: salesQuery.data.length,
-      };
-    }
-    if (tab === "stock" && stockQuery.data) {
-      return {
-        amount: stockQuery.data.reduce((sum, row) => sum + row.stockValue, 0),
-        tax: 0,
-        count: stockQuery.data.length,
       };
     }
     if (tab === "gst" && gstQuery.data) {
       return {
         amount: gstQuery.data.reduce((sum, row) => sum + row.taxAmount, 0),
-        tax: 0,
         count: gstQuery.data.length,
       };
     }
     return null;
-  }, [tab, salesQuery.data, stockQuery.data, gstQuery.data]);
+  }, [tab, salesQuery.data, gstQuery.data]);
 
   return (
     <div>
       <PageHeader
         title="Reports"
-        description="Sales, stock and GST summaries."
+        description="Stock, sales and GST summaries from live ledger data."
         actions={
-          <div className="flex items-end gap-2">
-            <Field label="From">
-              <Input
-                type="date"
-                value={period.from}
-                onChange={(event) => setPeriod((p) => ({ ...p, from: event.target.value }))}
-              />
-            </Field>
-            <Field label="To">
-              <Input
-                type="date"
-                value={period.to}
-                onChange={(event) => setPeriod((p) => ({ ...p, to: event.target.value }))}
-              />
-            </Field>
-          </div>
+          tab !== "stock" ? (
+            <div className="flex items-end gap-2">
+              <Field label="From">
+                <Input
+                  type="date"
+                  value={period.from}
+                  onChange={(event) => setPeriod((p) => ({ ...p, from: event.target.value }))}
+                />
+              </Field>
+              <Field label="To">
+                <Input
+                  type="date"
+                  value={period.to}
+                  onChange={(event) => setPeriod((p) => ({ ...p, to: event.target.value }))}
+                />
+              </Field>
+            </div>
+          ) : null
         }
       />
 
       <div className="space-y-4 p-6">
         <Tabs
           tabs={[
-            { value: "sales", label: "Sales", icon: <FileText className="size-4" /> },
             { value: "stock", label: "Stock", icon: <Boxes className="size-4" /> },
+            { value: "sales", label: "Sales", icon: <FileText className="size-4" /> },
             { value: "gst", label: "GST", icon: <BarChart3 className="size-4" /> },
           ]}
           value={tab}
           onValueChange={setTab}
         />
 
-        {totals ? (
+        {tab === "stock" && business ? (
+          <StockReportsCentre businessId={business.id} currency={currency} />
+        ) : null}
+
+        {tab !== "stock" && totals ? (
           <div className="flex flex-wrap gap-3">
             <Badge variant="info" className="px-3 py-1 text-sm">
               {tab === "gst" ? "Tax" : "Total"}: {formatCurrency(totals.amount, currency)}
@@ -141,33 +122,31 @@ export default function ReportsPage() {
           </div>
         ) : null}
 
-        {query.isLoading ? (
+        {tab !== "stock" && query.isLoading ? (
           <LoadingState label="Loading report…" />
-        ) : query.isError ? (
+        ) : tab !== "stock" && query.isError ? (
           <ErrorState
             error={normalizeError(query.error).userMessage}
             onRetry={() => query.refetch()}
             title="Could not load report"
           />
-        ) : !query.data || query.data.length === 0 ? (
+        ) : tab === "sales" && (!salesQuery.data || salesQuery.data.length === 0) ? (
           <EmptyState
             icon={<BarChart3 className="size-6" />}
             title="No data for this report"
-            description={
-              tab === "sales"
-                ? "Record sales invoices to see them here."
-                : tab === "stock"
-                  ? "Add products and stock movements to populate this report."
-                  : "No GST-able invoices in the selected period."
-            }
+            description="Record sales invoices to see them here."
+          />
+        ) : tab === "gst" && (!gstQuery.data || gstQuery.data.length === 0) ? (
+          <EmptyState
+            icon={<BarChart3 className="size-6" />}
+            title="No data for this report"
+            description="No GST-able invoices in the selected period."
           />
         ) : tab === "sales" ? (
           <SalesReportTable rows={salesQuery.data ?? []} currency={currency} />
-        ) : tab === "stock" ? (
-          <StockReportTable rows={stockQuery.data ?? []} currency={currency} />
-        ) : (
+        ) : tab === "gst" ? (
           <GstReportTable rows={gstQuery.data ?? []} currency={currency} />
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -213,60 +192,6 @@ function SalesReportTable({
               </TableCell>
             </TableRow>
           ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
-}
-
-function StockReportTable({
-  rows,
-  currency,
-}: {
-  rows: Array<{
-    productName: string;
-    sku: string | null;
-    unit: string;
-    quantity: number;
-    stockValue: number;
-    lowStockThreshold: number;
-  }>;
-  currency: string;
-}) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Product</TableHead>
-            <TableHead className="text-right">Quantity</TableHead>
-            <TableHead className="text-right">Stock value</TableHead>
-            <TableHead>Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const low = row.lowStockThreshold > 0 && row.quantity <= row.lowStockThreshold;
-            return (
-              <TableRow key={row.productName}>
-                <TableCell className="font-medium text-foreground">
-                  {row.productName}
-                  {row.sku ? <span className="ml-2 text-xs text-muted-foreground">SKU {row.sku}</span> : null}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {row.quantity} {row.unit}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatCurrency(row.stockValue, currency)}
-                </TableCell>
-                <TableCell>
-                  <Badge variant={row.quantity <= 0 ? "destructive" : low ? "warning" : "success"}>
-                    {row.quantity <= 0 ? "Out of stock" : low ? "Low stock" : "In stock"}
-                  </Badge>
-                </TableCell>
-              </TableRow>
-            );
-          })}
         </TableBody>
       </Table>
     </div>

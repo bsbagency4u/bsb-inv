@@ -30,8 +30,22 @@ export type RolePermission = {
 export type Profile = {
   id: string;
   full_name: string | null;
+  email: string | null;
+  username: string | null;
   phone: string | null;
   avatar_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type BusinessInvitation = {
+  id: string;
+  business_id: string;
+  email: string;
+  full_name: string;
+  role_slug: string;
+  invited_by: string | null;
+  status: string;
   created_at: string;
   updated_at: string;
 }
@@ -185,6 +199,15 @@ export type Product = {
   brand_id: string | null;
   unit_id: string | null;
   unit: string;
+  pack_unit?: string | null;
+  pack_unit_id?: string | null;
+  units_per_pack?: number;
+  min_sale_qty?: number;
+  max_sale_qty?: number | null;
+  allow_base_sale?: boolean;
+  allow_pack_sale?: boolean;
+  allow_pack_purchase?: boolean;
+  fixed_packing?: boolean;
   attributes: Record<string, unknown>;
   gst_rate: number;
   hsn: string | null;
@@ -211,6 +234,7 @@ export type ProductBatch = {
   batch_no: string;
   expiry_date: string | null;
   mrp: number | null;
+  purchase_price: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -377,6 +401,7 @@ export type StockBalanceView = {
   business_id: string;
   product_id: string;
   variant_id: string | null;
+  batch_id: string | null;
   warehouse_id: string | null;
   location_id: string | null;
   quantity: number;
@@ -442,6 +467,8 @@ export type PurchaseInvoiceItem = {
   unit_price: number;
   gst_rate: number;
   amount: number;
+  sale_unit: string | null;
+  base_quantity: number | null;
 }
 
 export type SalesInvoice = {
@@ -476,6 +503,8 @@ export type SalesInvoiceItem = {
   taxable_amount: number;
   tax_amount: number;
   amount: number;
+  sale_unit: string | null;
+  base_quantity: number | null;
 }
 
 export type Payment = {
@@ -550,6 +579,12 @@ export interface Database {
         Row: BusinessSetting;
         Insert: Partial<BusinessSetting> & { business_id: string; key: string };
         Update: Partial<BusinessSetting>;
+        Relationships: [];
+      };
+      business_invitations: {
+        Row: BusinessInvitation;
+        Insert: Partial<BusinessInvitation> & { business_id: string; email: string; role_slug: string };
+        Update: Partial<BusinessInvitation>;
         Relationships: [];
       };
       audit_logs: {
@@ -741,6 +776,10 @@ export interface Database {
       next_document_number: {
         Args: { p_business: string; p_kind: string; p_prefix: string };
         Returns: string;
+      };
+      is_username_available: {
+        Args: { p_username: string };
+        Returns: boolean;
       };
     };
     Enums: Record<never, never>;

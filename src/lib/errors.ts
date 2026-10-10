@@ -91,6 +91,45 @@ export interface NormalizedError {
   userMessage: string;
 }
 
+function asErrorField(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (value === null || value === undefined) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function formatDatabaseError(error: {
+  code?: string;
+  message?: string;
+  details?: unknown;
+  hint?: unknown;
+}): string {
+  const parts: string[] = [];
+  if (error.code) parts.push(error.code);
+  if (error.message) parts.push(error.message);
+  const details = asErrorField(error.details);
+  const hint = asErrorField(error.hint);
+  if (details) parts.push(details);
+  if (hint) parts.push(`Hint: ${hint}`);
+  return parts.join(" — ") || "The database could not complete the request.";
+}
+
+export function annotateDatabaseError(
+  error: unknown,
+  table: string,
+  operation: string
+): unknown {
+  if (!error || typeof error !== "object") return error;
+  const err = error as { details?: unknown };
+  const extra = `table=${table} operation=${operation}`;
+  const existing = asErrorField(err.details);
+  err.details = existing && existing !== extra ? `${existing} — ${extra}` : extra;
+  return error;
+}
+
 /**
  * Maps a Supabase-style error to a normalized AppError.
  * Never leaks raw stack traces or internal messages.
@@ -111,6 +150,8 @@ export function normalizeError(error: unknown): NormalizedError {
     const code = typeof err.code === "string" ? err.code : undefined;
     const message =
       typeof err.message === "string" ? err.message : undefined;
+    const details = err.details;
+    const hint = err.hint;
 
     switch (status) {
       case 401:
@@ -158,12 +199,51 @@ export function normalizeError(error: unknown): NormalizedError {
         userMessage: "The requested item could not be found.",
       };
     }
-    if (typeof code === "string" && code.startsWith("PGRST")) {
+    if (code === "42501") {
+      return {
+        code: "AUTHORIZATION",
+        status: 403,
+        message: message ?? "Row-level security denied the write.",
+        userMessage: "You do not have permission to save this.",
+      };
+    }
+    if (code === "23505") {
+      return {
+        code: "CONFLICT",
+        status: 409,
+        message: message ?? "Unique constraint failed.",
+        userMessage: "This conflicts with existing data. It may already exist.",
+      };
+    }
+    if (code === "23503") {
+      return {
+        code: "UNPROCESSABLE",
+        status: 422,
+        message: message ?? "Foreign key constraint failed.",
+        userMessage: "This could not be saved because a related record is missing.",
+      };
+    }
+    if (code === "23502") {
+      return {
+        code: "VALIDATION",
+        status: 422,
+        message: message ?? "Not-null constraint failed.",
+        userMessage: "A required value is missing.",
+      };
+    }
+    const looksLikeDatabase =
+      (typeof code === "string" && (code.startsWith("PGRST") || /^[0-9]{5}$/.test(code))) ||
+      (typeof message === "string" &&
+        /column .* does not exist|Could not find the .* column|schema cache|violates .* constraint/i.test(
+          message
+        ));
+    if (looksLikeDatabase) {
+      const userMessage = formatDatabaseError({ code, message, details, hint });
       return {
         code: "DATABASE",
         status: 500,
         message: message ?? "Database query failed.",
-        userMessage: "The database could not complete the request.",
+        userMessage,
       };
     }
     if (

@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { Combobox } from "@/components/ui/combobox";
@@ -27,18 +28,31 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { DocumentPrintActions } from "@/components/documents/document-print-actions";
+import { purchaseReturnPrintModel, supplierContact } from "@/lib/document-print-models";
+import { autoOutputDocument } from "@/lib/invoice-print";
+import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
+import {
+  defaultPurchaseUnitKind,
+  packagingFromProduct,
+  purchaseUnitOptions,
+  resolvePurchaseUnitKind,
+  unitKindFromSaleUnit,
+  type UnitKind,
+} from "@/lib/packaging";
 import type { PurchaseInvoice, PurchaseReturn } from "@/types/domain";
 
 interface ReturnLine {
   productId: string;
   quantity: string;
   unitCost: string;
+  unitKind: UnitKind;
 }
 
 export default function PurchaseReturnsPage() {
   const { user, business } = useSession();
   const queryClient = useQueryClient();
-  const { success: toastSuccess, error: toastError } = useToast();
+  const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [invoiceId, setInvoiceId] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState("");
@@ -82,6 +96,15 @@ export default function PurchaseReturnsPage() {
     enabled: Boolean(business),
   });
 
+  const { data: invoiceDefaults } = useQuery({
+    queryKey: ["invoice-defaults", business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return getClientServices().businesses.getInvoiceDefaults(business.id);
+    },
+    enabled: Boolean(business),
+  });
+
   if (isLoading) return <LoadingState label="Loading purchase returns…" />;
   if (isError) {
     return (
@@ -104,14 +127,34 @@ export default function PurchaseReturnsPage() {
   const selectedInvoice: PurchaseInvoice | null =
     invoices?.find((invoice) => invoice.id === invoiceId) ?? null;
 
+  const lineFromInvoiceItem = (item: PurchaseInvoice["items"][number]): ReturnLine => {
+    const product = (products ?? []).find((entry) => entry.id === item.productId);
+    const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+    return {
+      productId: item.productId,
+      quantity: String(item.quantity),
+      unitCost: String(item.unitPrice),
+      unitKind: unitKindFromSaleUnit(item.saleUnit, packaging),
+    };
+  };
+
   const addLine = () => {
+    if (selectedInvoice && selectedInvoice.items.length > 0) {
+      const used = new Set(lines.map((line) => line.productId));
+      const nextItem = selectedInvoice.items.find((item) => !used.has(item.productId)) ?? selectedInvoice.items[0];
+      setLines((current) => [...current, lineFromInvoiceItem(nextItem)]);
+      return;
+    }
     if (!products || products.length === 0) return;
+    const product = products[0];
+    const packaging = packagingFromProduct(product);
     setLines((current) => [
       ...current,
       {
-        productId: products[0].id,
+        productId: product.id,
         quantity: "1",
-        unitCost: String(products[0].purchasePrice),
+        unitCost: String(product.purchasePrice),
+        unitKind: defaultPurchaseUnitKind(packaging),
       },
     ]);
   };
@@ -135,9 +178,8 @@ export default function PurchaseReturnsPage() {
     setSaving(true);
     try {
       const services = getClientServices();
-      const returnNo = await services.transactions.nextDocumentNo(
+      const returnNo = await services.transactions.nextControlledDocumentNo(
         business.id,
-        "PRT",
         "purchase_return"
       );
       const result = await services.transactions.createPurchaseReturn(business.id, user.id, returnNo, {
@@ -149,9 +191,28 @@ export default function PurchaseReturnsPage() {
           productId: line.productId,
           quantity: Number(line.quantity) || 0,
           unitCost: Number(line.unitCost) || 0,
+          unitKind: line.unitKind,
         })),
       });
       toastSuccess("Return recorded", `${result.returnNo} saved and stock updated.`);
+      if (business) {
+        const supplier = result.supplierId
+          ? suppliers?.find((item) => item.id === result.supplierId)
+          : null;
+        const auto = autoOutputDocument(
+          business,
+          invoiceDefaults ?? DEFAULT_INVOICE,
+          purchaseReturnPrintModel(result, {
+            partyLabel: supplier?.name ?? "Supplier",
+            ...supplierContact(supplier),
+            products,
+          }),
+          business.currency ?? "INR"
+        );
+        if (!auto.ok && auto.reason === "blocked") {
+          toastInfo("Print Invoice", "Return saved. Click Print if the browser blocked the dialog.");
+        }
+      }
       setCreateOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["purchase-returns"] });
       await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
@@ -194,6 +255,7 @@ export default function PurchaseReturnsPage() {
                   <TableHead>Supplier</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Reason</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -205,6 +267,21 @@ export default function PurchaseReturnsPage() {
                       suppliers?.find((s) => s.id === item.supplierId)?.name ?? "—"
                     }
                     currency={business?.currency ?? "INR"}
+                    actions={
+                      business ? (
+                        <DocumentPrintActions
+                          business={business}
+                          defaults={invoiceDefaults ?? DEFAULT_INVOICE}
+                          model={purchaseReturnPrintModel(item, {
+                            partyLabel:
+                              suppliers?.find((s) => s.id === item.supplierId)?.name ?? "Supplier",
+                            ...supplierContact(suppliers?.find((s) => s.id === item.supplierId)),
+                            products,
+                          })}
+                          currency={business.currency ?? "INR"}
+                        />
+                      ) : null
+                    }
                   />
                 ))}
               </TableBody>
@@ -240,7 +317,15 @@ export default function PurchaseReturnsPage() {
                   suppliers?.find((s) => s.id === invoice.supplierId)?.name ?? undefined,
               }))}
               value={invoiceId}
-              onValueChange={setInvoiceId}
+              onValueChange={(value) => {
+                setInvoiceId(value);
+                const invoice = (invoices ?? []).find((item) => item.id === value);
+                if (!invoice) {
+                  setLines([]);
+                  return;
+                }
+                setLines(invoice.items.map((item) => lineFromInvoiceItem(item)));
+              }}
               placeholder="Select a purchase bill…"
               emptyText="No purchase bills yet."
             />
@@ -271,6 +356,7 @@ export default function PurchaseReturnsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Product</TableHead>
+                    <TableHead className="w-28">Unit</TableHead>
                     <TableHead className="w-24 text-right">Qty</TableHead>
                     <TableHead className="w-32 text-right">Unit cost</TableHead>
                     <TableHead className="w-12" />
@@ -292,6 +378,33 @@ export default function PurchaseReturnsPage() {
                           }
                           placeholder="Select product…"
                         />
+                      </TableCell>
+                      <TableCell>
+                        {(() => {
+                          const product = (products ?? []).find((item) => item.id === line.productId);
+                          const packaging = packagingFromProduct(product ?? { unit: "pcs" });
+                          const options = purchaseUnitOptions(packaging);
+                          const kind = resolvePurchaseUnitKind(line.unitKind, packaging);
+                          if (options.length <= 1) {
+                            return <p className="text-sm">{options[0]?.code ?? product?.unit ?? "pcs"}</p>;
+                          }
+                          return (
+                            <Select
+                              value={kind}
+                              onChange={(event) =>
+                                updateLine(index, { unitKind: event.target.value as UnitKind })
+                              }
+                              className="h-8"
+                              aria-label="Return unit"
+                            >
+                              {options.map((option) => (
+                                <option key={option.kind} value={option.kind}>
+                                  {option.code}
+                                </option>
+                              ))}
+                            </Select>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <Input
@@ -351,10 +464,12 @@ function PurchaseReturnRow({
   item,
   supplierName,
   currency,
+  actions,
 }: {
   item: PurchaseReturn;
   supplierName: string;
   currency: string;
+  actions?: React.ReactNode;
 }) {
   return (
     <TableRow>
@@ -367,6 +482,7 @@ function PurchaseReturnRow({
       <TableCell>
         <Badge variant="secondary">{item.reason ?? "—"}</Badge>
       </TableCell>
+      <TableCell className="text-right">{actions}</TableCell>
     </TableRow>
   );
 }

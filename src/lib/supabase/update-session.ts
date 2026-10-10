@@ -48,7 +48,10 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
   const isPublicPath =
-    path.startsWith("/login") || path === "/" || path.startsWith("/auth");
+    path.startsWith("/login") ||
+    path.startsWith("/forgot-password") ||
+    path === "/" ||
+    path.startsWith("/auth");
 
   if (!user && !isPublicPath) {
     const redirectUrl = new URL("/login", request.url);

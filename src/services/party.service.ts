@@ -3,12 +3,18 @@ import type { Customer, Supplier } from "@/types/domain";
 import { AppError } from "@/lib/errors";
 import { partySchema, type PartyValues } from "@/lib/validation/schemas";
 import type { AuditService } from "./audit.service";
+import { AuthorizationService } from "./authorization.service";
 
 export class PartyService {
+  private auth: AuthorizationService;
+
   constructor(
     private repos: Repositories,
-    private audits: AuditService
-  ) {}
+    private audits: AuditService,
+    auth?: AuthorizationService
+  ) {
+    this.auth = auth ?? new AuthorizationService(repos);
+  }
 
   async listCustomers(businessId: string): Promise<Customer[]> {
     return this.repos.parties.listCustomers(businessId);
@@ -19,6 +25,7 @@ export class PartyService {
   }
 
   async createCustomer(businessId: string, userId: string, input: PartyValues): Promise<Customer> {
+    await this.auth.requirePermission(businessId, userId, "customer.manage");
     const parsed = partySchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -60,6 +67,7 @@ export class PartyService {
     customerId: string,
     input: PartyValues
   ): Promise<Customer> {
+    await this.auth.requirePermission(businessId, userId, "customer.manage");
     const parsed = partySchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -96,6 +104,7 @@ export class PartyService {
   }
 
   async deleteCustomer(businessId: string, userId: string, customerId: string): Promise<void> {
+    await this.auth.requirePermission(businessId, userId, "customer.manage");
     await this.repos.parties.deleteCustomer(businessId, customerId);
     await this.audits.log({
       businessId,
@@ -115,6 +124,7 @@ export class PartyService {
   }
 
   async createSupplier(businessId: string, userId: string, input: PartyValues): Promise<Supplier> {
+    await this.auth.requirePermission(businessId, userId, "supplier.manage");
     const parsed = partySchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -155,6 +165,7 @@ export class PartyService {
     supplierId: string,
     input: PartyValues
   ): Promise<Supplier> {
+    await this.auth.requirePermission(businessId, userId, "supplier.manage");
     const parsed = partySchema.safeParse(input);
     if (!parsed.success) {
       throw AppError.validation(
@@ -190,6 +201,7 @@ export class PartyService {
   }
 
   async deleteSupplier(businessId: string, userId: string, supplierId: string): Promise<void> {
+    await this.auth.requirePermission(businessId, userId, "supplier.manage");
     await this.repos.parties.deleteSupplier(businessId, supplierId);
     await this.audits.log({
       businessId,

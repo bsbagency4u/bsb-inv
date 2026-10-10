@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { BUSINESS_TYPES, getBusinessType, getProductAttributesForType } from "./business-types";
+import {
+  BUSINESS_TYPES,
+  businessShowsMrp,
+  businessTracksBatches,
+  getBusinessType,
+  getProductAttributesForType,
+  getProductFormAttributesForType,
+} from "./business-types";
 
 describe("business-types registry", () => {
   it("defines all expected business types", () => {
@@ -44,5 +51,24 @@ describe("business-types registry", () => {
 
   it("custom has no default product attributes", () => {
     expect(getProductAttributesForType("custom")).toHaveLength(0);
+  });
+
+  it("pharmacy tracks batches and shows MRP; retail shows MRP without batches", () => {
+    expect(businessTracksBatches("pharmacy")).toBe(true);
+    expect(businessShowsMrp("pharmacy")).toBe(true);
+    expect(businessTracksBatches("retail")).toBe(false);
+    expect(businessShowsMrp("retail")).toBe(true);
+    expect(businessTracksBatches("wholesale")).toBe(false);
+    expect(businessShowsMrp("wholesale")).toBe(false);
+  });
+
+  it("product form attributes omit dedicated MRP, GST, HSN, unit and barcode fields", () => {
+    const keys = getProductFormAttributesForType("pharmacy").map((a) => a.key);
+    expect(keys).toContain("manufacturer");
+    expect(keys).not.toContain("mrp");
+    expect(keys).not.toContain("gst");
+    expect(keys).not.toContain("hsn");
+    expect(keys).not.toContain("unit");
+    expect(getProductFormAttributesForType("retail")).toHaveLength(0);
   });
 });

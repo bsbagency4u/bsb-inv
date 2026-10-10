@@ -32,6 +32,15 @@ function memoryRepositories() {
           brandId: input.brandId ?? null,
           unitId: input.unitId ?? null,
           unit: input.unit ?? "pcs",
+          packUnit: input.packUnit ?? null,
+          packUnitId: input.packUnitId ?? null,
+          unitsPerPack: input.unitsPerPack ?? 1,
+          minSaleQty: input.minSaleQty ?? 1,
+          maxSaleQty: input.maxSaleQty ?? null,
+          allowBaseSale: input.allowBaseSale ?? true,
+          allowPackSale: input.allowPackSale ?? false,
+          allowPackPurchase: input.allowPackPurchase ?? true,
+          fixedPacking: input.fixedPacking ?? true,
           attributes: input.attributes ?? {},
           gstRate: input.gstRate ?? 0,
           hsn: input.hsn ?? null,
@@ -64,6 +73,7 @@ function memoryRepositories() {
       },
       async listBatches() { return []; },
       async createBatch() { throw new Error("not used"); },
+      async updateBatch() { throw new Error("not used"); },
       async listStock() {
         const byProduct = new Map<string, number>();
         for (const entry of ledger) {
@@ -80,6 +90,7 @@ function memoryRepositories() {
       },
       async listBalances() { return []; },
       async listMovements() { return []; },
+      async listMovementsByReference() { return []; },
       async listVariants() { return []; },
       async createVariant() { throw new Error("not used"); },
       async updateVariant() { throw new Error("not used"); },
@@ -126,15 +137,22 @@ function memoryRepositories() {
       async listSalesInvoices() { return []; },
       async getSalesInvoice() { return null; },
       async createSalesInvoice() { throw new Error("not used"); },
+      async updateSalesInvoice() { throw new Error("not used"); },
       async updateSalesInvoiceStatus() {},
+      async deleteSalesInvoice() {},
       async listPurchaseOrders() { return []; },
+      async getPurchaseOrder() { return null; },
       async createPurchaseOrder() { throw new Error("not used"); },
+      async applyPurchaseReceiptQuantities() { throw new Error("not used"); },
       async listPurchaseInvoices() { return []; },
       async getPurchaseInvoice() { return null; },
       async createPurchaseInvoice() { throw new Error("not used"); },
+      async updatePurchaseInvoice() { throw new Error("not used"); },
       async updatePurchaseInvoiceStatus() {},
+      async deletePurchaseInvoice() {},
       async listPayments() { return []; },
       async createPayment() { throw new Error("not used"); },
+      async deletePaymentsForDocument() {},
       async listPaymentModes() { return []; },
       async createPaymentMode() { throw new Error("not used"); },
       async updatePaymentMode() { throw new Error("not used"); },
@@ -191,10 +209,26 @@ function memoryRepositories() {
       async getByUserAndId() { return null; },
       async create() { throw new Error("not used"); },
       async update() { throw new Error("not used"); },
+      async getSetting() { return null; },
+      async setSetting() {},
     },
     profiles: {
       async getByUserId() { return null; },
       async update() { throw new Error("not used"); },
+      async isUsernameAvailable() { return true; },
+      async upsertOwnProfile() { throw new Error("not used"); },
+    },
+    team: {
+      async listMembers() { return []; },
+      async listRoles() { return []; },
+      async listPermissions() { return []; },
+      async listRolePermissions() { return []; },
+      async listInvitations() { return []; },
+      async createInvitation() { throw new Error("not used"); },
+      async cancelInvitation() {},
+      async updateMemberRole() {},
+      async removeMember() {},
+      async getMemberPermissions() { return ["*"]; },
     },
   };
 
@@ -223,8 +257,37 @@ describe("ProductService", () => {
       purchasePrice: 250,
     });
     expect(product.name).toBe("Cotton T-Shirt");
+    expect(product.unitsPerPack).toBe(1);
+    expect(product.allowBaseSale).toBe(true);
     expect(services.products).toHaveLength(1);
     expect(services.auditLogs[0].action).toBe("product.created");
+  });
+
+  it("saves configurable packaging without using pack size as min/max sale qty", async () => {
+    const product = await products.createProduct("b-1", "u-1", {
+      name: "Tablet",
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      minSaleQty: 1,
+      maxSaleQty: 50,
+      allowBaseSale: true,
+      allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
+      gstRate: 12,
+    });
+    expect(product).toMatchObject({
+      unit: "PCS",
+      packUnit: "STRIP",
+      unitsPerPack: 10,
+      minSaleQty: 1,
+      maxSaleQty: 50,
+      allowBaseSale: true,
+      allowPackSale: true,
+      allowPackPurchase: true,
+      fixedPacking: true,
+    });
   });
 
   it("rejects invalid product data", async () => {

@@ -18,6 +18,7 @@ export interface ComboboxProps {
   searchPlaceholder?: string;
   emptyText?: string;
   className?: string;
+  triggerClassName?: string;
   invalid?: boolean;
 }
 
@@ -29,6 +30,7 @@ export function Combobox({
   searchPlaceholder = "Search…",
   emptyText = "No results found.",
   className,
+  triggerClassName,
   invalid,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
@@ -79,7 +81,8 @@ export function Combobox({
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-md border border-input bg-surface px-3 text-sm text-foreground shadow-sm transition-colors focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
           invalid && "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/25",
-          !selected && "text-muted-foreground"
+          !selected && "text-muted-foreground",
+          triggerClassName
         )}
       >
         <span className="truncate">{selected ? selected.label : placeholder}</span>
