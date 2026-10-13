@@ -7,6 +7,7 @@ import type {
   Customer,
   Notification,
   Payment,
+  PaymentAllocation,
   PaymentMode,
   Permission,
   Product,
@@ -44,6 +45,7 @@ import type {
   Customer as CustomerModel,
   NotificationItem,
   Payment as PaymentModel,
+  PaymentAllocation as PaymentAllocationModel,
   PaymentMode as PaymentModeModel,
   Permission as PermissionModel,
   Product as ProductModel,
@@ -477,10 +479,24 @@ export function mapPurchaseInvoice(row: PurchaseInvoice): PurchaseInvoiceModel {
   };
 }
 
-export function mapPayment(row: Payment): PaymentModel {
+export function mapPaymentAllocation(row: PaymentAllocation): PaymentAllocationModel {
   return {
     id: row.id,
     businessId: row.business_id,
+    paymentId: row.payment_id,
+    salesInvoiceId: row.sales_invoice_id,
+    purchaseInvoiceId: row.purchase_invoice_id,
+    amount: asNumber(row.amount),
+    createdAt: row.created_at,
+  };
+}
+
+export function mapPayment(row: Payment, allocations: PaymentAllocationModel[] = []): PaymentModel {
+  const status = row.status === "cancelled" ? "cancelled" : "posted";
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    documentNo: row.document_no ?? null,
     direction: row.direction as PaymentModel["direction"],
     partyType: row.party_type as PaymentModel["partyType"],
     partyId: row.party_id,
@@ -491,6 +507,10 @@ export function mapPayment(row: Payment): PaymentModel {
     reference: row.reference,
     paymentDate: row.payment_date,
     notes: row.notes,
+    status,
+    cancelledAt: row.cancelled_at ?? null,
+    cancelledBy: row.cancelled_by ?? null,
+    allocations,
     createdAt: row.created_at,
   };
 }

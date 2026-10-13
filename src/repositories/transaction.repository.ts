@@ -3,6 +3,7 @@ import type { Database } from "@/lib/supabase/types";
 import type {
   LineItem,
   Payment,
+  PaymentAllocation,
   PaymentMode,
   PurchaseInvoice,
   PurchaseOrder,
@@ -14,6 +15,7 @@ import type {
 } from "@/types/domain";
 import {
   mapPayment,
+  mapPaymentAllocation,
   mapPaymentMode,
   mapPurchaseInvoice,
   mapPurchaseOrder,
@@ -27,7 +29,7 @@ import {
 } from "./mappers";
 import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { annotateDatabaseError } from "@/lib/errors";
-import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
+import { isMissingColumnError, isMissingRelationError, omitColumns } from "@/lib/supabase/missing-column";
 
 export interface LineItemInput {
   productId: string;
@@ -88,6 +90,12 @@ export interface PurchaseInvoiceHeaderInput {
   notes?: string | null;
 }
 
+export interface PaymentAllocationInput {
+  salesInvoiceId?: string | null;
+  purchaseInvoiceId?: string | null;
+  amount: number;
+}
+
 export interface PaymentInput {
   direction: "in" | "out";
   partyType: "customer" | "supplier";
@@ -99,6 +107,9 @@ export interface PaymentInput {
   reference?: string | null;
   paymentDate: string;
   notes?: string | null;
+  documentNo?: string | null;
+  status?: "posted" | "cancelled";
+  allocations?: PaymentAllocationInput[];
 }
 
 export interface ReceiptItemInput {
@@ -120,7 +131,7 @@ export interface TransactionRepository {
   getSalesInvoice(businessId: string, invoiceId: string): Promise<SalesInvoice | null>;
   createSalesInvoice(businessId: string, userId: string, header: SalesHeaderInput, items: LineItemInput[]): Promise<SalesInvoice>;
   updateSalesInvoice(businessId: string, invoiceId: string, header: SalesHeaderInput, items: LineItemInput[]): Promise<SalesInvoice>;
-  updateSalesInvoiceStatus(businessId: string, invoiceId: string, status: SalesInvoiceStatus): Promise<void>;
+  updateSalesInvoiceStatus(businessId: string, invoiceId: string, status: SalesInvoiceStatus, paidAmount?: number): Promise<void>;
   deleteSalesInvoice(businessId: string, invoiceId: string): Promise<void>;
   listPurchaseOrders(businessId: string): Promise<PurchaseOrder[]>;
   getPurchaseOrder(businessId: string, orderId: string): Promise<PurchaseOrder | null>;
@@ -134,11 +145,14 @@ export interface TransactionRepository {
   getPurchaseInvoice(businessId: string, invoiceId: string): Promise<PurchaseInvoice | null>;
   createPurchaseInvoice(businessId: string, userId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
   updatePurchaseInvoice(businessId: string, invoiceId: string, header: PurchaseInvoiceHeaderInput, items: LineItemInput[]): Promise<PurchaseInvoice>;
-  updatePurchaseInvoiceStatus(businessId: string, invoiceId: string, status: string): Promise<void>;
+  updatePurchaseInvoiceStatus(businessId: string, invoiceId: string, status: string, paidAmount?: number): Promise<void>;
   deletePurchaseInvoice(businessId: string, invoiceId: string): Promise<void>;
   listPayments(businessId: string): Promise<Payment[]>;
+  getPayment(businessId: string, paymentId: string): Promise<Payment | null>;
   createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment>;
+  cancelPayment(businessId: string, userId: string, paymentId: string): Promise<Payment>;
   deletePaymentsForDocument(businessId: string, input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }): Promise<void>;
+  cancelPaymentsForDocument(businessId: string, userId: string, input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }): Promise<void>;
   listPaymentModes(businessId: string): Promise<PaymentMode[]>;
   createPaymentMode(businessId: string, input: { code: string; name: string; sortOrder?: number }): Promise<PaymentMode>;
   updatePaymentMode(businessId: string, modeId: string, input: { name?: string; isActive?: boolean }): Promise<PaymentMode>;
@@ -331,11 +345,14 @@ export class SupabaseTransactionRepository implements TransactionRepository {
   async updateSalesInvoiceStatus(
     businessId: string,
     invoiceId: string,
-    status: SalesInvoiceStatus
+    status: SalesInvoiceStatus,
+    paidAmount?: number
   ): Promise<void> {
+    const patch: { status: SalesInvoiceStatus; paid_amount?: number } = { status };
+    if (paidAmount != null) patch.paid_amount = paidAmount;
     const { error } = await this.client
       .from("sales_invoices")
-      .update({ status })
+      .update(patch)
       .eq("business_id", businessId)
       .eq("id", invoiceId);
     if (error) throw error;
@@ -603,6 +620,33 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     return { ...mapPurchaseInvoice(data), items: await this.fetchPurchaseItems(invoiceId) };
   }
 
+  private async listAllocations(businessId: string, paymentIds: string[]): Promise<PaymentAllocation[]> {
+    if (paymentIds.length === 0) return [];
+    const { data, error } = await this.client
+      .from("payment_allocations")
+      .select("*")
+      .eq("business_id", businessId)
+      .in("payment_id", paymentIds);
+    if (error) {
+      if (isMissingRelationError(error)) return [];
+      throw error;
+    }
+    return (data ?? []).map(mapPaymentAllocation);
+  }
+
+  private attachAllocations(payments: Payment[], allocations: PaymentAllocation[]): Payment[] {
+    const byPayment = new Map<string, PaymentAllocation[]>();
+    for (const row of allocations) {
+      const list = byPayment.get(row.paymentId) ?? [];
+      list.push(row);
+      byPayment.set(row.paymentId, list);
+    }
+    return payments.map((payment) => ({
+      ...payment,
+      allocations: byPayment.get(payment.id) ?? payment.allocations ?? [],
+    }));
+  }
+
   async listPayments(businessId: string): Promise<Payment[]> {
     const { data, error } = await this.client
       .from("payments")
@@ -610,7 +654,55 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       .eq("business_id", businessId)
       .order("payment_date", { ascending: false });
     if (error) throw error;
-    return (data ?? []).map(mapPayment);
+    const payments = (data ?? []).map((row) => mapPayment(row));
+    const allocations = await this.listAllocations(businessId, payments.map((payment) => payment.id));
+    return this.attachAllocations(payments, allocations);
+  }
+
+  async getPayment(businessId: string, paymentId: string): Promise<Payment | null> {
+    const { data, error } = await this.client
+      .from("payments")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", paymentId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const payment = mapPayment(data);
+    const allocations = await this.listAllocations(businessId, [payment.id]);
+    return this.attachAllocations([payment], allocations)[0] ?? payment;
+  }
+
+  private allocationRows(businessId: string, paymentId: string, input: PaymentInput) {
+    const rows = (input.allocations ?? []).filter((row) => row.amount > 0);
+    if (rows.length > 0) {
+      return rows.map((row) => ({
+        business_id: businessId,
+        payment_id: paymentId,
+        sales_invoice_id: row.salesInvoiceId ?? null,
+        purchase_invoice_id: row.purchaseInvoiceId ?? null,
+        amount: row.amount,
+      }));
+    }
+    if (input.salesInvoiceId) {
+      return [{
+        business_id: businessId,
+        payment_id: paymentId,
+        sales_invoice_id: input.salesInvoiceId,
+        purchase_invoice_id: null,
+        amount: input.amount,
+      }];
+    }
+    if (input.purchaseInvoiceId) {
+      return [{
+        business_id: businessId,
+        payment_id: paymentId,
+        sales_invoice_id: null,
+        purchase_invoice_id: input.purchaseInvoiceId,
+        amount: input.amount,
+      }];
+    }
+    return [];
   }
 
   async createPayment(
@@ -618,38 +710,91 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     userId: string,
     input: PaymentInput
   ): Promise<Payment> {
+    const payload = {
+      business_id: businessId,
+      document_no: input.documentNo ?? null,
+      direction: input.direction,
+      party_type: input.partyType,
+      party_id: input.partyId ?? null,
+      sales_invoice_id: input.salesInvoiceId ?? null,
+      purchase_invoice_id: input.purchaseInvoiceId ?? null,
+      amount: input.amount,
+      mode: input.mode,
+      reference: input.reference ?? null,
+      payment_date: input.paymentDate,
+      notes: input.notes ?? null,
+      status: input.status ?? "posted",
+      created_by: userId,
+    };
+    let data;
+    let error;
+    ({ data, error } = await this.client.from("payments").insert(payload).select().single());
+    if (error && isMissingColumnError(error)) {
+      ({ data, error } = await this.client
+        .from("payments")
+        .insert(omitColumns(payload, ["document_no", "status"]))
+        .select()
+        .single());
+    }
+    if (error || !data) throw error ?? new Error("Payment was not created.");
+    const allocationRows = this.allocationRows(businessId, data.id, input);
+    if (allocationRows.length > 0) {
+      const { error: allocError } = await this.client.from("payment_allocations").insert(allocationRows);
+      if (allocError && !isMissingRelationError(allocError)) throw allocError;
+    }
+    const allocations = await this.listAllocations(businessId, [data.id]);
+    return mapPayment(data, allocations);
+  }
+
+  async cancelPayment(businessId: string, userId: string, paymentId: string): Promise<Payment> {
+    const existing = await this.getPayment(businessId, paymentId);
+    if (!existing) throw new Error("Payment not found.");
+    if (existing.status === "cancelled") return existing;
+    const now = new Date().toISOString();
     const { data, error } = await this.client
       .from("payments")
-      .insert({
-        business_id: businessId,
-        direction: input.direction,
-        party_type: input.partyType,
-        party_id: input.partyId ?? null,
-        sales_invoice_id: input.salesInvoiceId ?? null,
-        purchase_invoice_id: input.purchaseInvoiceId ?? null,
-        amount: input.amount,
-        mode: input.mode,
-        reference: input.reference ?? null,
-        payment_date: input.paymentDate,
-        notes: input.notes ?? null,
-        created_by: userId,
-      })
+      .update({ status: "cancelled", cancelled_at: now, cancelled_by: userId })
+      .eq("business_id", businessId)
+      .eq("id", paymentId)
       .select()
       .single();
-    if (error) throw error;
-    return mapPayment(data);
+    if (error) {
+      if (isMissingColumnError(error)) {
+        return { ...existing, status: "cancelled", cancelledAt: now, cancelledBy: userId };
+      }
+      throw error;
+    }
+    return mapPayment(data, existing.allocations ?? []);
   }
 
   async deletePaymentsForDocument(
     businessId: string,
     input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
   ): Promise<void> {
-    let query = this.client.from("payments").delete().eq("business_id", businessId);
-    if (input.salesInvoiceId) query = query.eq("sales_invoice_id", input.salesInvoiceId);
-    else if (input.purchaseInvoiceId) query = query.eq("purchase_invoice_id", input.purchaseInvoiceId);
-    else return;
-    const { error } = await query;
-    if (error) throw error;
+    await this.cancelPaymentsForDocument(businessId, "", input);
+  }
+
+  async cancelPaymentsForDocument(
+    businessId: string,
+    userId: string,
+    input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
+  ): Promise<void> {
+    const payments = await this.listPayments(businessId);
+    const matches = payments.filter((payment) => {
+      if (payment.status === "cancelled") return false;
+      if (input.salesInvoiceId) {
+        return payment.salesInvoiceId === input.salesInvoiceId
+          || (payment.allocations ?? []).some((row) => row.salesInvoiceId === input.salesInvoiceId);
+      }
+      if (input.purchaseInvoiceId) {
+        return payment.purchaseInvoiceId === input.purchaseInvoiceId
+          || (payment.allocations ?? []).some((row) => row.purchaseInvoiceId === input.purchaseInvoiceId);
+      }
+      return false;
+    });
+    for (const payment of matches) {
+      await this.cancelPayment(businessId, userId, payment.id);
+    }
   }
 
   async listPaymentModes(businessId: string): Promise<PaymentMode[]> {
@@ -932,11 +1077,14 @@ export class SupabaseTransactionRepository implements TransactionRepository {
   async updatePurchaseInvoiceStatus(
     businessId: string,
     invoiceId: string,
-    status: string
+    status: string,
+    paidAmount?: number
   ): Promise<void> {
+    const patch: { status: string; paid_amount?: number } = { status };
+    if (paidAmount != null) patch.paid_amount = paidAmount;
     const { error } = await this.client
       .from("purchase_invoices")
-      .update({ status })
+      .update(patch)
       .eq("business_id", businessId)
       .eq("id", invoiceId);
     if (error) throw error;

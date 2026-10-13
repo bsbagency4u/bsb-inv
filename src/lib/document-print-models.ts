@@ -176,7 +176,7 @@ export function paymentReceiptPrintModel(
   const title = payment.direction === "in" ? "Receipt" : "Payment";
   return {
     kind: "payment_receipt",
-    docNo: payment.reference || `${title}-${payment.id.slice(0, 8)}`,
+    docNo: payment.documentNo || payment.reference || `${title}-${payment.id.slice(0, 8)}`,
     docDate: payment.paymentDate,
     partyLabel: options.partyLabel,
     partyGstin: options.partyGstin,

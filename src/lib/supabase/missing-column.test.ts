@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMissingColumnError, omitColumns } from "./missing-column";
+import { isMissingColumnError, isMissingRelationError, omitColumns } from "./missing-column";
 
 describe("isMissingColumnError", () => {
   it("detects Postgres undefined-column 42703", () => {
@@ -15,6 +15,14 @@ describe("isMissingColumnError", () => {
   it("ignores unrelated errors", () => {
     expect(isMissingColumnError({ code: "23505", message: "duplicate key" })).toBe(false);
     expect(isMissingColumnError(null)).toBe(false);
+  });
+});
+
+describe("isMissingRelationError", () => {
+  it("detects missing tables", () => {
+    expect(isMissingRelationError({ code: "42P01", message: "relation payment_allocations does not exist" })).toBe(true);
+    expect(isMissingRelationError({ code: "PGRST205", message: "Could not find the table" })).toBe(true);
+    expect(isMissingRelationError({ code: "23505", message: "duplicate key" })).toBe(false);
   });
 });
 

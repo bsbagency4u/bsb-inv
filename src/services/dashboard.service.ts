@@ -1,5 +1,6 @@
 import type { Repositories } from "@/repositories/types";
 import type { BusinessProfile, DashboardStats } from "@/types/domain";
+import { LedgerService } from "./ledger.service";
 
 function startOfToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -11,7 +12,11 @@ function startOfToday(): string {
  * figures are genuinely zero/empty until records are created.
  */
 export class DashboardService {
-  constructor(private repos: Repositories) {}
+  private ledger: LedgerService;
+
+  constructor(private repos: Repositories) {
+    this.ledger = new LedgerService(repos);
+  }
 
   async getStats(business: BusinessProfile): Promise<DashboardStats> {
     const today = startOfToday();
@@ -44,13 +49,7 @@ export class DashboardService {
       if (quantity <= 0) outOfStockCount += 1;
     }
 
-    const outstanding =
-      invoices
-        .filter((i) => i.status !== "cancelled" && i.status !== "returned")
-        .reduce((sum, i) => sum + (i.total - i.paidAmount), 0) +
-      purchases
-        .filter((i) => i.status === "unpaid" || i.status === "partial")
-        .reduce((sum, i) => sum + (i.total - i.paidAmount), 0);
+    const outstanding = await this.ledger.receivableTotal(business.id, today);
 
     return {
       isDemo: false,
@@ -59,7 +58,7 @@ export class DashboardService {
       stockValue,
       lowStockCount,
       outOfStockCount,
-      outstanding: Math.max(0, outstanding),
+      outstanding,
       currency: business.currency,
       updatedAt: new Date().toISOString(),
     };

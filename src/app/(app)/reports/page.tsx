@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, Boxes, FileText } from "lucide-react";
+import { BarChart3, Boxes, FileText, Wallet } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -22,15 +22,30 @@ import { EmptyState } from "@/components/states/empty-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { StockReportsCentre } from "@/components/reports/stock-reports-centre";
+import { AgingSummary, OutstandingTable } from "@/components/ledger/outstanding-table";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { defaultPeriod } from "@/reports/stock-math";
+import { agingTotals, roundMoney } from "@/lib/party-ledger";
 import type { ReportPeriod } from "@/types/domain";
 
 export default function ReportsPage() {
   const { business } = useSession();
   const [tab, setTab] = React.useState("stock");
   const [period, setPeriod] = React.useState<ReportPeriod>(defaultPeriod);
+
+  const outstandingKind = tab === "payables" ? "payables" : "receivables";
+
+  const outstandingQuery = useQuery({
+    queryKey: ["report-outstanding", outstandingKind, business?.id],
+    queryFn: async () => {
+      if (!business) throw new Error("No active business.");
+      return outstandingKind === "receivables"
+        ? getClientServices().reports.receivables(business.id)
+        : getClientServices().reports.payables(business.id);
+    },
+    enabled: Boolean(business) && (tab === "receivables" || tab === "payables"),
+  });
 
   const salesQuery = useQuery({
     queryKey: ["report-sales", business?.id, period],
@@ -50,8 +65,10 @@ export default function ReportsPage() {
     enabled: Boolean(business) && tab === "gst",
   });
 
-  const query = tab === "sales" ? salesQuery : gstQuery;
+  const query = tab === "sales" ? salesQuery : tab === "gst" ? gstQuery : outstandingQuery;
   const currency = business?.currency ?? "INR";
+  const outstandingRows = outstandingQuery.data ?? [];
+  const outstandingAging = agingTotals(outstandingRows);
 
   const totals = React.useMemo(() => {
     if (tab === "sales" && salesQuery.data) {
@@ -66,16 +83,22 @@ export default function ReportsPage() {
         count: gstQuery.data.length,
       };
     }
+    if ((tab === "receivables" || tab === "payables") && outstandingQuery.data) {
+      return {
+        amount: roundMoney(outstandingQuery.data.reduce((sum, row) => sum + row.balance, 0)),
+        count: outstandingQuery.data.length,
+      };
+    }
     return null;
-  }, [tab, salesQuery.data, gstQuery.data]);
+  }, [tab, salesQuery.data, gstQuery.data, outstandingQuery.data]);
 
   return (
     <div>
       <PageHeader
         title="Reports"
-        description="Stock, sales and GST summaries from live ledger data."
+        description="Stock, sales, GST and outstanding summaries from live ledger data."
         actions={
-          tab !== "stock" ? (
+          tab === "sales" || tab === "gst" ? (
             <div className="flex items-end gap-2">
               <Field label="From">
                 <Input
@@ -102,6 +125,8 @@ export default function ReportsPage() {
             { value: "stock", label: "Stock", icon: <Boxes className="size-4" /> },
             { value: "sales", label: "Sales", icon: <FileText className="size-4" /> },
             { value: "gst", label: "GST", icon: <BarChart3 className="size-4" /> },
+            { value: "receivables", label: "Receivables", icon: <Wallet className="size-4" /> },
+            { value: "payables", label: "Payables", icon: <Wallet className="size-4" /> },
           ]}
           value={tab}
           onValueChange={setTab}
@@ -114,7 +139,7 @@ export default function ReportsPage() {
         {tab !== "stock" && totals ? (
           <div className="flex flex-wrap gap-3">
             <Badge variant="info" className="px-3 py-1 text-sm">
-              {tab === "gst" ? "Tax" : "Total"}: {formatCurrency(totals.amount, currency)}
+              {tab === "gst" ? "Tax" : tab === "receivables" || tab === "payables" ? "Outstanding" : "Total"}: {formatCurrency(totals.amount, currency)}
             </Badge>
             <Badge variant="secondary" className="px-3 py-1 text-sm">
               {totals.count} {totals.count === 1 ? "record" : "records"}
@@ -146,6 +171,16 @@ export default function ReportsPage() {
           <SalesReportTable rows={salesQuery.data ?? []} currency={currency} />
         ) : tab === "gst" ? (
           <GstReportTable rows={gstQuery.data ?? []} currency={currency} />
+        ) : tab === "receivables" || tab === "payables" ? (
+          <div className="space-y-4">
+            <AgingSummary totals={outstandingAging} currency={currency} />
+            <OutstandingTable
+              rows={outstandingRows}
+              currency={currency}
+              emptyTitle={tab === "receivables" ? "No receivables" : "No payables"}
+              emptyDescription="Open invoices from the shared ledger appear here."
+            />
+          </div>
         ) : null}
       </div>
     </div>

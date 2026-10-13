@@ -7,6 +7,7 @@ import type {
   StockMovementType,
 } from "@/types/domain";
 import { GstEngine } from "./gst.service";
+import { LedgerService, type OutstandingFilters } from "./ledger.service";
 import { runStockReport, listStockReportDefinitions } from "@/reports/engine";
 import type { ReportCatalog } from "@/reports/engine";
 import type {
@@ -38,8 +39,11 @@ const STOCK_STATUSES = [
 
 export class ReportService {
   private gst = new GstEngine();
+  private ledger: LedgerService;
 
-  constructor(private repos: Repositories) {}
+  constructor(private repos: Repositories) {
+    this.ledger = new LedgerService(repos);
+  }
 
   private partyName(
     customers: { id: string; name: string }[],
@@ -88,6 +92,14 @@ export class ReportService {
         lowStockThreshold: product.lowStockThreshold,
       };
     });
+  }
+
+  async receivables(businessId: string, filters: OutstandingFilters = {}) {
+    return this.ledger.receivables(businessId, filters);
+  }
+
+  async payables(businessId: string, filters: OutstandingFilters = {}) {
+    return this.ledger.payables(businessId, filters);
   }
 
   async gstReport(businessId: string, period: ReportPeriod): Promise<GstReportRow[]> {

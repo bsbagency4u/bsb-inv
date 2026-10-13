@@ -628,9 +628,22 @@ export interface SalesInvoice {
   updatedAt: string;
 }
 
+export type PaymentStatus = "posted" | "cancelled";
+
+export interface PaymentAllocation {
+  id: string;
+  businessId: string;
+  paymentId: string;
+  salesInvoiceId: string | null;
+  purchaseInvoiceId: string | null;
+  amount: number;
+  createdAt: string;
+}
+
 export interface Payment {
   id: string;
   businessId: string;
+  documentNo?: string | null;
   direction: "in" | "out";
   partyType: "customer" | "supplier";
   partyId: string | null;
@@ -641,6 +654,10 @@ export interface Payment {
   reference: string | null;
   paymentDate: string;
   notes: string | null;
+  status?: PaymentStatus;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  allocations?: PaymentAllocation[];
   createdAt: string;
 }
 

@@ -24,6 +24,12 @@ import {
 import { remainingForProduct } from "@/lib/purchase-receiving";
 import { allocateReturnToLots } from "@/lib/sales-return";
 import { settleTender } from "@/lib/tender";
+import {
+  settlePurchaseInvoice,
+  settleSalesInvoice,
+  validateAllocations,
+  type AllocationRequest,
+} from "@/lib/party-ledger";
 import { GstEngine } from "./gst.service";
 import type { GstComputeOptions } from "./gst.service";
 import { InventoryService } from "./inventory.service";
@@ -105,6 +111,12 @@ export interface DocumentMutationOptions {
   overrideReason?: string | null;
 }
 
+export interface InvoiceAllocationInput {
+  salesInvoiceId?: string | null;
+  purchaseInvoiceId?: string | null;
+  amount: number;
+}
+
 export interface PaymentInput {
   direction: "in" | "out";
   partyType: "customer" | "supplier";
@@ -116,6 +128,7 @@ export interface PaymentInput {
   reference?: string | null;
   paymentDate?: string;
   notes?: string | null;
+  allocations?: InvoiceAllocationInput[];
   overrideLock?: boolean;
   overrideReason?: string | null;
 }
@@ -857,6 +870,7 @@ export class TransactionService {
 
     const wasDraft = invoice.status === "draft";
     await this.repos.transactions.updateSalesInvoiceStatus(businessId, invoiceId, "cancelled");
+    await this.repos.transactions.cancelPaymentsForDocument(businessId, userId, { salesInvoiceId: invoiceId });
 
     if (!wasDraft) {
       await this.reverseDocumentStock(businessId, userId, invoiceId);
@@ -1270,6 +1284,7 @@ export class TransactionService {
       await this.reverseDocumentStock(businessId, userId, invoice.id);
     }
     await this.repos.transactions.updatePurchaseInvoiceStatus(businessId, invoiceId, "cancelled");
+    await this.repos.transactions.cancelPaymentsForDocument(businessId, userId, { purchaseInvoiceId: invoiceId });
     await this.auditDocument(
       businessId,
       userId,
@@ -1342,6 +1357,10 @@ export class TransactionService {
         -item.baseQuantity,
         result.id
       );
+    }
+
+    if (input.purchaseInvoiceId) {
+      await this.reconcilePurchasePayment(businessId, input.purchaseInvoiceId);
     }
 
     await this.auditDocument(
@@ -1476,8 +1495,17 @@ export class TransactionService {
       );
     }
 
-    if (input.salesInvoiceId && markReturned) {
-      await this.repos.transactions.updateSalesInvoiceStatus(businessId, input.salesInvoiceId, "returned");
+    if (input.salesInvoiceId) {
+      await this.reconcileSalesPayment(businessId, input.salesInvoiceId);
+      if (markReturned) {
+        const invoice = await this.repos.transactions.getSalesInvoice(businessId, input.salesInvoiceId);
+        await this.repos.transactions.updateSalesInvoiceStatus(
+          businessId,
+          input.salesInvoiceId,
+          "returned",
+          invoice?.paidAmount
+        );
+      }
     }
 
     await this.auditDocument(
@@ -1500,11 +1528,34 @@ export class TransactionService {
     return this.repos.transactions.listPayments(businessId);
   }
 
+  async getPayment(businessId: string, paymentId: string): Promise<Payment | null> {
+    return this.repos.transactions.getPayment(businessId, paymentId);
+  }
+
   async deletePaymentsForDocument(
     businessId: string,
     input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
   ): Promise<void> {
-    await this.repos.transactions.deletePaymentsForDocument(businessId, input);
+    await this.repos.transactions.cancelPaymentsForDocument(businessId, "", input);
+  }
+
+  private normalizeAllocations(input: PaymentInput): AllocationRequest[] {
+    const rows = (input.allocations ?? []).filter((row) => row.amount > 0);
+    if (rows.length > 0) return rows;
+    if (input.salesInvoiceId) {
+      return [{ salesInvoiceId: input.salesInvoiceId, purchaseInvoiceId: null, amount: input.amount }];
+    }
+    if (input.purchaseInvoiceId) {
+      return [{ salesInvoiceId: null, purchaseInvoiceId: input.purchaseInvoiceId, amount: input.amount }];
+    }
+    return [];
+  }
+
+  private invoiceIdsFromAllocations(rows: AllocationRequest[]) {
+    return {
+      salesIds: [...new Set(rows.map((row) => row.salesInvoiceId).filter((id): id is string => Boolean(id)))],
+      purchaseIds: [...new Set(rows.map((row) => row.purchaseInvoiceId).filter((id): id is string => Boolean(id)))],
+    };
   }
 
   async createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment> {
@@ -1523,38 +1574,79 @@ export class TransactionService {
     if (input.amount <= 0) {
       throw AppError.validation("Payment amount must be positive.");
     }
-    if (input.purchaseInvoiceId) {
-      const bill = await this.repos.transactions.getPurchaseInvoice(businessId, input.purchaseInvoiceId);
-      if (bill?.status === "draft") {
-        throw AppError.validation("Complete the draft bill before recording a payment.");
-      }
+    if (input.partyType === "customer" && input.direction !== "in") {
+      throw AppError.validation("Customer receipts must be incoming payments.");
     }
-    if (input.salesInvoiceId) {
-      const sale = await this.repos.transactions.getSalesInvoice(businessId, input.salesInvoiceId);
-      if (sale?.status === "draft") {
+    if (input.partyType === "supplier" && input.direction !== "out") {
+      throw AppError.validation("Supplier payments must be outgoing.");
+    }
+
+    const allocations = this.normalizeAllocations(input);
+    const { salesIds, purchaseIds } = this.invoiceIdsFromAllocations(allocations);
+    const remainingByInvoice = new Map<string, number>();
+    const payments = await this.repos.transactions.listPayments(businessId);
+    const salesReturns = salesIds.length > 0 ? await this.repos.transactions.listSalesReturns(businessId) : [];
+    const purchaseReturns = purchaseIds.length > 0 ? await this.repos.transactions.listPurchaseReturns(businessId) : [];
+
+    for (const invoiceId of salesIds) {
+      const sale = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
+      if (!sale) throw AppError.notFound("Sales invoice not found.");
+      if (sale.status === "draft") {
         throw AppError.validation("Complete the draft invoice before recording a payment.");
       }
+      if (sale.status === "cancelled") {
+        throw AppError.validation("Cancelled invoices cannot be paid.");
+      }
+      if (input.partyId && sale.customerId && sale.customerId !== input.partyId) {
+        throw AppError.validation("A receipt can only be allocated to invoices for the same customer.");
+      }
+      remainingByInvoice.set(invoiceId, settleSalesInvoice(sale, payments, salesReturns).balance);
     }
+    for (const invoiceId of purchaseIds) {
+      const bill = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
+      if (!bill) throw AppError.notFound("Purchase bill not found.");
+      if (bill.status === "draft") {
+        throw AppError.validation("Complete the draft bill before recording a payment.");
+      }
+      if (bill.status === "cancelled") {
+        throw AppError.validation("Cancelled bills cannot be paid.");
+      }
+      if (input.partyId && bill.supplierId && bill.supplierId !== input.partyId) {
+        throw AppError.validation("A payment can only be allocated to bills for the same supplier.");
+      }
+      remainingByInvoice.set(invoiceId, settlePurchaseInvoice(bill, payments, purchaseReturns).balance);
+    }
+
+    try {
+      validateAllocations({ paymentAmount: input.amount, allocations, remainingByInvoice });
+    } catch (error) {
+      throw AppError.validation(error instanceof Error ? error.message : "Invalid payment allocation.");
+    }
+
+    const documentNo = await this.documents.allocateNumber(businessId, "payment");
+    const primarySalesId = salesIds[0] ?? input.salesInvoiceId ?? null;
+    const primaryPurchaseId = purchaseIds[0] ?? input.purchaseInvoiceId ?? null;
 
     const payment = await this.repos.transactions.createPayment(businessId, userId, {
       direction: input.direction,
       partyType: input.partyType,
       partyId: input.partyId ?? null,
-      salesInvoiceId: input.salesInvoiceId ?? null,
-      purchaseInvoiceId: input.purchaseInvoiceId ?? null,
+      salesInvoiceId: primarySalesId,
+      purchaseInvoiceId: primaryPurchaseId,
       amount: input.amount,
       mode: input.mode,
       reference: input.reference ?? null,
       paymentDate: guard.documentDate,
       notes: input.notes ?? null,
+      documentNo,
+      allocations,
     });
 
-    // Recompute authoritative paid amount / status on the linked invoice.
-    if (input.salesInvoiceId) {
-      await this.reconcileSalesPayment(businessId, input.salesInvoiceId);
+    for (const invoiceId of salesIds) {
+      await this.reconcileSalesPayment(businessId, invoiceId);
     }
-    if (input.purchaseInvoiceId) {
-      await this.reconcilePurchasePayment(businessId, input.purchaseInvoiceId);
+    for (const invoiceId of purchaseIds) {
+      await this.reconcilePurchasePayment(businessId, invoiceId);
     }
 
     await this.auditDocument(
@@ -1563,33 +1655,87 @@ export class TransactionService {
       "payment.created",
       "payment",
       payment.id,
-      { amount: input.amount, mode: input.mode },
+      { amount: input.amount, mode: input.mode, documentNo, allocated: allocations.length },
       guard
     );
     return payment;
   }
 
+  async cancelPayment(
+    businessId: string,
+    userId: string,
+    paymentId: string,
+    options: DocumentMutationOptions = {}
+  ): Promise<Payment> {
+    const existing = await this.repos.transactions.getPayment(businessId, paymentId);
+    if (!existing) throw AppError.notFound("Payment not found.");
+    const guard = await this.guardDocument(
+      businessId,
+      userId,
+      {
+        kind: "payment",
+        action: "cancel",
+        documentDate: existing.paymentDate,
+        createdAt: existing.createdAt,
+        status: existing.status,
+        overrideLock: options.overrideLock,
+        overrideReason: options.overrideReason,
+      },
+      existing.direction
+    );
+    const cancelled = await this.repos.transactions.cancelPayment(businessId, userId, paymentId);
+    const { salesIds, purchaseIds } = this.invoiceIdsFromAllocations(
+      (existing.allocations ?? []).map((row) => ({
+        salesInvoiceId: row.salesInvoiceId,
+        purchaseInvoiceId: row.purchaseInvoiceId,
+        amount: row.amount,
+      }))
+    );
+    for (const invoiceId of salesIds.length > 0 ? salesIds : existing.salesInvoiceId ? [existing.salesInvoiceId] : []) {
+      await this.reconcileSalesPayment(businessId, invoiceId);
+    }
+    for (const invoiceId of purchaseIds.length > 0 ? purchaseIds : existing.purchaseInvoiceId ? [existing.purchaseInvoiceId] : []) {
+      await this.reconcilePurchasePayment(businessId, invoiceId);
+    }
+    await this.auditDocument(
+      businessId,
+      userId,
+      "payment.cancelled",
+      "payment",
+      paymentId,
+      { amount: existing.amount, documentNo: existing.documentNo },
+      guard
+    );
+    return cancelled;
+  }
+
   private async reconcileSalesPayment(businessId: string, invoiceId: string): Promise<void> {
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) return;
-    const payments = await this.repos.transactions.listPayments(businessId);
-    const paid = payments
-      .filter((p) => p.salesInvoiceId === invoiceId && p.direction === "in")
-      .reduce((sum, p) => sum + p.amount, 0);
-    const status: SalesInvoiceStatus =
-      paid <= 0 ? "completed" : paid >= invoice.total ? "paid" : "partial";
-    await this.repos.transactions.updateSalesInvoiceStatus(businessId, invoiceId, status);
+    if (invoice.status === "draft" || invoice.status === "cancelled") return;
+    const [payments, returns] = await Promise.all([
+      this.repos.transactions.listPayments(businessId),
+      this.repos.transactions.listSalesReturns(businessId),
+    ]);
+    const settled = settleSalesInvoice(invoice, payments, returns);
+    await this.repos.transactions.updateSalesInvoiceStatus(
+      businessId,
+      invoiceId,
+      settled.status as SalesInvoiceStatus,
+      settled.paid
+    );
   }
 
   private async reconcilePurchasePayment(businessId: string, invoiceId: string): Promise<void> {
     const invoice = await this.repos.transactions.getPurchaseInvoice(businessId, invoiceId);
     if (!invoice) return;
-    const payments = await this.repos.transactions.listPayments(businessId);
-    const paid = payments
-      .filter((p) => p.purchaseInvoiceId === invoiceId && p.direction === "out")
-      .reduce((sum, p) => sum + p.amount, 0);
-    const status = paid <= 0 ? "unpaid" : paid >= invoice.total ? "paid" : "partial";
-    await this.repos.transactions.updatePurchaseInvoiceStatus(businessId, invoiceId, status);
+    if (invoice.status === "draft" || invoice.status === "cancelled") return;
+    const [payments, returns] = await Promise.all([
+      this.repos.transactions.listPayments(businessId),
+      this.repos.transactions.listPurchaseReturns(businessId),
+    ]);
+    const settled = settlePurchaseInvoice(invoice, payments, returns);
+    await this.repos.transactions.updatePurchaseInvoiceStatus(businessId, invoiceId, settled.status, settled.paid);
   }
 
   async listPaymentModes(businessId: string): Promise<PaymentMode[]> {

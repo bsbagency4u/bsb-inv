@@ -1,6 +1,7 @@
 import type {
   LineItem,
   Payment,
+  PaymentAllocation,
   PaymentMode,
   PurchaseInvoice,
   PurchaseOrder,
@@ -208,12 +209,18 @@ export class LocalTransactionRepository implements TransactionRepository {
   async updateSalesInvoiceStatus(
     businessId: string,
     invoiceId: string,
-    status: SalesInvoiceStatus
+    status: SalesInvoiceStatus,
+    paidAmount?: number
   ): Promise<void> {
     const all = this.readSales();
     const index = all.findIndex((i) => i.businessId === businessId && i.id === invoiceId);
     if (index === -1) throw new Error("Invoice not found.");
-    all[index] = { ...all[index], status, updatedAt: new Date().toISOString() };
+    all[index] = {
+      ...all[index],
+      status,
+      paidAmount: paidAmount ?? all[index].paidAmount,
+      updatedAt: new Date().toISOString(),
+    };
     this.saveSales(all);
   }
 
@@ -361,12 +368,18 @@ export class LocalTransactionRepository implements TransactionRepository {
   async updatePurchaseInvoiceStatus(
     businessId: string,
     invoiceId: string,
-    status: string
+    status: string,
+    paidAmount?: number
   ): Promise<void> {
     const all = this.readPurchases();
     const index = all.findIndex((i) => i.businessId === businessId && i.id === invoiceId);
     if (index === -1) throw new Error("Purchase invoice not found.");
-    all[index] = { ...all[index], status, updatedAt: new Date().toISOString() };
+    all[index] = {
+      ...all[index],
+      status,
+      paidAmount: paidAmount ?? all[index].paidAmount,
+      updatedAt: new Date().toISOString(),
+    };
     this.savePurchases(all);
   }
 
@@ -380,10 +393,55 @@ export class LocalTransactionRepository implements TransactionRepository {
       .sort((a, b) => b.paymentDate.localeCompare(a.paymentDate));
   }
 
+  async getPayment(businessId: string, paymentId: string): Promise<Payment | null> {
+    return this.readPayments().find((p) => p.businessId === businessId && p.id === paymentId) ?? null;
+  }
+
+  private allocationsFor(businessId: string, paymentId: string, input: PaymentInput): PaymentAllocation[] {
+    const now = new Date().toISOString();
+    const rows = (input.allocations ?? []).filter((row) => row.amount > 0);
+    if (rows.length > 0) {
+      return rows.map((row) => ({
+        id: `alloc-${crypto.randomUUID()}`,
+        businessId,
+        paymentId,
+        salesInvoiceId: row.salesInvoiceId ?? null,
+        purchaseInvoiceId: row.purchaseInvoiceId ?? null,
+        amount: row.amount,
+        createdAt: now,
+      }));
+    }
+    if (input.salesInvoiceId) {
+      return [{
+        id: `alloc-${crypto.randomUUID()}`,
+        businessId,
+        paymentId,
+        salesInvoiceId: input.salesInvoiceId,
+        purchaseInvoiceId: null,
+        amount: input.amount,
+        createdAt: now,
+      }];
+    }
+    if (input.purchaseInvoiceId) {
+      return [{
+        id: `alloc-${crypto.randomUUID()}`,
+        businessId,
+        paymentId,
+        salesInvoiceId: null,
+        purchaseInvoiceId: input.purchaseInvoiceId,
+        amount: input.amount,
+        createdAt: now,
+      }];
+    }
+    return [];
+  }
+
   async createPayment(businessId: string, userId: string, input: PaymentInput): Promise<Payment> {
+    const id = `pay-${crypto.randomUUID()}`;
     const payment: Payment = {
-      id: `pay-${crypto.randomUUID()}`,
+      id,
       businessId,
+      documentNo: input.documentNo ?? null,
       direction: input.direction,
       partyType: input.partyType,
       partyId: input.partyId ?? null,
@@ -394,6 +452,10 @@ export class LocalTransactionRepository implements TransactionRepository {
       reference: input.reference ?? null,
       paymentDate: input.paymentDate,
       notes: input.notes ?? null,
+      status: input.status ?? "posted",
+      cancelledAt: null,
+      cancelledBy: null,
+      allocations: this.allocationsFor(businessId, id, input),
       createdAt: new Date().toISOString(),
     };
     const all = this.readPayments();
@@ -402,16 +464,47 @@ export class LocalTransactionRepository implements TransactionRepository {
     return payment;
   }
 
+  async cancelPayment(businessId: string, userId: string, paymentId: string): Promise<Payment> {
+    const all = this.readPayments();
+    const index = all.findIndex((p) => p.businessId === businessId && p.id === paymentId);
+    if (index === -1) throw new Error("Payment not found.");
+    if (all[index].status === "cancelled") return all[index];
+    all[index] = {
+      ...all[index],
+      status: "cancelled",
+      cancelledAt: new Date().toISOString(),
+      cancelledBy: userId,
+    };
+    this.savePayments(all);
+    return all[index];
+  }
+
   async deletePaymentsForDocument(
     businessId: string,
     input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
   ): Promise<void> {
+    await this.cancelPaymentsForDocument(businessId, "", input);
+  }
+
+  async cancelPaymentsForDocument(
+    businessId: string,
+    userId: string,
+    input: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null }
+  ): Promise<void> {
+    const all = this.readPayments();
+    const now = new Date().toISOString();
     this.savePayments(
-      this.readPayments().filter((payment) => {
-        if (payment.businessId !== businessId) return true;
-        if (input.salesInvoiceId) return payment.salesInvoiceId !== input.salesInvoiceId;
-        if (input.purchaseInvoiceId) return payment.purchaseInvoiceId !== input.purchaseInvoiceId;
-        return true;
+      all.map((payment) => {
+        if (payment.businessId !== businessId || payment.status === "cancelled") return payment;
+        const matchesInvoice = input.salesInvoiceId
+          ? payment.salesInvoiceId === input.salesInvoiceId
+            || (payment.allocations ?? []).some((row) => row.salesInvoiceId === input.salesInvoiceId)
+          : input.purchaseInvoiceId
+            ? payment.purchaseInvoiceId === input.purchaseInvoiceId
+              || (payment.allocations ?? []).some((row) => row.purchaseInvoiceId === input.purchaseInvoiceId)
+            : false;
+        if (!matchesInvoice) return payment;
+        return { ...payment, status: "cancelled" as const, cancelledAt: now, cancelledBy: userId || null };
       })
     );
   }
