@@ -231,19 +231,6 @@ export interface NotificationItem {
   href?: string;
 }
 
-export interface DashboardStats {
-  /** Marked as demo/placeholder data so it is never mistaken for real. */
-  isDemo: boolean;
-  todaySales: number;
-  todayPurchase: number;
-  stockValue: number;
-  lowStockCount: number;
-  outOfStockCount: number;
-  outstanding: number;
-  currency: string;
-  updatedAt: string;
-}
-
 export interface Category {
   id: string;
   businessId: string;

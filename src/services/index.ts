@@ -56,7 +56,7 @@ function buildServices(repos: Repositories): Services {
     audits,
     businesses,
     profiles,
-    dashboard: new DashboardService(repos),
+    dashboard: new DashboardService(repos, { inventory, businesses, authorization }),
     search: new SearchService(repos),
     products,
     inventory,
