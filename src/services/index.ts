@@ -10,6 +10,7 @@ import { ProductService } from "./product.service";
 import { InventoryService } from "./inventory.service";
 import { PartyService } from "./party.service";
 import { TransactionService } from "./transaction.service";
+import { LedgerService } from "./ledger.service";
 import { ReportService } from "./report.service";
 import { NotificationService } from "./notification.service";
 import { StorageService } from "./storage.service";
@@ -30,6 +31,7 @@ export interface Services {
   storage: StorageService;
   parties: PartyService;
   transactions: TransactionService;
+  ledger: LedgerService;
   reports: ReportService;
   notifications: NotificationService;
   gst: GstEngine;
@@ -47,19 +49,21 @@ function buildServices(repos: Repositories): Services {
   const inventory = new InventoryService(repos, audits, notifications, authorization);
   const parties = new PartyService(repos, audits, authorization);
   const transactions = new TransactionService(repos, audits, notifications, authorization);
+  const ledger = new LedgerService(repos, authorization);
   return {
     repos,
     auth: new AuthService(repos.profiles),
     audits,
     businesses,
     profiles,
-    dashboard: new DashboardService(repos),
+    dashboard: new DashboardService(repos, { inventory, businesses, authorization }),
     search: new SearchService(repos),
     products,
     inventory,
     storage: new StorageService(),
     parties,
     transactions,
+    ledger,
     reports: new ReportService(repos),
     notifications,
     gst: new GstEngine(),

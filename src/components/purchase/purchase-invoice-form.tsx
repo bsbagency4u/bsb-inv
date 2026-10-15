@@ -215,13 +215,13 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
     enabled: Boolean(business),
   });
 
-  const { data: purchaseInvoices } = useQuery({
-    queryKey: ["purchase-invoices", business?.id],
+  const { data: supplierLedger } = useQuery({
+    queryKey: ["party-ledger", "supplier", business?.id, supplierId],
     queryFn: async () => {
-      if (!business) throw new Error("No active business.");
-      return getClientServices().transactions.listPurchaseInvoices(business.id);
+      if (!business || !supplierId) throw new Error("No supplier.");
+      return getClientServices().ledger.getSupplierLedger(business.id, supplierId);
     },
-    enabled: Boolean(business),
+    enabled: Boolean(business && supplierId),
   });
 
   const { data: loadedInvoice, isLoading: invoiceLoading } = useQuery({
@@ -322,16 +322,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
     return Array.from(rates).sort((a, b) => a - b);
   }, [products, taxDefaults]);
 
-  const outstanding = React.useMemo(() => {
-    if (!supplier) return 0;
-    const openBills = (purchaseInvoices ?? []).filter((bill) => {
-      if (bill.supplierId !== supplier.id) return false;
-      if (bill.status === "draft" || bill.status === "cancelled") return false;
-      return bill.total - bill.paidAmount > 0;
-    });
-    const unpaid = openBills.reduce((sum, bill) => sum + Math.max(0, bill.total - bill.paidAmount), 0);
-    return Math.max(0, (supplier.openingBalance ?? 0) + unpaid);
-  }, [supplier, purchaseInvoices]);
+  const outstanding = supplierLedger?.balance.outstanding ?? 0;
 
   const invoiceDiscount = Math.max(0, Number(discount) || 0);
   const totals = gst.computeTotals(

@@ -25,7 +25,26 @@ function memoryRepositories() {
   const products: Product[] = [];
   const salesInvoices: SalesInvoice[] = [];
   const purchaseInvoices: PurchaseInvoice[] = [];
-  const payments: Array<{ id: string; direction: string; salesInvoiceId: string | null; purchaseInvoiceId: string | null; amount: number; mode: string }> = [];
+  const payments: Array<{
+    id: string;
+    businessId?: string;
+    documentNo?: string | null;
+    direction: string;
+    partyType?: string;
+    partyId?: string | null;
+    salesInvoiceId: string | null;
+    purchaseInvoiceId: string | null;
+    amount: number;
+    mode: string;
+    reference?: string | null;
+    paymentDate?: string;
+    notes?: string | null;
+    status?: string;
+    cancelledAt?: string | null;
+    cancelledBy?: string | null;
+    allocations?: Array<{ id: string; businessId: string; paymentId: string; salesInvoiceId: string | null; purchaseInvoiceId: string | null; amount: number; createdAt: string }>;
+    createdAt?: string;
+  }> = [];
   const ledger: Array<{
     id: string;
     businessId: string;
@@ -328,9 +347,15 @@ function memoryRepositories() {
         };
         return salesInvoices[index];
       },
-      async updateSalesInvoiceStatus(_b, id, status) {
+      async updateSalesInvoiceStatus(_b, id, status, paidAmount) {
         const index = salesInvoices.findIndex((i) => i.id === id);
-        if (index !== -1) salesInvoices[index] = { ...salesInvoices[index], status };
+        if (index !== -1) {
+          salesInvoices[index] = {
+            ...salesInvoices[index],
+            status,
+            paidAmount: paidAmount ?? salesInvoices[index].paidAmount,
+          };
+        }
       },
       async deleteSalesInvoice(_b, invoiceId) {
         const index = salesInvoices.findIndex((i) => i.id === invoiceId);
@@ -457,38 +482,67 @@ function memoryRepositories() {
         };
         return purchaseInvoices[index];
       },
-      async updatePurchaseInvoiceStatus(_b, id, status) {
+      async updatePurchaseInvoiceStatus(_b, id, status, paidAmount) {
         const index = purchaseInvoices.findIndex((i) => i.id === id);
-        if (index !== -1) purchaseInvoices[index] = { ...purchaseInvoices[index], status };
+        if (index !== -1) {
+          purchaseInvoices[index] = {
+            ...purchaseInvoices[index],
+            status,
+            paidAmount: paidAmount ?? purchaseInvoices[index].paidAmount,
+          };
+        }
       },
       async deletePurchaseInvoice(_b, invoiceId) {
         const index = purchaseInvoices.findIndex((i) => i.id === invoiceId);
         if (index !== -1) purchaseInvoices.splice(index, 1);
       },
       async listPayments() { return payments as never[]; },
+      async getPayment(_b, paymentId) {
+        return (payments.find((p) => p.id === paymentId) ?? null) as never;
+      },
+      async cancelPayment(_b, userId, paymentId) {
+        const payment = payments.find((p) => p.id === paymentId);
+        if (!payment) throw new Error("Payment not found.");
+        Object.assign(payment, { status: "cancelled", cancelledAt: new Date().toISOString(), cancelledBy: userId });
+        return payment as never;
+      },
+      async cancelPaymentsForDocument(_b, userId, input) {
+        for (const payment of payments) {
+          const matches = input.salesInvoiceId
+            ? payment.salesInvoiceId === input.salesInvoiceId
+              || (payment.allocations ?? []).some((row: { salesInvoiceId?: string | null }) => row.salesInvoiceId === input.salesInvoiceId)
+            : input.purchaseInvoiceId
+              ? payment.purchaseInvoiceId === input.purchaseInvoiceId
+                || (payment.allocations ?? []).some((row: { purchaseInvoiceId?: string | null }) => row.purchaseInvoiceId === input.purchaseInvoiceId)
+              : false;
+          if (matches) Object.assign(payment, { status: "cancelled", cancelledAt: new Date().toISOString(), cancelledBy: userId });
+        }
+      },
       async deletePaymentsForDocument(_b, input) {
-        for (let i = payments.length - 1; i >= 0; i -= 1) {
-          const payment = payments[i];
-          if (input.salesInvoiceId && payment.salesInvoiceId === input.salesInvoiceId) {
-            payments.splice(i, 1);
-          } else if (input.purchaseInvoiceId && payment.purchaseInvoiceId === input.purchaseInvoiceId) {
-            payments.splice(i, 1);
-          }
+        for (const payment of payments) {
+          const matches = input.salesInvoiceId
+            ? payment.salesInvoiceId === input.salesInvoiceId
+            : input.purchaseInvoiceId
+              ? payment.purchaseInvoiceId === input.purchaseInvoiceId
+              : false;
+          if (matches) Object.assign(payment, { status: "cancelled" });
         }
       },
       async createPayment(_b, _u, input) {
-        const payment = {
-          id: `pay-${payments.length + 1}`,
-          direction: input.direction,
-          salesInvoiceId: input.salesInvoiceId ?? null,
-          purchaseInvoiceId: input.purchaseInvoiceId ?? null,
-          amount: input.amount,
-          mode: input.mode,
-        };
-        payments.push(payment);
-        return {
-          id: payment.id,
+        const id = `pay-${payments.length + 1}`;
+        const allocations = (input.allocations ?? []).filter((row: { amount: number }) => row.amount > 0).map((row: { salesInvoiceId?: string | null; purchaseInvoiceId?: string | null; amount: number }, index: number) => ({
+          id: `${id}-${index}`,
           businessId: _b,
+          paymentId: id,
+          salesInvoiceId: row.salesInvoiceId ?? null,
+          purchaseInvoiceId: row.purchaseInvoiceId ?? null,
+          amount: row.amount,
+          createdAt: new Date().toISOString(),
+        }));
+        const payment = {
+          id,
+          businessId: _b,
+          documentNo: input.documentNo ?? `PAY-${payments.length + 1}`,
           direction: input.direction,
           partyType: input.partyType,
           partyId: input.partyId ?? null,
@@ -499,8 +553,14 @@ function memoryRepositories() {
           reference: input.reference ?? null,
           paymentDate: input.paymentDate,
           notes: input.notes ?? null,
+          status: "posted",
+          cancelledAt: null,
+          cancelledBy: null,
+          allocations,
           createdAt: new Date().toISOString(),
         };
+        payments.push(payment);
+        return payment as never;
       },
       async listPaymentModes(_b) { return paymentModes.filter((m) => m.businessId === _b); },
       async createPaymentMode(_b, input) {
@@ -1126,6 +1186,61 @@ describe("TransactionService", () => {
     expect(services.salesInvoices.find((i) => i.id === invoice.id)?.status).toBe("paid");
   });
 
+  it("allocates one receipt across two invoices and keeps surplus as an advance", async () => {
+    const product = await seedProduct();
+    await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-2026-000020", {
+      supplierId: "s-1",
+      items: [{ productId: product.id, quantity: 10, unitPrice: 100, gstRate: 0 }],
+    });
+    const first = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000013", {
+      customerId: "c-1",
+      items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      payments: [],
+    });
+    const second = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000014", {
+      customerId: "c-1",
+      items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      payments: [],
+    });
+    const payment = await transactions.createPayment("b-1", "u-1", {
+      direction: "in",
+      partyType: "customer",
+      partyId: "c-1",
+      amount: 300,
+      mode: "cash",
+      allocations: [
+        { salesInvoiceId: first.invoice.id, amount: 236 },
+        { salesInvoiceId: second.invoice.id, amount: 50 },
+      ],
+    });
+    expect(services.salesInvoices.find((i) => i.id === first.invoice.id)?.status).toBe("paid");
+    expect(services.salesInvoices.find((i) => i.id === second.invoice.id)?.status).toBe("partial");
+    expect(payment.allocations).toHaveLength(2);
+    expect(payment.amount).toBe(300);
+  });
+
+  it("cancels a payment and restores the invoice outstanding", async () => {
+    const product = await seedProduct();
+    const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-2026-000015", {
+      customerId: "c-1",
+      items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+      payments: [],
+    });
+    const payment = await transactions.createPayment("b-1", "u-1", {
+      direction: "in",
+      partyType: "customer",
+      partyId: "c-1",
+      salesInvoiceId: invoice.id,
+      amount: 236,
+      mode: "cash",
+    });
+    expect(services.salesInvoices.find((i) => i.id === invoice.id)?.status).toBe("paid");
+    await transactions.cancelPayment("b-1", "u-1", payment.id);
+    expect(services.payments.find((p) => p.id === payment.id)?.status).toBe("cancelled");
+    expect(services.salesInvoices.find((i) => i.id === invoice.id)?.status).toBe("completed");
+    expect(services.salesInvoices.find((i) => i.id === invoice.id)?.paidAmount).toBe(0);
+  });
+
   it("lists and creates payment modes", async () => {
     const modes = await transactions.listPaymentModes("b-1");
     expect(modes).toHaveLength(2);
@@ -1676,8 +1791,8 @@ describe("TransactionService", () => {
       expect(updated.invoice.invoiceNo).toBe("INV-EDIT");
       expect(updated.invoice.items[0].quantity).toBe(3);
       expect(netQty(product.id)).toBe(7);
-      expect(services.payments.filter((p) => p.salesInvoiceId === invoice.id)).toHaveLength(1);
-      expect(services.payments.find((p) => p.salesInvoiceId === invoice.id)?.amount).toBe(600);
+      expect(services.payments.filter((p) => p.salesInvoiceId === invoice.id && p.status !== "cancelled")).toHaveLength(1);
+      expect(services.payments.find((p) => p.salesInvoiceId === invoice.id && p.status !== "cancelled")?.amount).toBe(600);
     });
 
     it("blocks deleting a posted document when allowDeletePosted is off", async () => {

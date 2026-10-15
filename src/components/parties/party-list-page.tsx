@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2, Users, Truck } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Eye, Pencil, Plus, Trash2, Users, Truck } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -30,6 +31,7 @@ import type { Customer, Supplier } from "@/types/domain";
 type PartyKind = "customer" | "supplier";
 
 export function PartyListPage({ kind }: { kind: PartyKind }) {
+  const router = useRouter();
   const { user, business } = useSession();
   const queryClient = useQueryClient();
   const { success: toastSuccess, error: toastError } = useToast();
@@ -188,7 +190,11 @@ export function PartyListPage({ kind }: { kind: PartyKind }) {
               </TableHeader>
               <TableBody>
                 {filtered.map((party) => (
-                  <TableRow key={party.id}>
+                  <TableRow
+                    key={party.id}
+                    className="cursor-pointer"
+                    onClick={() => router.push(isCustomer ? `/customers/${party.id}` : `/suppliers/${party.id}`)}
+                  >
                     <TableCell className="font-medium text-foreground">{party.name}</TableCell>
                     <TableCell>
                       <p className="text-sm text-foreground">{party.phone ?? "—"}</p>
@@ -205,8 +211,18 @@ export function PartyListPage({ kind }: { kind: PartyKind }) {
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {formatCurrency(party.openingBalance, business?.currency ?? "INR")}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() =>
+                            router.push(isCustomer ? `/customers/${party.id}` : `/suppliers/${party.id}`)
+                          }
+                          aria-label={`Open ${party.name}`}
+                        >
+                          <Eye className="size-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon-sm"

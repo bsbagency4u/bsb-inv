@@ -510,6 +510,7 @@ export type SalesInvoiceItem = {
 export type Payment = {
   id: string;
   business_id: string;
+  document_no: string | null;
   direction: string;
   party_type: string;
   party_id: string | null;
@@ -520,7 +521,20 @@ export type Payment = {
   reference: string | null;
   payment_date: string;
   notes: string | null;
+  status: string;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
   created_by: string | null;
+  created_at: string;
+}
+
+export type PaymentAllocation = {
+  id: string;
+  business_id: string;
+  payment_id: string;
+  sales_invoice_id: string | null;
+  purchase_invoice_id: string | null;
+  amount: number;
   created_at: string;
 }
 
@@ -705,6 +719,12 @@ export interface Database {
         Row: Payment;
         Insert: Partial<Payment> & { business_id: string; direction: string };
         Update: Partial<Payment>;
+        Relationships: [];
+      };
+      payment_allocations: {
+        Row: PaymentAllocation;
+        Insert: Partial<PaymentAllocation> & { business_id: string; payment_id: string; amount: number };
+        Update: Partial<PaymentAllocation>;
         Relationships: [];
       };
       notifications: {
