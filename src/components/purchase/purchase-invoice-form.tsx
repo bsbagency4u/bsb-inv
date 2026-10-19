@@ -30,6 +30,7 @@ import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { GstEngine, GST_RATE_OPTIONS } from "@/services/gst.service";
+import { classifyGstDocument, gstDocumentHeading, isTaxableSupplyType, normalizeGstSupplyType } from "@/lib/gst";
 import { normalizeError } from "@/lib/errors";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
@@ -258,12 +259,15 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
   const tracksBatches = businessTracksBatches(business?.type);
   const showsMrp = businessShowsMrp(business?.type);
   const showsManufacturer = getProductAttributesForType(business?.type).some((item) => item.key === "manufacturer");
-  const gstEnabled = taxDefaults?.gstEnabled ?? true;
   const pricesIncludeTax = taxDefaults?.pricesIncludeTax ?? false;
   const supplier = suppliers?.find((item) => item.id === supplierId) ?? null;
+  const supplierRegistered =
+    !supplier ||
+    ["registered", "composition", "sez"].includes(supplier.gstRegistrationType ?? "registered");
+  const gstEnabled = (taxDefaults?.gstEnabled ?? true) && supplierRegistered;
   const paymentMode = paymentModeOverride ?? (paymentModes?.[0]?.code ?? "cash");
   const paymentTerms = supplier?.paymentTerms || purchaseDefaults?.defaultPaymentTerms || "";
-  const placeOfSupply = placeOfSupplyOverride ?? supplier?.state ?? business?.state ?? "";
+  const placeOfSupply = placeOfSupplyOverride ?? supplier?.placeOfSupplyState ?? supplier?.state ?? business?.state ?? "";
 
   const productById = React.useMemo(() => {
     const map = new Map<string, ProductWithStock>();
@@ -348,6 +352,19 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
   );
 
   const amountToPay = totals.total;
+  const gstDocumentType = classifyGstDocument({
+    side: "purchase",
+    registrationType: business?.gstRegistrationType ?? "regular",
+    businessState: business?.state ?? null,
+    partyState: supplier?.state ?? null,
+    partyPlaceOfSupplyState: supplier?.placeOfSupplyState ?? null,
+    partyRegistrationType: supplier?.gstRegistrationType ?? null,
+    lines: lines.map((line) => ({
+      supplyType: normalizeGstSupplyType(productById.get(line.productId)?.gstSupplyType),
+      rate: gstEnabled ? line.gstRate : 0,
+    })),
+    defaultIntraState: intraState,
+  }).documentType;
   const simplePaid = paidAmount === "" ? 0 : Math.max(0, Number(paidAmount) || 0);
   const splitPaid = paymentSplits.reduce((sum, split) => sum + Math.max(0, Number(split.amount) || 0), 0);
   const amountPaid = splitPayment ? splitPaid : simplePaid;
@@ -389,6 +406,9 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
     cgst: totals.cgst,
     sgst: totals.sgst,
     igst: totals.igst,
+    documentLabel: gstDocumentHeading(gstDocumentType),
+    placeOfSupplyState: placeOfSupply || supplier?.placeOfSupplyState || supplier?.state || null,
+    reverseCharge: taxDefaults?.reverseChargeEnabled ?? false,
   });
 
   const printBill = (billNo?: string) => {
@@ -412,7 +432,10 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
       unitKind,
       rateBasis: unitKind === "pack" ? "pack" : "base",
       unitPrice: variant?.purchasePrice ?? product.purchasePrice,
-      gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
+      gstRate:
+        gstEnabled && isTaxableSupplyType(normalizeGstSupplyType(product.gstSupplyType))
+          ? product.gstRate
+          : 0,
       discount: 0,
       batchNo: "",
       expiryDate: "",
@@ -1254,7 +1277,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
         <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle>Financial summary</CardTitle>
+              <CardTitle>{gstDocumentHeading(gstDocumentType)}</CardTitle>
               <CardDescription>
                 {pricesIncludeTax
                   ? "Entered prices include GST. Tax is extracted, not added."

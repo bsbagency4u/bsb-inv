@@ -384,6 +384,9 @@ export class ProductService {
       reorderLevel: data.reorderLevel ?? 0,
       trackInventory: data.trackInventory ?? true,
       taxable: data.taxable ?? true,
+      gstSupplyType:
+        data.gstSupplyType ?? (data.taxable === false ? "exempt" : "taxable"),
+      reverseCharge: data.reverseCharge ?? false,
       productStatus: data.productStatus ?? "active",
     });
 
@@ -443,6 +446,9 @@ export class ProductService {
       reorderLevel: data.reorderLevel ?? 0,
       trackInventory: data.trackInventory ?? true,
       taxable: data.taxable ?? true,
+      gstSupplyType:
+        data.gstSupplyType ?? (data.taxable === false ? "exempt" : "taxable"),
+      reverseCharge: data.reverseCharge ?? false,
       productStatus: data.productStatus ?? "active",
     });
 

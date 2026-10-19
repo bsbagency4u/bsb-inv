@@ -45,6 +45,7 @@ function createMemoryRepositories(): Repositories {
           website: null,
           gstin: input.gstin ?? null,
           pan: null,
+          gstRegistrationType: input.gstRegistrationType ?? "unregistered",
           currency: input.currency ?? "INR",
           financialYear: input.financialYear ?? "01-04",
           invoicePrefix: input.invoicePrefix ?? "INV",

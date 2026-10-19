@@ -38,6 +38,8 @@ const PACKING_COLUMN_KEYS = [
   "allow_pack_sale",
   "allow_pack_purchase",
   "fixed_packing",
+  "gst_supply_type",
+  "reverse_charge",
 ] as const;
 
 function omitPackingColumns<T extends Record<string, unknown>>(payload: T): T {
@@ -93,6 +95,8 @@ export interface ProductCreateInput {
   reorderLevel?: number;
   trackInventory?: boolean;
   taxable?: boolean;
+  gstSupplyType?: Product["gstSupplyType"];
+  reverseCharge?: boolean;
   productStatus?: Product["productStatus"];
   isActive?: boolean;
 }
@@ -265,6 +269,8 @@ export class SupabaseProductRepository implements ProductRepository {
       reorder_level: input.reorderLevel ?? 0,
       track_inventory: input.trackInventory ?? true,
       taxable: input.taxable ?? true,
+      gst_supply_type: input.gstSupplyType ?? "taxable",
+      reverse_charge: input.reverseCharge ?? false,
       product_status: input.productStatus ?? "active",
       is_active: input.isActive ?? true,
       created_by: userId,
@@ -317,6 +323,8 @@ export class SupabaseProductRepository implements ProductRepository {
       reorder_level: input.reorderLevel,
       track_inventory: input.trackInventory,
       taxable: input.taxable,
+      gst_supply_type: input.gstSupplyType,
+      reverse_charge: input.reverseCharge,
       product_status: input.productStatus,
       is_active: input.isActive,
     };

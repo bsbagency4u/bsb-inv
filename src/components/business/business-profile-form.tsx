@@ -14,6 +14,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert } from "@/components/ui/alert";
 import { useToast } from "@/components/ui/toast";
 import { businessProfileSchema, type BusinessProfileValues } from "@/lib/validation/schemas";
+import {
+  GST_REGISTRATION_TYPES,
+  GST_REGISTRATION_TYPE_DESCRIPTIONS,
+  GST_REGISTRATION_TYPE_LABELS,
+} from "@/lib/gst";
 import { getBusinessType } from "@/config/business-types";
 import { BUSINESS_TYPES, CURRENCIES, COUNTRIES } from "@/config/business-types";
 import { normalizeError } from "@/lib/errors";
@@ -34,6 +39,7 @@ const emptyValues: BusinessProfileValues = {
   pincode: "",
   gstin: "",
   pan: "",
+  gstRegistrationType: "unregistered",
   currency: "INR",
   financialYear: "01-04",
   invoicePrefix: "INV",
@@ -56,6 +62,7 @@ function toFormValues(business: BusinessProfile): BusinessProfileValues {
     pincode: business.pincode ?? "",
     gstin: business.gstin ?? "",
     pan: business.pan ?? "",
+    gstRegistrationType: business.gstRegistrationType,
     currency: business.currency,
     financialYear: business.financialYear,
     invoicePrefix: business.invoicePrefix,
@@ -90,6 +97,7 @@ export function BusinessProfileForm({
   });
 
   const selectedType = useWatch({ control, name: "type" });
+  const gstRegistrationType = useWatch({ control, name: "gstRegistrationType" });
   const typeConfig = getBusinessType(selectedType);
 
   const submit = async (values: BusinessProfileValues) => {
@@ -186,6 +194,23 @@ export function BusinessProfileForm({
           <CardDescription>Optional tax identifiers. Validation is applied when supplied.</CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="GST registration type"
+            htmlFor="gstRegistrationType"
+            required
+            error={errors.gstRegistrationType?.message}
+            hint={GST_REGISTRATION_TYPE_DESCRIPTIONS[
+              (gstRegistrationType ?? "unregistered") as keyof typeof GST_REGISTRATION_TYPE_DESCRIPTIONS
+            ]}
+          >
+            <Select id="gstRegistrationType" {...register("gstRegistrationType")} invalid={Boolean(errors.gstRegistrationType)}>
+              {GST_REGISTRATION_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {GST_REGISTRATION_TYPE_LABELS[type]}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Field label="GSTIN" htmlFor="gstin" error={errors.gstin?.message} hint="Validated when provided.">
             <Input id="gstin" placeholder="22AAAAA0000A1Z5" {...register("gstin")} invalid={Boolean(errors.gstin)} />
           </Field>

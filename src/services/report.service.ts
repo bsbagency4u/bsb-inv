@@ -6,7 +6,6 @@ import type {
   StockReportRow,
   StockMovementType,
 } from "@/types/domain";
-import { GstEngine } from "./gst.service";
 import { LedgerService, type OutstandingFilters } from "./ledger.service";
 import { runStockReport, listStockReportDefinitions } from "@/reports/engine";
 import type { ReportCatalog } from "@/reports/engine";
@@ -38,7 +37,6 @@ const STOCK_STATUSES = [
 ];
 
 export class ReportService {
-  private gst = new GstEngine();
   private ledger: LedgerService;
 
   constructor(private repos: Repositories) {
@@ -103,20 +101,36 @@ export class ReportService {
   }
 
   async gstReport(businessId: string, period: ReportPeriod): Promise<GstReportRow[]> {
-    const invoices = await this.repos.transactions.listSalesInvoices(businessId);
+    const [invoices, customers] = await Promise.all([
+      this.repos.transactions.listSalesInvoices(businessId),
+      this.repos.parties.listCustomers(businessId),
+    ]);
+    const byCustomer = new Map(customers.map((customer) => [customer.id, customer]));
     return invoices
-      .filter((i) => i.invoiceDate >= period.from && i.invoiceDate <= period.to)
+      .filter(
+        (i) =>
+          i.invoiceDate >= period.from &&
+          i.invoiceDate <= period.to &&
+          i.status !== "cancelled"
+      )
       .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate))
       .map((invoice) => {
-        const lines = this.gst.gstLinesFromItems(invoice.items, true);
+        const customer = invoice.customerId ? byCustomer.get(invoice.customerId) : null;
+        const intraState = invoice.intraState ?? true;
+        const taxAmount = invoice.taxTotal;
         return {
           invoiceNo: invoice.invoiceNo,
           invoiceDate: invoice.invoiceDate,
+          customerName: this.partyName(customers, [], "customer", invoice.customerId),
+          customerGstin: customer?.gstin ?? null,
+          documentType: invoice.gstDocumentType ?? "tax_invoice",
+          placeOfSupplyState: invoice.placeOfSupplyState ?? customer?.placeOfSupplyState ?? null,
+          reverseCharge: invoice.reverseCharge ?? false,
           taxableAmount: invoice.subtotal,
-          taxAmount: invoice.taxTotal,
-          cgst: lines.reduce((sum, line) => sum + line.cgst, 0),
-          sgst: lines.reduce((sum, line) => sum + line.sgst, 0),
-          igst: lines.reduce((sum, line) => sum + line.igst, 0),
+          taxAmount,
+          cgst: intraState ? taxAmount / 2 : 0,
+          sgst: intraState ? taxAmount / 2 : 0,
+          igst: intraState ? 0 : taxAmount,
         };
       });
   }

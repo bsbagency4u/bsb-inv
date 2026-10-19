@@ -192,6 +192,8 @@ export class LocalProductRepository implements ProductRepository {
       reorderLevel: input.reorderLevel ?? 0,
       trackInventory: input.trackInventory ?? true,
       taxable: input.taxable ?? true,
+      gstSupplyType: input.gstSupplyType ?? (input.taxable === false ? "exempt" : "taxable"),
+      reverseCharge: input.reverseCharge ?? false,
       productStatus: input.productStatus ?? "active",
       isActive: input.isActive ?? true,
       createdAt: now,

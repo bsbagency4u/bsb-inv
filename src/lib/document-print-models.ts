@@ -10,9 +10,20 @@ import type {
   Supplier,
 } from "@/types/domain";
 import type { PrintDocumentModel, PrintLine } from "@/lib/invoice-print";
+import { gstDocumentHeading } from "@/lib/gst";
 
 function productLookup(products: ProductWithStock[] | undefined | null) {
   return new Map((products ?? []).map((product) => [product.id, product]));
+}
+
+function gstPrintMeta(intraState: boolean | undefined, taxTotal: number) {
+  if (intraState === undefined) return {};
+  return {
+    intraState,
+    cgst: intraState ? taxTotal / 2 : 0,
+    sgst: intraState ? taxTotal / 2 : 0,
+    igst: intraState ? 0 : taxTotal,
+  };
 }
 
 function lineFromItem(item: LineItem, product?: ProductWithStock | null): PrintLine {
@@ -54,6 +65,12 @@ export function salesInvoicePrintModel(
     discount: invoice.discount,
     taxTotal: invoice.taxTotal,
     total: invoice.total,
+    documentLabel: invoice.gstDocumentType
+      ? gstDocumentHeading(invoice.gstDocumentType)
+      : null,
+    placeOfSupplyState: invoice.placeOfSupplyState ?? null,
+    reverseCharge: invoice.reverseCharge ?? false,
+    ...gstPrintMeta(invoice.intraState, invoice.taxTotal),
   };
 }
 
@@ -81,6 +98,12 @@ export function purchaseInvoicePrintModel(
     discount: invoice.discount,
     taxTotal: invoice.taxTotal,
     total: invoice.total,
+    documentLabel: invoice.gstDocumentType
+      ? gstDocumentHeading(invoice.gstDocumentType)
+      : null,
+    placeOfSupplyState: invoice.placeOfSupplyState ?? null,
+    reverseCharge: invoice.reverseCharge ?? false,
+    ...gstPrintMeta(invoice.intraState, invoice.taxTotal),
   };
 }
 

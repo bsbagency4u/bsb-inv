@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import type { Repositories } from "@/repositories/types";
 import type {
   AuditEvent,
+  BusinessProfile,
   Product,
   ProductBatch,
   PurchaseInvoice,
@@ -118,6 +119,8 @@ function memoryRepositories() {
           reorderLevel: input.reorderLevel ?? 0,
           trackInventory: input.trackInventory ?? true,
           taxable: input.taxable ?? true,
+          gstSupplyType: input.gstSupplyType ?? "taxable",
+          reverseCharge: input.reverseCharge ?? false,
           productStatus: input.productStatus ?? "active",
           isActive: true,
           createdAt: new Date().toISOString(),
@@ -629,7 +632,34 @@ function memoryRepositories() {
     },
     businesses: {
       async listForUser() { return []; },
-      async getById() { return null; },
+      async getById(businessId) {
+        const business: BusinessProfile = {
+          id: businessId,
+          name: "Test Business",
+          legalName: null,
+          type: "retail",
+          logoUrl: null,
+          address: null,
+          city: null,
+          state: "Maharashtra",
+          country: "India",
+          pincode: null,
+          phone: null,
+          email: null,
+          website: null,
+          gstin: "27ABCDE1234F1Z5",
+          pan: null,
+          gstRegistrationType: "regular",
+          currency: "INR",
+          financialYear: "2026-2027",
+          invoicePrefix: "SAL",
+          invoiceStartNumber: 1,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        return business;
+      },
       async getByUserAndId() { return null; },
       async create() { throw new Error("not used"); },
       async update() { throw new Error("not used"); },

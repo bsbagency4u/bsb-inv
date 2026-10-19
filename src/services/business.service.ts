@@ -31,6 +31,7 @@ import {
   parseDocumentControlDefaults,
 } from "@/lib/document-control";
 import { readStorage, writeStorage } from "@/repositories/local/local-data";
+import { normalizeGstSupplyType } from "@/lib/gst";
 import type { AuditService } from "./audit.service";
 import { AuthorizationService } from "./authorization.service";
 
@@ -54,6 +55,9 @@ export const DEFAULT_TAX: TaxDefaults = {
   defaultIntraState: true,
   defaultHsnCode: "",
   pricesIncludeTax: false,
+  defaultPlaceOfSupplyState: "",
+  defaultSupplyType: "taxable",
+  reverseChargeEnabled: false,
 };
 
 export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL };
@@ -74,6 +78,10 @@ export function parseTaxDefaults(stored: unknown): TaxDefaults {
     defaultIntraState: value.defaultIntraState ?? DEFAULT_TAX.defaultIntraState,
     defaultHsnCode: value.defaultHsnCode ?? DEFAULT_TAX.defaultHsnCode,
     pricesIncludeTax: value.pricesIncludeTax ?? DEFAULT_TAX.pricesIncludeTax,
+    defaultPlaceOfSupplyState:
+      value.defaultPlaceOfSupplyState ?? DEFAULT_TAX.defaultPlaceOfSupplyState,
+    defaultSupplyType: normalizeGstSupplyType(value.defaultSupplyType),
+    reverseChargeEnabled: value.reverseChargeEnabled ?? DEFAULT_TAX.reverseChargeEnabled,
   };
 }
 
@@ -146,6 +154,7 @@ export class BusinessService {
       pincode: data.pincode || null,
       gstin: data.gstin || null,
       pan: data.pan || null,
+      gstRegistrationType: data.gstRegistrationType ?? "unregistered",
       currency: data.currency,
       financialYear: data.financialYear || "01-04",
       invoicePrefix: data.invoicePrefix || "INV",
@@ -193,6 +202,7 @@ export class BusinessService {
       pincode: data.pincode || null,
       gstin: data.gstin || null,
       pan: data.pan || null,
+      gstRegistrationType: data.gstRegistrationType ?? "unregistered",
       currency: data.currency,
       financialYear: data.financialYear || "01-04",
       invoicePrefix: data.invoicePrefix || "INV",
@@ -323,6 +333,9 @@ export class BusinessService {
       defaultIntraState: parsed.data.defaultIntraState,
       defaultHsnCode: parsed.data.defaultHsnCode || "",
       pricesIncludeTax: parsed.data.pricesIncludeTax,
+      defaultPlaceOfSupplyState: parsed.data.defaultPlaceOfSupplyState || "",
+      defaultSupplyType: parsed.data.defaultSupplyType ?? DEFAULT_TAX.defaultSupplyType,
+      reverseChargeEnabled: parsed.data.reverseChargeEnabled ?? DEFAULT_TAX.reverseChargeEnabled,
     };
     await this.repos.businesses.setSetting(businessId, TAX_KEY, value, userId);
     await this.audits.log({

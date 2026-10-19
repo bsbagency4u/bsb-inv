@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
 import type {
+  GstDocumentType,
+  GstRegistrationType,
   LineItem,
   Payment,
   PaymentAllocation,
@@ -13,6 +15,11 @@ import type {
   SalesInvoiceStatus,
   SalesReturn,
 } from "@/types/domain";
+import {
+  normalizeGstDocumentType,
+  normalizeGstRegistrationType,
+  normalizeGstSupplyType,
+} from "@/lib/gst";
 import {
   mapPayment,
   mapPaymentAllocation,
@@ -44,6 +51,18 @@ export interface LineItemInput {
   amount?: number;
   saleUnit?: string | null;
   baseQuantity?: number | null;
+  gstSupplyType?: string | null;
+  hsn?: string | null;
+}
+
+export interface GstDocumentSnapshot {
+  gstDocumentType?: GstDocumentType;
+  placeOfSupplyState?: string | null;
+  gstRegistrationSnapshot?: GstRegistrationType | null;
+  intraState?: boolean;
+  reverseCharge?: boolean;
+  itcEligible?: boolean;
+  supplierGstin?: string | null;
 }
 
 export interface SalesHeaderInput {
@@ -59,6 +78,7 @@ export interface SalesHeaderInput {
   paidAmount: number;
   paymentMode?: string | null;
   notes?: string | null;
+  gst?: GstDocumentSnapshot;
 }
 
 export interface PurchaseOrderHeaderInput {
@@ -88,6 +108,7 @@ export interface PurchaseInvoiceHeaderInput {
   total: number;
   paidAmount: number;
   notes?: string | null;
+  gst?: GstDocumentSnapshot;
 }
 
 export interface PaymentAllocationInput {
@@ -167,6 +188,31 @@ export interface TransactionRepository {
   listPurchaseInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; billNo: string; supplierName: string | null }>>;
 }
 
+const GST_SNAPSHOT_COLUMNS = [
+  "gst_document_type",
+  "place_of_supply_state",
+  "gst_registration_snapshot",
+  "intra_state",
+  "reverse_charge",
+  "supplier_gstin",
+  "itc_eligible",
+] as const;
+
+const GST_ITEM_COLUMNS = ["gst_supply_type", "hsn", "itc_eligible"] as const;
+
+function gstHeaderColumns(gst: GstDocumentSnapshot | undefined) {
+  return {
+    gst_document_type: normalizeGstDocumentType(gst?.gstDocumentType),
+    place_of_supply_state: gst?.placeOfSupplyState ?? null,
+    gst_registration_snapshot:
+      gst?.gstRegistrationSnapshot == null
+        ? null
+        : normalizeGstRegistrationType(gst.gstRegistrationSnapshot),
+    intra_state: gst?.intraState ?? true,
+    reverse_charge: gst?.reverseCharge ?? false,
+  };
+}
+
 const lineItemToSalesRow = (invoiceId: string, item: LineItemInput) => {
   const gross = item.quantity * item.unitPrice;
   const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
@@ -184,6 +230,8 @@ const lineItemToSalesRow = (invoiceId: string, item: LineItemInput) => {
     amount: item.amount ?? taxable + tax,
     sale_unit: item.saleUnit ?? null,
     base_quantity: item.baseQuantity ?? item.quantity,
+    gst_supply_type: item.gstSupplyType ?? null,
+    hsn: item.hsn ?? null,
   };
 };
 
@@ -197,6 +245,9 @@ const lineItemToPurchaseRow = (invoiceId: string, item: LineItemInput) => ({
   amount: item.quantity * item.unitPrice,
   sale_unit: item.saleUnit ?? null,
   base_quantity: item.baseQuantity ?? item.quantity,
+  gst_supply_type: item.gstSupplyType ?? null,
+  hsn: item.hsn ?? null,
+  itc_eligible: true,
 });
 
 const lineItemToOrderRow = (orderId: string, item: LineItemInput) => ({
@@ -231,6 +282,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       amount: row.amount,
       saleUnit: row.sale_unit ?? null,
       baseQuantity: row.base_quantity ?? row.quantity,
+      gstSupplyType: row.gst_supply_type ? normalizeGstSupplyType(row.gst_supply_type) : null,
+      hsn: row.hsn ?? null,
     }));
   }
 
@@ -267,33 +320,51 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     header: SalesHeaderInput,
     items: LineItemInput[]
   ): Promise<SalesInvoice> {
-    const { data, error } = await this.client
-      .from("sales_invoices")
-      .insert({
-        business_id: businessId,
-        invoice_no: header.invoiceNo,
-        customer_id: header.customerId ?? null,
-        invoice_date: header.invoiceDate,
-        due_date: header.dueDate ?? null,
-        status: header.status,
-        subtotal: header.subtotal,
-        discount: header.discount,
-        tax_total: header.taxTotal,
-        total: header.total,
-        paid_amount: header.paidAmount,
-        payment_mode: header.paymentMode ?? null,
-        notes: header.notes ?? null,
-        created_by: userId,
-      })
-      .select()
-      .single();
-    if (error) throw error;
+    const payload = {
+      business_id: businessId,
+      invoice_no: header.invoiceNo,
+      customer_id: header.customerId ?? null,
+      invoice_date: header.invoiceDate,
+      due_date: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      tax_total: header.taxTotal,
+      total: header.total,
+      paid_amount: header.paidAmount,
+      payment_mode: header.paymentMode ?? null,
+      notes: header.notes ?? null,
+      created_by: userId,
+      ...gstHeaderColumns(header.gst),
+    };
+    let data;
+    {
+      const first = await this.client.from("sales_invoices").insert(payload).select().single();
+      if (!first.error) {
+        data = first.data;
+      } else if (isMissingColumnError(first.error)) {
+        const fallback = await this.client
+          .from("sales_invoices")
+          .insert(omitColumns(payload, GST_SNAPSHOT_COLUMNS))
+          .select()
+          .single();
+        if (fallback.error) throw fallback.error;
+        data = fallback.data;
+      } else {
+        throw first.error;
+      }
+    }
 
     if (items.length > 0) {
-      const { error: itemError } = await this.client
-        .from("sales_invoice_items")
-        .insert(items.map((item) => lineItemToSalesRow(data.id, item)));
-      if (itemError) throw itemError;
+      const rows = items.map((item) => lineItemToSalesRow(data.id, item));
+      const first = await this.client.from("sales_invoice_items").insert(rows);
+      if (first.error) {
+        if (!isMissingColumnError(first.error)) throw first.error;
+        const fallback = await this.client
+          .from("sales_invoice_items")
+          .insert(rows.map((row) => omitColumns(row, GST_ITEM_COLUMNS)));
+        if (fallback.error) throw fallback.error;
+      }
     }
 
     return { ...mapSalesInvoice(data), items: await this.fetchSalesItems(data.id) };
@@ -305,26 +376,45 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     header: SalesHeaderInput,
     items: LineItemInput[]
   ): Promise<SalesInvoice> {
-    const { data, error } = await this.client
-      .from("sales_invoices")
-      .update({
-        customer_id: header.customerId ?? null,
-        invoice_date: header.invoiceDate,
-        due_date: header.dueDate ?? null,
-        status: header.status,
-        subtotal: header.subtotal,
-        discount: header.discount,
-        tax_total: header.taxTotal,
-        total: header.total,
-        paid_amount: header.paidAmount,
-        payment_mode: header.paymentMode ?? null,
-        notes: header.notes ?? null,
-      })
-      .eq("business_id", businessId)
-      .eq("id", invoiceId)
-      .select()
-      .single();
-    if (error) throw error;
+    const payload = {
+      customer_id: header.customerId ?? null,
+      invoice_date: header.invoiceDate,
+      due_date: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      tax_total: header.taxTotal,
+      total: header.total,
+      paid_amount: header.paidAmount,
+      payment_mode: header.paymentMode ?? null,
+      notes: header.notes ?? null,
+      ...gstHeaderColumns(header.gst),
+    };
+    let data;
+    {
+      const first = await this.client
+        .from("sales_invoices")
+        .update(payload)
+        .eq("business_id", businessId)
+        .eq("id", invoiceId)
+        .select()
+        .single();
+      if (!first.error) {
+        data = first.data;
+      } else if (isMissingColumnError(first.error)) {
+        const fallback = await this.client
+          .from("sales_invoices")
+          .update(omitColumns(payload, GST_SNAPSHOT_COLUMNS))
+          .eq("business_id", businessId)
+          .eq("id", invoiceId)
+          .select()
+          .single();
+        if (fallback.error) throw fallback.error;
+        data = fallback.data;
+      } else {
+        throw first.error;
+      }
+    }
 
     const { error: deleteError } = await this.client
       .from("sales_invoice_items")
@@ -333,10 +423,15 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     if (deleteError) throw deleteError;
 
     if (items.length > 0) {
-      const { error: itemError } = await this.client
-        .from("sales_invoice_items")
-        .insert(items.map((item) => lineItemToSalesRow(invoiceId, item)));
-      if (itemError) throw itemError;
+      const rows = items.map((item) => lineItemToSalesRow(invoiceId, item));
+      const first = await this.client.from("sales_invoice_items").insert(rows);
+      if (first.error) {
+        if (!isMissingColumnError(first.error)) throw first.error;
+        const fallback = await this.client
+          .from("sales_invoice_items")
+          .insert(rows.map((row) => omitColumns(row, GST_ITEM_COLUMNS)));
+        if (fallback.error) throw fallback.error;
+      }
     }
 
     return { ...mapSalesInvoice(data), items: await this.fetchSalesItems(invoiceId) };
@@ -507,6 +602,8 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       amount: row.amount,
       saleUnit: row.sale_unit ?? null,
       baseQuantity: row.base_quantity ?? row.quantity,
+      gstSupplyType: row.gst_supply_type ? normalizeGstSupplyType(row.gst_supply_type) : null,
+      hsn: row.hsn ?? null,
     }));
   }
 
@@ -531,27 +628,42 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     header: PurchaseInvoiceHeaderInput,
     items: LineItemInput[]
   ): Promise<PurchaseInvoice> {
-    const { data, error } = await this.client
-      .from("purchase_invoices")
-      .insert({
-        business_id: businessId,
-        bill_no: header.billNo,
-        supplier_id: header.supplierId ?? null,
-        purchase_order_id: header.purchaseOrderId ?? null,
-        invoice_date: header.invoiceDate,
-        due_date: header.dueDate ?? null,
-        status: header.status,
-        subtotal: header.subtotal,
-        discount: header.discount,
-        tax_total: header.taxTotal,
-        total: header.total,
-        paid_amount: header.paidAmount,
-        notes: header.notes ?? null,
-        created_by: userId,
-      })
-      .select()
-      .single();
-    if (error) throw annotateDatabaseError(error, "purchase_invoices", "insert");
+    const payload = {
+      business_id: businessId,
+      bill_no: header.billNo,
+      supplier_id: header.supplierId ?? null,
+      purchase_order_id: header.purchaseOrderId ?? null,
+      invoice_date: header.invoiceDate,
+      due_date: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      tax_total: header.taxTotal,
+      total: header.total,
+      paid_amount: header.paidAmount,
+      notes: header.notes ?? null,
+      created_by: userId,
+      ...gstHeaderColumns(header.gst),
+      supplier_gstin: header.gst?.supplierGstin ?? null,
+      itc_eligible: header.gst?.itcEligible ?? true,
+    };
+    let data;
+    {
+      const first = await this.client.from("purchase_invoices").insert(payload).select().single();
+      if (!first.error) {
+        data = first.data;
+      } else if (isMissingColumnError(first.error)) {
+        const fallback = await this.client
+          .from("purchase_invoices")
+          .insert(omitColumns(payload, GST_SNAPSHOT_COLUMNS))
+          .select()
+          .single();
+        if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoices", "insert");
+        data = fallback.data;
+      } else {
+        throw annotateDatabaseError(first.error, "purchase_invoices", "insert");
+      }
+    }
 
     if (items.length > 0) {
       const rows = items.map((item) => lineItemToPurchaseRow(data.id, item));
@@ -562,7 +674,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         }
         const fallback = await this.client
           .from("purchase_invoice_items")
-          .insert(rows.map((row) => omitColumns(row, ["sale_unit", "base_quantity"])));
+          .insert(rows.map((row) => omitColumns(row, [...GST_ITEM_COLUMNS, "sale_unit", "base_quantity"])));
         if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
       }
     }
@@ -576,26 +688,47 @@ export class SupabaseTransactionRepository implements TransactionRepository {
     header: PurchaseInvoiceHeaderInput,
     items: LineItemInput[]
   ): Promise<PurchaseInvoice> {
-    const { data, error } = await this.client
-      .from("purchase_invoices")
-      .update({
-        supplier_id: header.supplierId ?? null,
-        purchase_order_id: header.purchaseOrderId ?? null,
-        invoice_date: header.invoiceDate,
-        due_date: header.dueDate ?? null,
-        status: header.status,
-        subtotal: header.subtotal,
-        discount: header.discount,
-        tax_total: header.taxTotal,
-        total: header.total,
-        paid_amount: header.paidAmount,
-        notes: header.notes ?? null,
-      })
-      .eq("business_id", businessId)
-      .eq("id", invoiceId)
-      .select()
-      .single();
-    if (error) throw annotateDatabaseError(error, "purchase_invoices", "update");
+    const payload = {
+      supplier_id: header.supplierId ?? null,
+      purchase_order_id: header.purchaseOrderId ?? null,
+      invoice_date: header.invoiceDate,
+      due_date: header.dueDate ?? null,
+      status: header.status,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      tax_total: header.taxTotal,
+      total: header.total,
+      paid_amount: header.paidAmount,
+      notes: header.notes ?? null,
+      ...gstHeaderColumns(header.gst),
+      supplier_gstin: header.gst?.supplierGstin ?? null,
+      itc_eligible: header.gst?.itcEligible ?? true,
+    };
+    let data;
+    {
+      const first = await this.client
+        .from("purchase_invoices")
+        .update(payload)
+        .eq("business_id", businessId)
+        .eq("id", invoiceId)
+        .select()
+        .single();
+      if (!first.error) {
+        data = first.data;
+      } else if (isMissingColumnError(first.error)) {
+        const fallback = await this.client
+          .from("purchase_invoices")
+          .update(omitColumns(payload, GST_SNAPSHOT_COLUMNS))
+          .eq("business_id", businessId)
+          .eq("id", invoiceId)
+          .select()
+          .single();
+        if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoices", "update");
+        data = fallback.data;
+      } else {
+        throw annotateDatabaseError(first.error, "purchase_invoices", "update");
+      }
+    }
 
     const { error: deleteError } = await this.client
       .from("purchase_invoice_items")
@@ -612,7 +745,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         }
         const fallback = await this.client
           .from("purchase_invoice_items")
-          .insert(rows.map((row) => omitColumns(row, ["sale_unit", "base_quantity"])));
+          .insert(rows.map((row) => omitColumns(row, [...GST_ITEM_COLUMNS, "sale_unit", "base_quantity"])));
         if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
       }
     }
