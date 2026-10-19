@@ -44,6 +44,32 @@ export const GSTIN = z
     message: "Enter a valid GSTIN (format: 22AAAAA0000A1Z5).",
   });
 
+export const GST_REGISTRATION_TYPE = z.enum([
+  "regular",
+  "composition",
+  "unregistered",
+  "sez",
+  "casual",
+  "isd",
+]);
+
+export const GST_PARTY_REGISTRATION_TYPE = z.enum([
+  "registered",
+  "composition",
+  "unregistered",
+  "sez",
+  "consumer",
+  "overseas",
+]);
+
+export const GST_SUPPLY_TYPE = z.enum([
+  "taxable",
+  "nil_rated",
+  "exempt",
+  "zero_rated",
+  "out_of_scope",
+]);
+
 export const PAN = z
   .string()
   .trim()
@@ -101,6 +127,7 @@ export const businessProfileSchema = z.object({
   pincode: PINCODE,
   gstin: GSTIN,
   pan: PAN,
+  gstRegistrationType: GST_REGISTRATION_TYPE.optional(),
   currency: z.string().min(1, "Currency is required."),
   financialYear: FINANCIAL_YEAR,
   invoicePrefix: INVOICE_PREFIX,
@@ -260,6 +287,8 @@ export const productSchema = z.object({
     .optional(),
   trackInventory: z.boolean().optional(),
   taxable: z.boolean().optional(),
+  gstSupplyType: GST_SUPPLY_TYPE.optional(),
+  reverseCharge: z.boolean().optional(),
   productStatus: z.enum(["active", "inactive", "draft", "discontinued"]).optional(),
 })
   .superRefine((data, ctx) => {
@@ -316,6 +345,8 @@ export const partySchema = z.object({
   gstin: GSTIN,
   pan: PAN,
   customerType: z.enum(["walkin", "regular", "business"]).optional(),
+  gstRegistrationType: GST_PARTY_REGISTRATION_TYPE.optional(),
+  placeOfSupplyState: z.string().trim().max(80).optional().or(z.literal("")),
   creditLimit: z
     .union([z.number(), z.string().trim()])
     .transform((v) => (typeof v === "string" && v === "" ? undefined : Number(v)))
@@ -372,6 +403,9 @@ export const taxDefaultsSchema = z.object({
   defaultIntraState: z.boolean(),
   defaultHsnCode: z.string().trim().max(20).optional().or(z.literal("")),
   pricesIncludeTax: z.boolean(),
+  defaultPlaceOfSupplyState: z.string().trim().max(80).optional().or(z.literal("")),
+  defaultSupplyType: GST_SUPPLY_TYPE.optional(),
+  reverseChargeEnabled: z.boolean().optional(),
 });
 
 export type TaxDefaultsValues = z.infer<typeof taxDefaultsSchema>;

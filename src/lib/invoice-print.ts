@@ -42,6 +42,9 @@ export interface PrintDocumentModel {
   cgst?: number;
   sgst?: number;
   igst?: number;
+  documentLabel?: string | null;
+  placeOfSupplyState?: string | null;
+  reverseCharge?: boolean;
 }
 
 export interface SalesPrintLine {
@@ -258,9 +261,18 @@ function documentBodyHtml(
        <div class="row muted"><span>Balance</span><span>${escapeHtml(formatCurrency(Math.max(0, model.total - paid), currency))}</span></div>`
     : "";
   const notes = defaults.showNotes && model.notes ? `<p class="muted">${escapeHtml(model.notes)}</p>` : "";
-  const heading = documentHeading(model.kind);
+  const heading = model.documentLabel ?? documentHeading(model.kind);
   const partyGstin =
     defaults.showGstin && model.partyGstin ? ` · GSTIN ${escapeHtml(model.partyGstin)}` : "";
+  const gstMeta = [
+    model.placeOfSupplyState
+      ? `<span>Place of supply: ${escapeHtml(model.placeOfSupplyState)}</span>`
+      : "",
+    model.reverseCharge ? "<span>Reverse charge: Yes</span>" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const gstMetaBlock = gstMeta ? `<p class="muted">${gstMeta}</p>` : "";
   const items =
     defaults.paperSize === "thermal"
       ? thermalRows(model, defaults, currency)
@@ -287,6 +299,7 @@ function documentBodyHtml(
     </div>
   </div>
   <p><strong>${escapeHtml(partyRole(model.kind))}:</strong> ${escapeHtml(model.partyLabel)}${partyGstin}</p>
+  ${gstMetaBlock}
   ${items}
   <div class="totals">
     <div class="row"><span>Subtotal</span><span>${escapeHtml(formatCurrency(model.subtotal, currency))}</span></div>

@@ -66,6 +66,7 @@ export type Business = {
   website: string | null;
   gstin: string | null;
   pan: string | null;
+  gst_registration_type?: string;
   currency: string;
   financial_year: string;
   invoice_prefix: string;
@@ -220,6 +221,8 @@ export type Product = {
   reorder_level: number;
   track_inventory: boolean;
   taxable: boolean;
+  gst_supply_type?: string | null;
+  reverse_charge?: boolean;
   product_status: string;
   is_active: boolean;
   created_by: string | null;
@@ -248,6 +251,8 @@ export type Customer = {
   gstin: string | null;
   pan: string | null;
   customer_type: string;
+  gst_registration_type?: string;
+  place_of_supply_state?: string | null;
   credit_limit: number | null;
   address: string | null;
   city: string | null;
@@ -275,6 +280,8 @@ export type Supplier = {
   state: string | null;
   pincode: string | null;
   country: string | null;
+  gst_registration_type?: string;
+  place_of_supply_state?: string | null;
   payment_terms: string | null;
   notes: string | null;
   opening_balance: number;
@@ -456,6 +463,13 @@ export type PurchaseInvoice = {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  gst_document_type?: string;
+  place_of_supply_state?: string | null;
+  supplier_gstin?: string | null;
+  gst_registration_snapshot?: string | null;
+  intra_state?: boolean;
+  reverse_charge?: boolean;
+  itc_eligible?: boolean;
 }
 
 export type PurchaseInvoiceItem = {
@@ -469,6 +483,9 @@ export type PurchaseInvoiceItem = {
   amount: number;
   sale_unit: string | null;
   base_quantity: number | null;
+  gst_supply_type?: string | null;
+  hsn?: string | null;
+  itc_eligible?: boolean;
 }
 
 export type SalesInvoice = {
@@ -489,6 +506,11 @@ export type SalesInvoice = {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  gst_document_type?: string;
+  place_of_supply_state?: string | null;
+  gst_registration_snapshot?: string | null;
+  intra_state?: boolean;
+  reverse_charge?: boolean;
 }
 
 export type SalesInvoiceItem = {
@@ -505,6 +527,8 @@ export type SalesInvoiceItem = {
   amount: number;
   sale_unit: string | null;
   base_quantity: number | null;
+  gst_supply_type?: string | null;
+  hsn?: string | null;
 }
 
 export type Payment = {

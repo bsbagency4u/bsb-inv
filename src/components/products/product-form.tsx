@@ -14,6 +14,11 @@ import { productSchema, type ProductValues } from "@/lib/validation/schemas";
 import { getProductFormAttributesForType } from "@/config/business-types";
 import { packagingFromProduct, packingHelperText } from "@/lib/packaging";
 import { GST_RATE_OPTIONS } from "@/services/gst.service";
+import {
+  GST_SUPPLY_TYPES,
+  GST_SUPPLY_TYPE_LABELS,
+  normalizeGstSupplyType,
+} from "@/lib/gst";
 import type { Brand, Category, Product, Unit } from "@/types/domain";
 
 function toFormValues(
@@ -49,6 +54,8 @@ function toFormValues(
     reorderLevel: product?.reorderLevel ?? 0,
     trackInventory: product?.trackInventory ?? true,
     taxable: product?.taxable ?? true,
+    gstSupplyType: product?.gstSupplyType ?? (product?.taxable === false ? "exempt" : "taxable"),
+    reverseCharge: product?.reverseCharge ?? false,
     productStatus: product?.productStatus ?? "active",
   };
 }
@@ -107,6 +114,8 @@ export function ProductForm({
 
   const trackInventory = useWatch({ control, name: "trackInventory" });
   const taxable = useWatch({ control, name: "taxable" });
+  const gstSupplyType = normalizeGstSupplyType(useWatch({ control, name: "gstSupplyType" }));
+  const reverseCharge = useWatch({ control, name: "reverseCharge" });
   const unitCode = useWatch({ control, name: "unit" });
   const packUnitCode = useWatch({ control, name: "packUnit" });
   const unitsPerPack = useWatch({ control, name: "unitsPerPack" });
@@ -422,9 +431,49 @@ export function ProductForm({
           </div>
           <Switch
             checked={taxable ?? true}
-            onCheckedChange={(checked) => setValue("taxable", checked)}
+            onCheckedChange={(checked) => {
+              setValue("taxable", checked);
+              if (!checked && gstSupplyType === "taxable") {
+                setValue("gstSupplyType", "exempt");
+              }
+            }}
             aria-label="Taxable product"
           />
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="GST supply type"
+            htmlFor="product-supply-type"
+            hint="Nil-rated, exempt and out-of-scope lines issue a Bill of Supply and charge no GST."
+            error={errors.gstSupplyType?.message}
+          >
+            <Select
+              id="product-supply-type"
+              value={gstSupplyType}
+              onChange={(event) =>
+                setValue("gstSupplyType", normalizeGstSupplyType(event.target.value))
+              }
+            >
+              {GST_SUPPLY_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {GST_SUPPLY_TYPE_LABELS[type]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex items-end">
+            <div className="flex w-full items-center justify-between rounded-md border border-border bg-background px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium text-foreground">Reverse charge</p>
+                <p className="text-xs text-muted-foreground">GST is payable by the recipient.</p>
+              </div>
+              <Switch
+                checked={reverseCharge ?? false}
+                onCheckedChange={(checked) => setValue("reverseCharge", checked)}
+                aria-label="Reverse charge"
+              />
+            </div>
+          </div>
         </div>
       </FormSection>
 

@@ -59,6 +59,8 @@ function product(overrides: Partial<Product> & { id: string; name: string }): Pr
     reorderLevel: 0,
     trackInventory: true,
     taxable: true,
+    gstSupplyType: "taxable",
+    reverseCharge: false,
     productStatus: "active",
     isActive: true,
     createdAt: "2026-10-01T00:00:00.000Z",

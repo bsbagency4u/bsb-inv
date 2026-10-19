@@ -19,6 +19,7 @@ const business: BusinessProfile = {
   website: null,
   gstin: "27AAAAA0000A1Z5",
   pan: null,
+  gstRegistrationType: "regular",
   currency: "INR",
   financialYear: "2026-27",
   invoicePrefix: "INV",

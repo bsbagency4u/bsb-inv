@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { z } from "zod";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,11 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
 import { partySchema, type PartyValues } from "@/lib/validation/schemas";
+import {
+  GST_PARTY_REGISTRATION_TYPES,
+  GST_PARTY_REGISTRATION_TYPE_LABELS,
+  normalizeGstPartyRegistrationType,
+} from "@/lib/gst";
 import type { Customer, Supplier } from "@/types/domain";
 
 function toFormValues(party?: Customer | Supplier | null): PartyValues {
@@ -19,6 +24,8 @@ function toFormValues(party?: Customer | Supplier | null): PartyValues {
     email: party?.email ?? "",
     gstin: party?.gstin ?? "",
     pan: party?.pan ?? "",
+    gstRegistrationType: party?.gstRegistrationType ?? "unregistered",
+    placeOfSupplyState: party && "placeOfSupplyState" in party ? (party.placeOfSupplyState ?? "") : "",
     customerType: party && "customerType" in party ? party.customerType : "regular",
     creditLimit: party && "creditLimit" in party ? (party.creditLimit ?? undefined) : undefined,
     address: party?.address ?? "",
@@ -47,11 +54,16 @@ export function PartyForm({
     register,
     handleSubmit,
     setValue,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<z.input<typeof partySchema>, unknown, z.output<typeof partySchema>>({
     resolver: zodResolver(partySchema),
     defaultValues: toFormValues(party),
   });
+
+  const gstRegistrationType = normalizeGstPartyRegistrationType(
+    useWatch({ control, name: "gstRegistrationType" })
+  );
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
@@ -74,11 +86,49 @@ export function PartyForm({
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field
+          label="GST registration"
+          htmlFor={`${partyType}-gst-type`}
+          hint="Used for place of supply and B2B labelling. The supplier's own registration still decides whether tax is charged."
+        >
+          <Select
+            id={`${partyType}-gst-type`}
+            value={gstRegistrationType}
+            onChange={(event) =>
+              setValue(
+                "gstRegistrationType",
+                normalizeGstPartyRegistrationType(event.target.value)
+              )
+            }
+          >
+            {GST_PARTY_REGISTRATION_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {GST_PARTY_REGISTRATION_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="GSTIN" htmlFor={`${partyType}-gstin`} error={errors.gstin?.message}>
           <Input id={`${partyType}-gstin`} placeholder="22AAAAA0000A1Z5" {...register("gstin")} />
         </Field>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="PAN" htmlFor={`${partyType}-pan`} error={errors.pan?.message}>
           <Input id={`${partyType}-pan`} placeholder="ABCDE1234F" {...register("pan")} />
+        </Field>
+        <Field
+          label="Place of supply state"
+          htmlFor={`${partyType}-pos`}
+          hint="Defaults to the billing state when left blank."
+          error={errors.placeOfSupplyState?.message}
+        >
+          <Input
+            id={`${partyType}-pos`}
+            placeholder="e.g. Maharashtra"
+            maxLength={80}
+            {...register("placeOfSupplyState")}
+          />
         </Field>
       </div>
 

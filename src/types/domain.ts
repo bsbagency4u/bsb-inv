@@ -17,6 +17,47 @@ export interface SessionUser {
   isDemo: boolean;
 }
 
+/**
+ * Indian GST registration status of the supplying / receiving business.
+ * `regular` — normal taxpayer, `composition` — composition levy (no tax
+ * collected), `unregistered` — not registered, `sez` — SEZ unit/developer,
+ * `casual` — casual taxable person, `isd` — input service distributor.
+ */
+export type GstRegistrationType =
+  | "regular"
+  | "composition"
+  | "unregistered"
+  | "sez"
+  | "casual"
+  | "isd";
+
+/** GST status of a counterparty (customer / supplier) as recorded in the master. */
+export type GstPartyRegistrationType =
+  | "registered"
+  | "composition"
+  | "unregistered"
+  | "sez"
+  | "consumer"
+  | "overseas";
+
+/** GST supply classification of a product / line item. */
+export type GstSupplyType =
+  | "taxable"
+  | "nil_rated"
+  | "exempt"
+  | "zero_rated"
+  | "out_of_scope";
+
+/** Legal document issued for a GST transaction. */
+export type GstDocumentType =
+  | "tax_invoice"
+  | "bill_of_supply"
+  | "commercial_invoice"
+  | "credit_note"
+  | "debit_note"
+  | "self_invoice"
+  | "export_invoice";
+
 export interface BusinessProfile {
   id: string;
   name: string;
@@ -33,6 +74,8 @@ export interface BusinessProfile {
   website: string | null;
   gstin: string | null;
   pan: string | null;
+  /** Authoritative GST registration status for this business. */
+  gstRegistrationType: GstRegistrationType;
   currency: string;
   financialYear: string;
   invoicePrefix: string;
@@ -114,6 +157,12 @@ export interface TaxDefaults {
   defaultIntraState: boolean;
   defaultHsnCode: string;
   pricesIncludeTax: boolean;
+  /** Place of supply used when a document has no explicit party state. */
+  defaultPlaceOfSupplyState: string;
+  /** Default supply classification pre-filled on new products / lines. */
+  defaultSupplyType: GstSupplyType;
+  /** True when the business has enabled reverse-charge handling for purchases. */
+  reverseChargeEnabled: boolean;
 }
 
 export type DocumentControlKind =
@@ -346,6 +395,10 @@ export interface Product {
   reorderLevel: number;
   trackInventory: boolean;
   taxable: boolean;
+  /** GST supply classification (taxable / nil-rated / exempt / zero-rated / out of scope). */
+  gstSupplyType: GstSupplyType;
+  /** True when purchases of this item attract reverse charge. */
+  reverseCharge: boolean;
   productStatus: "active" | "inactive" | "draft" | "discontinued";
   isActive: boolean;
   createdAt: string;
@@ -446,6 +499,10 @@ export interface Customer {
   gstin: string | null;
   pan: string | null;
   customerType: "walkin" | "regular" | "business";
+  /** GST status of the customer recorded in the master (B2B vs B2C). */
+  gstRegistrationType: GstPartyRegistrationType;
+  /** State used as place of supply; falls back to `state` when empty. */
+  placeOfSupplyState: string | null;
   creditLimit: number | null;
   address: string | null;
   city: string | null;
@@ -472,6 +529,10 @@ export interface Supplier {
   state: string | null;
   pincode: string | null;
   country: string | null;
+  /** GST status of the supplier recorded in the master. */
+  gstRegistrationType: GstPartyRegistrationType;
+  /** State used as place of supply; falls back to `state` when empty. */
+  placeOfSupplyState: string | null;
   paymentTerms: string | null;
   notes: string | null;
   openingBalance: number;
@@ -546,6 +607,9 @@ export interface LineItem {
   saleUnit?: string | null;
   baseQuantity?: number | null;
   receivedQuantity?: number;
+  /** Supply classification captured on the document line. */
+  gstSupplyType?: GstSupplyType | null;
+  hsn?: string | null;
 }
 
 export interface PurchaseOrder {
@@ -583,6 +647,14 @@ export interface PurchaseInvoice {
   paidAmount: number;
   notes: string | null;
   items: LineItem[];
+  /** GST document snapshot recorded from the supplier bill. */
+  gstDocumentType?: GstDocumentType;
+  placeOfSupplyState?: string | null;
+  supplierGstin?: string | null;
+  gstRegistrationSnapshot?: GstRegistrationType | null;
+  intraState?: boolean;
+  reverseCharge?: boolean;
+  itcEligible?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -611,6 +683,12 @@ export interface SalesInvoice {
   paymentMode: string | null;
   notes: string | null;
   items: LineItem[];
+  /** GST document snapshot captured when the invoice was issued. */
+  gstDocumentType?: GstDocumentType;
+  placeOfSupplyState?: string | null;
+  gstRegistrationSnapshot?: GstRegistrationType | null;
+  intraState?: boolean;
+  reverseCharge?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -721,6 +799,11 @@ export interface StockReportRow {
 export interface GstReportRow {
   invoiceNo: string;
   invoiceDate: string;
+  customerName: string;
+  customerGstin: string | null;
+  documentType: GstDocumentType;
+  placeOfSupplyState: string | null;
+  reverseCharge: boolean;
   taxableAmount: number;
   taxAmount: number;
   cgst: number;

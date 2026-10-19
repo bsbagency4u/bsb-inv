@@ -37,6 +37,8 @@ function product(overrides: Partial<Product> = {}): Product {
     reorderLevel: 25,
     trackInventory: true,
     taxable: true,
+    gstSupplyType: "taxable",
+    reverseCharge: false,
     productStatus: "active",
     isActive: true,
     createdAt: "2026-01-01T00:00:00.000Z",

@@ -30,6 +30,7 @@ import { ErrorState } from "@/components/states/error-state";
 import { EmptyState } from "@/components/states/empty-state";
 import { useToast } from "@/components/ui/toast";
 import { GstEngine } from "@/services/gst.service";
+import { canIssueTaxInvoice, classifyGstDocument, gstDocumentHeading, isTaxableSupplyType, normalizeGstSupplyType } from "@/lib/gst";
 import { normalizeError } from "@/lib/errors";
 import { autoOutputDocument, printDocument, type PrintDocumentModel } from "@/lib/invoice-print";
 import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
@@ -277,7 +278,9 @@ export function PosSaleForm({
   const paymentMode = paymentModeOverride ?? salesDefaults?.defaultPaymentMode ?? (paymentModes?.[0]?.code ?? "cash");
   const allowLineDiscount = salesDefaults?.allowLineDiscount ?? true;
   const allowExpired = salesDefaults?.allowExpired ?? false;
-  const gstEnabled = taxDefaults?.gstEnabled ?? true;
+  const gstEnabled =
+    (taxDefaults?.gstEnabled ?? true) &&
+    canIssueTaxInvoice(business?.gstRegistrationType ?? "regular");
   const pricesIncludeTax = taxDefaults?.pricesIncludeTax ?? false;
   const warehouseValue = warehouseId || purchaseDefaults?.defaultWarehouseId || "";
   const salesPersonValue = salesPersonId || user?.id || "";
@@ -388,6 +391,19 @@ export function PosSaleForm({
   );
 
   const amountToPay = totals.total;
+  const gstDocumentType = classifyGstDocument({
+    side: "sale",
+    registrationType: business?.gstRegistrationType ?? "regular",
+    businessState: business?.state ?? null,
+    partyState: customer?.state ?? null,
+    partyPlaceOfSupplyState: customer?.placeOfSupplyState ?? null,
+    partyRegistrationType: customer?.gstRegistrationType ?? null,
+    lines: lines.map((line) => ({
+      supplyType: normalizeGstSupplyType(productById.get(line.productId)?.gstSupplyType),
+      rate: gstEnabled ? line.gstRate : 0,
+    })),
+    defaultIntraState: intraState,
+  }).documentType;
   const simplePaid = paidAmount === "" ? amountToPay : Math.max(0, Number(paidAmount) || 0);
   const splitPaid = paymentSplits.reduce((sum, split) => sum + Math.max(0, Number(split.amount) || 0), 0);
   const amountPaid = splitPayment ? splitPaid : simplePaid;
@@ -500,6 +516,9 @@ export function PosSaleForm({
       cgst: totals.cgst,
       sgst: totals.sgst,
       igst: totals.igst,
+      documentLabel: gstDocumentHeading(gstDocumentType),
+      placeOfSupplyState: customer?.placeOfSupplyState ?? customer?.state ?? null,
+      reverseCharge: false,
     };
   };
 
@@ -532,7 +551,10 @@ export function PosSaleForm({
         quantity: 1,
         unitKind: defaultSaleUnitKind(packagingFromProduct(product)),
         unitPrice: variant?.salePrice ?? product.salePrice,
-        gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
+        gstRate:
+          gstEnabled && isTaxableSupplyType(normalizeGstSupplyType(product.gstSupplyType))
+            ? product.gstRate
+            : 0,
         discountKind: "amount",
         discountValue: 0,
       },
@@ -584,7 +606,10 @@ export function PosSaleForm({
       mrp: lot?.mrp ?? productVariants[0]?.mrp ?? product.mrp,
       unitKind: defaultSaleUnitKind(packagingFromProduct(product)),
       unitPrice: productVariants[0]?.salePrice ?? product.salePrice,
-      gstRate: gstEnabled && product.taxable ? product.gstRate : 0,
+      gstRate:
+        gstEnabled && isTaxableSupplyType(normalizeGstSupplyType(product.gstSupplyType))
+          ? product.gstRate
+          : 0,
     });
   };
 
@@ -1385,7 +1410,7 @@ export function PosSaleForm({
         <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle>Order summary</CardTitle>
+              <CardTitle>{gstDocumentHeading(gstDocumentType)}</CardTitle>
               <CardDescription>
                 {pricesIncludeTax
                   ? "Entered prices include GST. Tax is extracted, not added."

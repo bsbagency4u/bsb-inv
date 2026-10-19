@@ -84,6 +84,7 @@ export const DEMO_BUSINESS: BusinessProfile = {
   website: "https://example.com",
   gstin: "27AAPFU0939F1ZV",
   pan: "ABCDE1234F",
+  gstRegistrationType: "regular",
   currency: "INR",
   financialYear: "01-04",
   invoicePrefix: "INV",

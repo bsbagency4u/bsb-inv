@@ -1,5 +1,10 @@
 import type { Repositories, LineItemInput } from "@/repositories/types";
+import type { GstDocumentSnapshot } from "@/repositories/transaction.repository";
 import type {
+  GstDocumentType,
+  GstPartyRegistrationType,
+  GstRegistrationType,
+  GstSupplyType,
   InvoiceTotals,
   Payment,
   PaymentMode,
@@ -32,6 +37,14 @@ import {
 } from "@/lib/party-ledger";
 import { GstEngine } from "./gst.service";
 import type { GstComputeOptions } from "./gst.service";
+import {
+  classifyGstDocument,
+  isTaxableSupplyType,
+  normalizeGstPartyRegistrationType,
+  normalizeGstRegistrationType,
+  normalizeGstSupplyType,
+  type GstDocumentDecision,
+} from "@/lib/gst";
 import { InventoryService } from "./inventory.service";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
@@ -62,6 +75,9 @@ export interface CartItemInput {
   saleUnit?: string | null;
   baseQuantity?: number | null;
   baseUnitCost?: number | null;
+  /** Supply classification of the product at the time of the document. */
+  gstSupplyType?: GstSupplyType | null;
+  hsn?: string | null;
 }
 
 export interface PaymentAllocation {
@@ -216,6 +232,126 @@ export class TransactionService {
     return parseTaxDefaults(await this.repos.businesses.getSetting(businessId, TAX_KEY));
   }
 
+  /**
+   * Resolves the authoritative GST treatment for a document.
+   *
+   * The supplying business's registration status decides whether tax may be
+   * charged at all; the counterparty is only used for place of supply and the
+   * B2B/B2C label. Non-taxable product lines never attract GST, and the
+   * resulting decision is snapshotted on the document so later master-data
+   * edits never rewrite history.
+   */
+  private async resolveGstForDocument(
+    businessId: string,
+    side: "sale" | "purchase",
+    party: {
+      state: string | null;
+      placeOfSupplyState?: string | null;
+      gstRegistrationType?: GstPartyRegistrationType | null;
+      gstin?: string | null;
+    } | null,
+    items: CartItemInput[],
+    input: {
+      intraState?: boolean;
+      discount?: number;
+      discountPercent?: number;
+      pricesIncludeTax?: boolean;
+    }
+  ): Promise<{
+    items: CartItemInput[];
+    options: GstComputeOptions;
+    decision: GstDocumentDecision;
+    registrationType: GstRegistrationType;
+    snapshot: GstDocumentSnapshot;
+  }> {
+    const [defaults, business] = await Promise.all([
+      this.loadTaxDefaults(businessId),
+      this.repos.businesses.getById(businessId),
+    ]);
+
+    const registrationType: GstRegistrationType = !defaults.gstEnabled
+      ? "unregistered"
+      : normalizeGstRegistrationType(business?.gstRegistrationType);
+
+    const decision = classifyGstDocument({
+      side,
+      registrationType,
+      businessState: business?.state ?? null,
+      partyState: party?.state ?? null,
+      partyPlaceOfSupplyState: party?.placeOfSupplyState ?? null,
+      partyRegistrationType: party
+        ? normalizeGstPartyRegistrationType(party.gstRegistrationType)
+        : null,
+      lines: items.map((item) => ({
+        supplyType: normalizeGstSupplyType(item.gstSupplyType),
+        rate: item.gstRate,
+      })),
+      defaultIntraState: input.intraState ?? defaults.defaultIntraState,
+    });
+
+    const intraState = input.intraState ?? decision.intraState;
+    const normalizedItems = items.map((item) => {
+      const supplyType = normalizeGstSupplyType(item.gstSupplyType);
+      const chargeRate =
+        decision.chargeTax && isTaxableSupplyType(supplyType) && supplyType !== "zero_rated";
+      return {
+        ...item,
+        gstRate: chargeRate ? item.gstRate : 0,
+        gstSupplyType: supplyType,
+      };
+    });
+
+    return {
+      items: normalizedItems,
+      options: {
+        intraState,
+        discount: input.discount,
+        discountPercent: input.discountPercent,
+        pricesIncludeTax: input.pricesIncludeTax ?? defaults.pricesIncludeTax,
+      },
+      decision: { ...decision, intraState },
+      registrationType,
+      snapshot: {
+        gstDocumentType: decision.documentType as GstDocumentType,
+        placeOfSupplyState: decision.placeOfSupplyState,
+        gstRegistrationSnapshot: registrationType,
+        intraState,
+        reverseCharge:
+          side === "purchase" &&
+          defaults.reverseChargeEnabled &&
+          normalizedItems.some((item) => item.gstSupplyType === "taxable"),
+        itcEligible: side === "purchase" ? decision.chargeTax : undefined,
+        supplierGstin: side === "purchase" ? (party?.gstin ?? null) : undefined,
+      },
+    };
+  }
+
+  private async gstParty(
+    businessId: string,
+    side: "sale" | "purchase",
+    partyId: string | null | undefined
+  ) {
+    if (!partyId) return null;
+    if (side === "sale") {
+      const customer = await this.repos.parties.getCustomer(businessId, partyId);
+      if (!customer) return null;
+      return {
+        state: customer.state,
+        placeOfSupplyState: customer.placeOfSupplyState ?? customer.state,
+        gstRegistrationType: customer.gstRegistrationType,
+        gstin: customer.gstin,
+      };
+    }
+    const supplier = await this.repos.parties.getSupplier(businessId, partyId);
+    if (!supplier) return null;
+    return {
+      state: supplier.state,
+      placeOfSupplyState: supplier.placeOfSupplyState ?? supplier.state,
+      gstRegistrationType: supplier.gstRegistrationType,
+      gstin: supplier.gstin,
+    };
+  }
+
   private validateItems(items: { quantity: number; unitPrice: number; mrp?: number | null }[]): void {
     if (items.length === 0) {
       throw AppError.validation("Add at least one line item.");
@@ -241,6 +377,8 @@ export class TransactionService {
       discount: item.discount ?? 0,
       saleUnit: item.saleUnit ?? null,
       baseQuantity: item.baseQuantity ?? item.quantity,
+      gstSupplyType: item.gstSupplyType ?? null,
+      hsn: item.hsn ?? null,
     };
   }
 
@@ -278,6 +416,8 @@ export class TransactionService {
       saleUnit: item.saleUnit ?? converted.saleUnit,
       baseQuantity,
       baseUnitCost: converted.baseUnitCost,
+      gstSupplyType: item.gstSupplyType ?? product.gstSupplyType,
+      hsn: item.hsn ?? product.hsn,
     };
   }
 
@@ -504,7 +644,8 @@ export class TransactionService {
     input: PurchaseInput,
     totals: InvoiceTotals,
     status: string,
-    documentDate: string
+    documentDate: string,
+    gst?: GstDocumentSnapshot
   ) {
     return {
       billNo,
@@ -519,6 +660,7 @@ export class TransactionService {
       total: totals.total,
       paidAmount: 0,
       notes: input.notes ?? null,
+      gst,
     };
   }
 
@@ -544,10 +686,15 @@ export class TransactionService {
       }
     }
     const asDraft = input.asDraft === true;
-    const totals = this.gst.computeTotals(
+    const gstResolved = await this.resolveGstForDocument(
+      businessId,
+      "sale",
+      await this.gstParty(businessId, "sale", input.customerId),
       convertedItems,
-      await this.taxComputeOptions(businessId, input)
+      input
     );
+    const pricedItems = gstResolved.items;
+    const totals = this.gst.computeTotals(pricedItems, gstResolved.options);
 
     const tendered = asDraft ? [] : (input.payments ?? []).filter((p) => p.amount > 0);
     const paymentState = asDraft
@@ -555,7 +702,7 @@ export class TransactionService {
       : this.computePaymentState(totals.total, tendered);
     const payments = paymentState.payments;
 
-    const lineInputs: LineItemInput[] = convertedItems.map((item, index) => {
+    const lineInputs: LineItemInput[] = pricedItems.map((item, index) => {
       const computed = totals.lines[index];
       return {
         productId: item.productId,
@@ -570,6 +717,8 @@ export class TransactionService {
         amount: computed?.amount,
         saleUnit: item.saleUnit ?? null,
         baseQuantity: item.baseQuantity ?? item.quantity,
+        gstSupplyType: item.gstSupplyType ?? null,
+        hsn: item.hsn ?? null,
       };
     });
 
@@ -589,6 +738,7 @@ export class TransactionService {
         paidAmount: paymentState.paid,
         paymentMode: payments[0]?.mode ?? null,
         notes: this.composeSalesNotes(input),
+        gst: gstResolved.snapshot,
       },
       lineInputs
     );
@@ -739,15 +889,20 @@ export class TransactionService {
         await this.assertSaleStock(businessId, item);
       }
     }
-    const totals = this.gst.computeTotals(
+    const gstResolved = await this.resolveGstForDocument(
+      businessId,
+      "sale",
+      await this.gstParty(businessId, "sale", input.customerId ?? existing.customerId),
       convertedItems,
-      await this.taxComputeOptions(businessId, input)
+      input
     );
+    const pricedItems = gstResolved.items;
+    const totals = this.gst.computeTotals(pricedItems, gstResolved.options);
     const tendered = asDraft ? [] : (input.payments ?? []).filter((p) => p.amount > 0);
     const paymentState = asDraft
       ? { paid: existing.paidAmount, status: existing.status, payments: [] as PaymentAllocation[], changeDue: 0 }
       : this.computePaymentState(totals.total, tendered.length > 0 ? tendered : [{ mode: existing.paymentMode ?? "cash", amount: existing.paidAmount }].filter((p) => p.amount > 0));
-    const lineInputs: LineItemInput[] = convertedItems.map((item, index) => {
+    const lineInputs: LineItemInput[] = pricedItems.map((item, index) => {
       const computed = totals.lines[index];
       return {
         productId: item.productId,
@@ -762,6 +917,8 @@ export class TransactionService {
         amount: computed?.amount,
         saleUnit: item.saleUnit ?? null,
         baseQuantity: item.baseQuantity ?? item.quantity,
+        gstSupplyType: item.gstSupplyType ?? null,
+        hsn: item.hsn ?? null,
       };
     });
     const invoice = await this.repos.transactions.updateSalesInvoice(
@@ -780,6 +937,7 @@ export class TransactionService {
         paidAmount: asDraft ? 0 : paymentState.paid,
         paymentMode: paymentState.payments[0]?.mode ?? existing.paymentMode,
         notes: this.composeSalesNotes(input) ?? existing.notes,
+        gst: gstResolved.snapshot,
       },
       lineInputs
     );
@@ -1039,13 +1197,18 @@ export class TransactionService {
     for (const item of input.items) {
       convertedItems.push(await this.convertCartItem(businessId, item, "purchase"));
     }
-    const totals = this.gst.computeTotals(
+    const gstResolved = await this.resolveGstForDocument(
+      businessId,
+      "purchase",
+      await this.gstParty(businessId, "purchase", input.supplierId),
       convertedItems,
-      await this.taxComputeOptions(businessId, { ...input, discount: input.discount ?? 0 })
+      { ...input, discount: input.discount ?? 0 }
     );
+    const pricedItems = gstResolved.items;
+    const totals = this.gst.computeTotals(pricedItems, gstResolved.options);
 
     const persistedItems: CartItemInput[] = [];
-    for (const item of convertedItems) {
+    for (const item of pricedItems) {
       const batchId = await this.ensurePurchaseBatch(businessId, item);
       persistedItems.push({ ...item, batchId });
     }
@@ -1066,6 +1229,7 @@ export class TransactionService {
         total: totals.total,
         paidAmount: 0,
         notes: input.notes ?? null,
+        gst: gstResolved.snapshot,
       },
       persistedItems.map(this.toLineItemInput)
     );
@@ -1184,12 +1348,17 @@ export class TransactionService {
     for (const item of input.items) {
       convertedItems.push(await this.convertCartItem(businessId, item, "purchase"));
     }
-    const totals = this.gst.computeTotals(
+    const gstResolved = await this.resolveGstForDocument(
+      businessId,
+      "purchase",
+      await this.gstParty(businessId, "purchase", input.supplierId ?? existing.supplierId),
       convertedItems,
-      await this.taxComputeOptions(businessId, { ...input, discount: input.discount ?? 0 })
+      { ...input, discount: input.discount ?? 0 }
     );
+    const pricedItems = gstResolved.items;
+    const totals = this.gst.computeTotals(pricedItems, gstResolved.options);
     const persistedItems: CartItemInput[] = [];
-    for (const item of convertedItems) {
+    for (const item of pricedItems) {
       const batchId = await this.ensurePurchaseBatch(businessId, item);
       persistedItems.push({ ...item, batchId });
     }
@@ -1197,7 +1366,14 @@ export class TransactionService {
     const invoice = await this.repos.transactions.updatePurchaseInvoice(
       businessId,
       invoiceId,
-      this.composePurchaseHeader(existing.billNo, input, totals, status, guard.documentDate),
+      this.composePurchaseHeader(
+        existing.billNo,
+        input,
+        totals,
+        status,
+        guard.documentDate,
+        gstResolved.snapshot
+      ),
       persistedItems.map(this.toLineItemInput)
     );
     if (!asDraft) {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase/types";
 import type { BusinessProfile } from "@/types/domain";
+import { isMissingColumnError, omitColumns } from "@/lib/supabase/missing-column";
 import { mapBusiness } from "./mappers";
 
 export interface BusinessRepository {
@@ -69,34 +70,38 @@ export class SupabaseBusinessRepository implements BusinessRepository {
     userId: string,
     input: Partial<BusinessProfile> & { name: string }
   ): Promise<BusinessProfile> {
-    const { data, error } = await this.client
+    const payload = {
+      name: input.name,
+      legal_name: input.legalName,
+      type: input.type ?? "retail",
+      logo_url: input.logoUrl,
+      address: input.address,
+      city: input.city,
+      state: input.state,
+      country: input.country ?? "India",
+      pincode: input.pincode,
+      phone: input.phone,
+      email: input.email,
+      website: input.website,
+      gstin: input.gstin,
+      pan: input.pan,
+      gst_registration_type: input.gstRegistrationType ?? "unregistered",
+      currency: input.currency ?? "INR",
+      financial_year: input.financialYear ?? "01-04",
+      invoice_prefix: input.invoicePrefix ?? "INV",
+      invoice_start_number: input.invoiceStartNumber ?? 1001,
+      created_by: userId,
+    };
+    const first = await this.client.from("businesses").insert(payload).select().single();
+    if (!first.error) return mapBusiness(first.data);
+    if (!isMissingColumnError(first.error)) throw first.error;
+    const fallback = await this.client
       .from("businesses")
-      .insert({
-        name: input.name,
-        legal_name: input.legalName,
-        type: input.type ?? "retail",
-        logo_url: input.logoUrl,
-        address: input.address,
-        city: input.city,
-        state: input.state,
-        country: input.country ?? "India",
-        pincode: input.pincode,
-        phone: input.phone,
-        email: input.email,
-        website: input.website,
-        gstin: input.gstin,
-        pan: input.pan,
-        currency: input.currency ?? "INR",
-        financial_year: input.financialYear ?? "01-04",
-        invoice_prefix: input.invoicePrefix ?? "INV",
-        invoice_start_number: input.invoiceStartNumber ?? 1001,
-        created_by: userId,
-      })
+      .insert(omitColumns(payload, ["gst_registration_type"]))
       .select()
       .single();
-
-    if (error) throw error;
-    return mapBusiness(data);
+    if (fallback.error) throw fallback.error;
+    return mapBusiness(fallback.data);
   }
 
   async update(
@@ -104,35 +109,45 @@ export class SupabaseBusinessRepository implements BusinessRepository {
     businessId: string,
     input: Partial<BusinessProfile>
   ): Promise<BusinessProfile> {
-    const { data, error } = await this.client
+    const payload = {
+      name: input.name,
+      legal_name: input.legalName,
+      type: input.type,
+      logo_url: input.logoUrl,
+      address: input.address,
+      city: input.city,
+      state: input.state,
+      country: input.country,
+      pincode: input.pincode,
+      phone: input.phone,
+      email: input.email,
+      website: input.website,
+      gstin: input.gstin,
+      pan: input.pan,
+      gst_registration_type: input.gstRegistrationType,
+      currency: input.currency,
+      financial_year: input.financialYear,
+      invoice_prefix: input.invoicePrefix,
+      invoice_start_number: input.invoiceStartNumber,
+    };
+    const first = await this.client
       .from("businesses")
-      .update({
-        name: input.name,
-        legal_name: input.legalName,
-        type: input.type,
-        logo_url: input.logoUrl,
-        address: input.address,
-        city: input.city,
-        state: input.state,
-        country: input.country,
-        pincode: input.pincode,
-        phone: input.phone,
-        email: input.email,
-        website: input.website,
-        gstin: input.gstin,
-        pan: input.pan,
-        currency: input.currency,
-        financial_year: input.financialYear,
-        invoice_prefix: input.invoicePrefix,
-        invoice_start_number: input.invoiceStartNumber,
-      })
+      .update(payload)
       .eq("id", businessId)
       .eq("created_by", userId)
       .select()
       .single();
-
-    if (error) throw error;
-    return mapBusiness(data);
+    if (!first.error) return mapBusiness(first.data);
+    if (!isMissingColumnError(first.error)) throw first.error;
+    const fallback = await this.client
+      .from("businesses")
+      .update(omitColumns(payload, ["gst_registration_type"]))
+      .eq("id", businessId)
+      .eq("created_by", userId)
+      .select()
+      .single();
+    if (fallback.error) throw fallback.error;
+    return mapBusiness(fallback.data);
   }
 
   async getSetting(businessId: string, key: string): Promise<unknown | null> {

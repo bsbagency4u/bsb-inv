@@ -69,6 +69,7 @@ import type {
   Unit as UnitModel,
   Warehouse as WarehouseModel,
 } from "@/types/domain";
+import { normalizeGstDocumentType, normalizeGstPartyRegistrationType, normalizeGstRegistrationType, normalizeGstSupplyType } from "@/lib/gst";
 
 const asNumber = (value: unknown): number => {
   const n = typeof value === "number" ? value : Number(value);
@@ -212,6 +213,13 @@ export function mapProduct(row: Product): ProductModel {
     reorderLevel: asNumber(row.reorder_level),
     trackInventory: row.track_inventory,
     taxable: row.taxable,
+    gstSupplyType:
+      row.gst_supply_type != null
+        ? normalizeGstSupplyType(row.gst_supply_type)
+        : row.taxable === false
+          ? "exempt"
+          : "taxable",
+    reverseCharge: row.reverse_charge ?? false,
     productStatus: (row.product_status ?? "active") as ProductModel["productStatus"],
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -284,6 +292,8 @@ export function mapCustomer(row: Customer): CustomerModel {
     gstin: row.gstin,
     pan: row.pan,
     customerType: (row.customer_type ?? "regular") as CustomerModel["customerType"],
+    gstRegistrationType: normalizeGstPartyRegistrationType(row.gst_registration_type),
+    placeOfSupplyState: row.place_of_supply_state ?? null,
     creditLimit: row.credit_limit === null ? null : asNumber(row.credit_limit),
     address: row.address,
     city: row.city,
@@ -312,6 +322,8 @@ export function mapSupplier(row: Supplier): SupplierModel {
     state: row.state,
     pincode: row.pincode,
     country: row.country,
+    gstRegistrationType: normalizeGstPartyRegistrationType(row.gst_registration_type),
+    placeOfSupplyState: row.place_of_supply_state ?? null,
     paymentTerms: row.payment_terms,
     notes: row.notes,
     openingBalance: asNumber(row.opening_balance),
@@ -431,6 +443,14 @@ export function mapSalesInvoice(row: SalesInvoice): SalesInvoiceModel {
     paymentMode: row.payment_mode,
     notes: row.notes,
     items: [],
+    gstDocumentType: normalizeGstDocumentType(row.gst_document_type),
+    placeOfSupplyState: row.place_of_supply_state ?? null,
+    gstRegistrationSnapshot:
+      row.gst_registration_snapshot != null
+        ? normalizeGstRegistrationType(row.gst_registration_snapshot)
+        : null,
+    intraState: row.intra_state ?? true,
+    reverseCharge: row.reverse_charge ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -474,6 +494,16 @@ export function mapPurchaseInvoice(row: PurchaseInvoice): PurchaseInvoiceModel {
     paidAmount: asNumber(row.paid_amount),
     notes: row.notes,
     items: [],
+    gstDocumentType: normalizeGstDocumentType(row.gst_document_type),
+    placeOfSupplyState: row.place_of_supply_state ?? null,
+    supplierGstin: row.supplier_gstin ?? null,
+    gstRegistrationSnapshot:
+      row.gst_registration_snapshot != null
+        ? normalizeGstRegistrationType(row.gst_registration_snapshot)
+        : null,
+    intraState: row.intra_state ?? true,
+    reverseCharge: row.reverse_charge ?? false,
+    itcEligible: row.itc_eligible ?? true,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -546,6 +576,11 @@ export function mapBusiness(row: Business): BusinessProfile {
     website: row.website,
     gstin: row.gstin,
     pan: row.pan,
+    gstRegistrationType: row.gst_registration_type
+      ? normalizeGstRegistrationType(row.gst_registration_type)
+      : row.gstin
+        ? "regular"
+        : "unregistered",
     currency: row.currency,
     financialYear: row.financial_year,
     invoicePrefix: row.invoice_prefix,

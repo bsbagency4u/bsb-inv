@@ -53,6 +53,8 @@ function memoryRepositories() {
           reorderLevel: input.reorderLevel ?? 0,
           trackInventory: input.trackInventory ?? true,
           taxable: input.taxable ?? true,
+          gstSupplyType: input.gstSupplyType ?? "taxable",
+          reverseCharge: input.reverseCharge ?? false,
           productStatus: input.productStatus ?? "active",
           isActive: true,
           createdAt: new Date().toISOString(),

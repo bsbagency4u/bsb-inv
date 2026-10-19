@@ -18,6 +18,12 @@ import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { DEFAULT_TAX } from "@/services/business.service";
 import { GST_RATE_OPTIONS } from "@/services/gst.service";
+import {
+  GST_SUPPLY_TYPES,
+  GST_SUPPLY_TYPE_LABELS,
+  normalizeGstSupplyType,
+} from "@/lib/gst";
+import type { GstSupplyType } from "@/types/domain";
 
 export default function TaxSettingsPage() {
   const { user, business } = useSession();
@@ -29,6 +35,9 @@ export default function TaxSettingsPage() {
   const [intraStateOverride, setIntraStateOverride] = React.useState<boolean | null>(null);
   const [hsnOverride, setHsnOverride] = React.useState<string | null>(null);
   const [pricesIncludeTaxOverride, setPricesIncludeTaxOverride] = React.useState<boolean | null>(null);
+  const [placeOfSupplyOverride, setPlaceOfSupplyOverride] = React.useState<string | null>(null);
+  const [supplyTypeOverride, setSupplyTypeOverride] = React.useState<GstSupplyType | null>(null);
+  const [reverseChargeOverride, setReverseChargeOverride] = React.useState<boolean | null>(null);
 
   const { data: defaults, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["tax-defaults", business?.id],
@@ -45,6 +54,17 @@ export default function TaxSettingsPage() {
   const hsnCode = hsnOverride ?? defaults?.defaultHsnCode ?? DEFAULT_TAX.defaultHsnCode;
   const pricesIncludeTax =
     pricesIncludeTaxOverride ?? defaults?.pricesIncludeTax ?? DEFAULT_TAX.pricesIncludeTax;
+  const placeOfSupplyState =
+    placeOfSupplyOverride ??
+    defaults?.defaultPlaceOfSupplyState ??
+    DEFAULT_TAX.defaultPlaceOfSupplyState;
+  const supplyType = normalizeGstSupplyType(
+    supplyTypeOverride ?? defaults?.defaultSupplyType ?? DEFAULT_TAX.defaultSupplyType
+  );
+  const reverseChargeEnabled =
+    reverseChargeOverride ??
+    defaults?.reverseChargeEnabled ??
+    DEFAULT_TAX.reverseChargeEnabled;
 
   const save = async () => {
     if (!business || !user) return;
@@ -56,6 +76,9 @@ export default function TaxSettingsPage() {
         defaultIntraState: intraState,
         defaultHsnCode: hsnCode,
         pricesIncludeTax,
+        defaultPlaceOfSupplyState: placeOfSupplyState,
+        defaultSupplyType: supplyType,
+        reverseChargeEnabled,
       });
       toastSuccess("Tax settings saved", "New products and invoices will use these values.");
       await queryClient.invalidateQueries({ queryKey: ["tax-defaults"] });
@@ -146,6 +169,38 @@ export default function TaxSettingsPage() {
                 maxLength={20}
               />
             </Field>
+            <Field
+              label="Default place of supply state"
+              htmlFor="tax-place-of-supply"
+              hint="Used when a party has no separate place of supply."
+            >
+              <Input
+                id="tax-place-of-supply"
+                value={placeOfSupplyState}
+                onChange={(event) => setPlaceOfSupplyOverride(event.target.value)}
+                placeholder="e.g. Maharashtra"
+                maxLength={80}
+                disabled={!gstEnabled}
+              />
+            </Field>
+            <Field
+              label="Default supply type"
+              htmlFor="tax-supply-type"
+              hint="Applied to new product lines. Nil-rated, exempt and out-of-scope supplies issue a Bill of Supply."
+            >
+              <Select
+                id="tax-supply-type"
+                value={supplyType}
+                onChange={(event) => setSupplyTypeOverride(normalizeGstSupplyType(event.target.value))}
+                disabled={!gstEnabled}
+              >
+                {GST_SUPPLY_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {GST_SUPPLY_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
             <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
               <div>
                 <p className="text-sm font-medium text-foreground">Prices include tax</p>
@@ -157,6 +212,19 @@ export default function TaxSettingsPage() {
                 checked={pricesIncludeTax}
                 onCheckedChange={setPricesIncludeTaxOverride}
                 aria-label="Prices include tax"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
+              <div>
+                <p className="text-sm font-medium text-foreground">Reverse charge purchases</p>
+                <p className="text-xs text-muted-foreground">
+                  Mark new purchase invoices as reverse charge so GST is self-assessed instead of paid to the supplier.
+                </p>
+              </div>
+              <Switch
+                checked={reverseChargeEnabled}
+                onCheckedChange={setReverseChargeOverride}
+                aria-label="Reverse charge purchases"
               />
             </div>
           </CardContent>

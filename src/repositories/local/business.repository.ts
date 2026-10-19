@@ -60,6 +60,7 @@ export class LocalBusinessRepository implements BusinessRepository {
       website: input.website ?? null,
       gstin: input.gstin ?? null,
       pan: input.pan ?? null,
+      gstRegistrationType: input.gstRegistrationType ?? "unregistered",
       currency: input.currency ?? "INR",
       financialYear: input.financialYear ?? "01-04",
       invoicePrefix: input.invoicePrefix ?? "INV",
