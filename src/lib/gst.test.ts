@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canClaimInputTaxCredit,
   canIssueTaxInvoice,
   classifyGstDocument,
   gstDocumentHeading,
@@ -33,6 +34,14 @@ describe("GST registration normalization", () => {
     expect(canIssueTaxInvoice("sez")).toBe(true);
     expect(canIssueTaxInvoice("composition")).toBe(false);
     expect(canIssueTaxInvoice("unregistered")).toBe(false);
+  });
+
+  it("only regular-style buyers may claim ITC", () => {
+    expect(canClaimInputTaxCredit("regular")).toBe(true);
+    expect(canClaimInputTaxCredit("casual")).toBe(true);
+    expect(canClaimInputTaxCredit("sez")).toBe(true);
+    expect(canClaimInputTaxCredit("composition")).toBe(false);
+    expect(canClaimInputTaxCredit("unregistered")).toBe(false);
   });
 });
 
@@ -191,6 +200,20 @@ describe("classifyGstDocument — purchases", () => {
     });
     expect(decision.documentType).toBe("bill_of_supply");
     expect(decision.chargeTax).toBe(false);
+  });
+
+  it("does not charge tax on a composition supplier bill", () => {
+    const decision = classifyGstDocument({
+      side: "purchase",
+      registrationType: "regular",
+      businessState: "Karnataka",
+      partyState: "Karnataka",
+      partyRegistrationType: "composition",
+      lines: [{ supplyType: "taxable", rate: 18 }],
+    });
+    expect(decision.documentType).toBe("bill_of_supply");
+    expect(decision.chargeTax).toBe(false);
+    expect(decision.taxInvoiceAllowed).toBe(false);
   });
 });
 

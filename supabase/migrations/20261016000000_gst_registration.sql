@@ -104,7 +104,13 @@ comment on column public.purchase_invoices.itc_eligible is
 alter table public.purchase_invoice_items
   add column if not exists gst_supply_type text,
   add column if not exists hsn text,
-  add column if not exists itc_eligible boolean not null default true;
+  add column if not exists itc_eligible boolean not null default false,
+  add column if not exists discount numeric(14,2) not null default 0,
+  add column if not exists taxable_amount numeric(14,2) not null default 0,
+  add column if not exists tax_amount numeric(14,2) not null default 0;
+
+comment on column public.purchase_invoice_items.itc_eligible is
+  'Whether ITC is expected on this line; defaults to false until tax is charged.';
 
 -- ---------------------------------------------------------------------------
 -- Helpful indexes for the GST reports centre

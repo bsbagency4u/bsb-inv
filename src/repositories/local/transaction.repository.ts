@@ -52,22 +52,14 @@ const lineToModel = (item: LineItemInput): LineItem => {
     saleUnit: item.saleUnit ?? null,
     baseQuantity: item.baseQuantity ?? item.quantity,
     receivedQuantity: 0,
+    gstSupplyType: item.gstSupplyType ? (item.gstSupplyType as LineItem["gstSupplyType"]) : null,
+    hsn: item.hsn ?? null,
   };
 };
 
 const lineToPurchaseModel = (item: LineItemInput): LineItem => ({
-  productId: item.productId,
-  variantId: item.variantId ?? null,
-  batchId: item.batchId ?? null,
-  quantity: item.quantity,
-  unitPrice: item.unitPrice,
-  gstRate: item.gstRate,
-  discount: 0,
-  taxableAmount: item.quantity * item.unitPrice,
-  taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-  amount: item.quantity * item.unitPrice,
-  saleUnit: item.saleUnit ?? null,
-  baseQuantity: item.baseQuantity ?? item.quantity,
+  ...lineToModel(item),
+  receivedQuantity: undefined,
 });
 
 export class LocalTransactionRepository implements TransactionRepository {
@@ -167,6 +159,11 @@ export class LocalTransactionRepository implements TransactionRepository {
       paymentMode: header.paymentMode ?? null,
       notes: header.notes ?? null,
       items: items.map(lineToModel),
+      gstDocumentType: header.gst?.gstDocumentType,
+      placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+      gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+      intraState: header.gst?.intraState ?? true,
+      reverseCharge: header.gst?.reverseCharge ?? false,
       createdAt: now,
       updatedAt: now,
     };
@@ -200,6 +197,11 @@ export class LocalTransactionRepository implements TransactionRepository {
       paymentMode: header.paymentMode ?? null,
       notes: header.notes ?? null,
       items: items.map(lineToModel),
+      gstDocumentType: header.gst?.gstDocumentType ?? all[index].gstDocumentType,
+      placeOfSupplyState: header.gst?.placeOfSupplyState ?? all[index].placeOfSupplyState,
+      gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? all[index].gstRegistrationSnapshot,
+      intraState: header.gst?.intraState ?? all[index].intraState,
+      reverseCharge: header.gst?.reverseCharge ?? all[index].reverseCharge,
       updatedAt: now,
     };
     this.saveSales(all);
@@ -326,6 +328,13 @@ export class LocalTransactionRepository implements TransactionRepository {
       paidAmount: header.paidAmount,
       notes: header.notes ?? null,
       items: items.map(lineToPurchaseModel),
+      gstDocumentType: header.gst?.gstDocumentType,
+      placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+      supplierGstin: header.gst?.supplierGstin ?? null,
+      gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+      intraState: header.gst?.intraState ?? true,
+      reverseCharge: header.gst?.reverseCharge ?? false,
+      itcEligible: header.gst?.itcEligible ?? false,
       createdAt: now,
       updatedAt: now,
     };
@@ -359,6 +368,13 @@ export class LocalTransactionRepository implements TransactionRepository {
       paidAmount: header.paidAmount,
       notes: header.notes ?? null,
       items: items.map(lineToPurchaseModel),
+      gstDocumentType: header.gst?.gstDocumentType ?? all[index].gstDocumentType,
+      placeOfSupplyState: header.gst?.placeOfSupplyState ?? all[index].placeOfSupplyState,
+      supplierGstin: header.gst?.supplierGstin ?? all[index].supplierGstin,
+      gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? all[index].gstRegistrationSnapshot,
+      intraState: header.gst?.intraState ?? all[index].intraState,
+      reverseCharge: header.gst?.reverseCharge ?? all[index].reverseCharge,
+      itcEligible: header.gst?.itcEligible ?? all[index].itcEligible,
       updatedAt: now,
     };
     this.savePurchases(all);

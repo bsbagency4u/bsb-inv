@@ -122,6 +122,11 @@ export function canIssueTaxInvoice(registrationType: GstRegistrationType): boole
   return registrationType !== "unregistered" && registrationType !== "composition";
 }
 
+/** Buyers who may record input tax credit when tax is charged on a purchase. */
+export function canClaimInputTaxCredit(registrationType: GstRegistrationType): boolean {
+  return registrationType === "regular" || registrationType === "casual" || registrationType === "sez";
+}
+
 function normalizeState(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -207,12 +212,20 @@ export function classifyGstDocument(context: GstDocumentContext): GstDocumentDec
     hasLines && lines.every((line) => !isTaxableSupplyType(line.supplyType));
 
   if (side === "purchase") {
+    if (partyRegistrationType === "composition") {
+      return {
+        documentType: "bill_of_supply",
+        chargeTax: false,
+        intraState,
+        placeOfSupplyState,
+        taxInvoiceAllowed: false,
+        reason: "Composition suppliers cannot collect tax and issue a bill of supply.",
+      };
+    }
     const supplierRegistered =
       partyRegistrationType == null
         ? true
-        : partyRegistrationType === "registered" ||
-          partyRegistrationType === "composition" ||
-          partyRegistrationType === "sez";
+        : partyRegistrationType === "registered" || partyRegistrationType === "sez";
     if (!supplierRegistered) {
       return {
         documentType: "bill_of_supply",

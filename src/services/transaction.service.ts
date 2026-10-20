@@ -38,6 +38,7 @@ import {
 import { GstEngine } from "./gst.service";
 import type { GstComputeOptions } from "./gst.service";
 import {
+  canClaimInputTaxCredit,
   classifyGstDocument,
   isTaxableSupplyType,
   normalizeGstPartyRegistrationType,
@@ -78,6 +79,8 @@ export interface CartItemInput {
   /** Supply classification of the product at the time of the document. */
   gstSupplyType?: GstSupplyType | null;
   hsn?: string | null;
+  /** True when this purchase line attracts reverse charge. */
+  reverseCharge?: boolean;
 }
 
 export interface PaymentAllocation {
@@ -120,6 +123,8 @@ export interface PurchaseInput {
   pricesIncludeTax?: boolean;
   /** Draft bills are stored without stock movements. Complete/receive updates stock. */
   asDraft?: boolean;
+  /** Document-level reverse charge, recorded only when the user or a product flags it. */
+  reverseCharge?: boolean;
 }
 
 export interface DocumentMutationOptions {
@@ -256,6 +261,7 @@ export class TransactionService {
       discount?: number;
       discountPercent?: number;
       pricesIncludeTax?: boolean;
+      reverseCharge?: boolean;
     }
   ): Promise<{
     items: CartItemInput[];
@@ -300,6 +306,14 @@ export class TransactionService {
         gstSupplyType: supplyType,
       };
     });
+    const reverseCharge =
+      side === "purchase" &&
+      (input.reverseCharge === true ||
+        items.some((item) => item.reverseCharge === true));
+    const itcEligible =
+      side === "purchase"
+        ? decision.chargeTax && canClaimInputTaxCredit(registrationType)
+        : undefined;
 
     return {
       items: normalizedItems,
@@ -316,11 +330,8 @@ export class TransactionService {
         placeOfSupplyState: decision.placeOfSupplyState,
         gstRegistrationSnapshot: registrationType,
         intraState,
-        reverseCharge:
-          side === "purchase" &&
-          defaults.reverseChargeEnabled &&
-          normalizedItems.some((item) => item.gstSupplyType === "taxable"),
-        itcEligible: side === "purchase" ? decision.chargeTax : undefined,
+        reverseCharge,
+        itcEligible,
         supplierGstin: side === "purchase" ? (party?.gstin ?? null) : undefined,
       },
     };
@@ -366,7 +377,11 @@ export class TransactionService {
     }
   }
 
-  private toLineItemInput(item: CartItemInput): LineItemInput {
+  private toLineItemInput(
+    item: CartItemInput,
+    computed?: { discount?: number; taxableAmount?: number; taxAmount?: number; amount?: number },
+    itcEligible?: boolean
+  ): LineItemInput {
     return {
       productId: item.productId,
       variantId: item.variantId ?? null,
@@ -374,11 +389,15 @@ export class TransactionService {
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       gstRate: item.gstRate,
-      discount: item.discount ?? 0,
+      discount: computed?.discount ?? item.discount ?? 0,
+      taxableAmount: computed?.taxableAmount,
+      taxAmount: computed?.taxAmount,
+      amount: computed?.amount,
       saleUnit: item.saleUnit ?? null,
       baseQuantity: item.baseQuantity ?? item.quantity,
       gstSupplyType: item.gstSupplyType ?? null,
       hsn: item.hsn ?? null,
+      itcEligible,
     };
   }
 
@@ -418,6 +437,7 @@ export class TransactionService {
       baseUnitCost: converted.baseUnitCost,
       gstSupplyType: item.gstSupplyType ?? product.gstSupplyType,
       hsn: item.hsn ?? product.hsn,
+      reverseCharge: item.reverseCharge ?? product.reverseCharge,
     };
   }
 
@@ -1074,7 +1094,7 @@ export class TransactionService {
         total: totals.total,
         notes: input.notes ?? null,
       },
-      input.items.map(this.toLineItemInput)
+      input.items.map((item) => this.toLineItemInput(item))
     );
 
     await this.audits.log({
@@ -1231,7 +1251,9 @@ export class TransactionService {
         notes: input.notes ?? null,
         gst: gstResolved.snapshot,
       },
-      persistedItems.map(this.toLineItemInput)
+      persistedItems.map((item, index) =>
+        this.toLineItemInput(item, totals.lines[index], gstResolved.snapshot.itcEligible)
+      )
     );
 
     if (!asDraft) {
@@ -1374,7 +1396,9 @@ export class TransactionService {
         guard.documentDate,
         gstResolved.snapshot
       ),
-      persistedItems.map(this.toLineItemInput)
+      persistedItems.map((item, index) =>
+        this.toLineItemInput(item, totals.lines[index], gstResolved.snapshot.itcEligible)
+      )
     );
     if (!asDraft) {
       for (const item of persistedItems) {

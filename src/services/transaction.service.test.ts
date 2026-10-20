@@ -3,11 +3,13 @@ import type { Repositories } from "@/repositories/types";
 import type {
   AuditEvent,
   BusinessProfile,
+  GstSupplyType,
   Product,
   ProductBatch,
   PurchaseInvoice,
   PurchaseOrder,
   SalesInvoice,
+  Supplier,
 } from "@/types/domain";
 import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { DOCUMENT_CONTROL_KEY, todayIsoDate } from "@/lib/document-control";
@@ -73,6 +75,7 @@ function memoryRepositories() {
   const purchaseReturns: unknown[] = [];
   const salesReturns: unknown[] = [];
   const settings = new Map<string, unknown>();
+  const suppliers: Supplier[] = [];
   const paymentModes: Array<{ id: string; businessId: string; code: string; name: string; isActive: boolean; sortOrder: number; createdAt: string; updatedAt: string }> = [
     { id: "m-cash", businessId: "b-1", code: "cash", name: "Cash", isActive: true, sortOrder: 10, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: "m-upi", businessId: "b-1", code: "upi", name: "UPI", isActive: true, sortOrder: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
@@ -269,8 +272,8 @@ function memoryRepositories() {
       async createCustomer() { throw new Error("not used"); },
       async updateCustomer() { throw new Error("not used"); },
       async deleteCustomer() {},
-      async listSuppliers() { return []; },
-      async getSupplier() { return null; },
+      async listSuppliers() { return suppliers; },
+      async getSupplier(_b, id) { return suppliers.find((s) => s.id === id) ?? null; },
       async createSupplier() { throw new Error("not used"); },
       async updateSupplier() { throw new Error("not used"); },
       async deleteSupplier() {},
@@ -296,20 +299,32 @@ function memoryRepositories() {
           paidAmount: header.paidAmount,
           paymentMode: header.paymentMode ?? null,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: item.discount ?? 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice * (1 + item.gstRate / 100),
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+          intraState: header.gst?.intraState ?? true,
+          reverseCharge: header.gst?.reverseCharge ?? false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -332,20 +347,32 @@ function memoryRepositories() {
           paidAmount: header.paidAmount,
           paymentMode: header.paymentMode ?? null,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: item.discount ?? 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice * (1 + item.gstRate / 100),
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType ?? salesInvoices[index].gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? salesInvoices[index].placeOfSupplyState,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? salesInvoices[index].gstRegistrationSnapshot,
+          intraState: header.gst?.intraState ?? salesInvoices[index].intraState,
+          reverseCharge: header.gst?.reverseCharge ?? salesInvoices[index].reverseCharge,
           updatedAt: new Date().toISOString(),
         };
         return salesInvoices[index];
@@ -431,20 +458,34 @@ function memoryRepositories() {
           total: header.total,
           paidAmount: header.paidAmount,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice,
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+          supplierGstin: header.gst?.supplierGstin ?? null,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+          intraState: header.gst?.intraState ?? true,
+          reverseCharge: header.gst?.reverseCharge ?? false,
+          itcEligible: header.gst?.itcEligible ?? false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -467,20 +508,34 @@ function memoryRepositories() {
           total: header.total,
           paidAmount: header.paidAmount,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice,
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType ?? purchaseInvoices[index].gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? purchaseInvoices[index].placeOfSupplyState,
+          supplierGstin: header.gst?.supplierGstin ?? purchaseInvoices[index].supplierGstin,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? purchaseInvoices[index].gstRegistrationSnapshot,
+          intraState: header.gst?.intraState ?? purchaseInvoices[index].intraState,
+          reverseCharge: header.gst?.reverseCharge ?? purchaseInvoices[index].reverseCharge,
+          itcEligible: header.gst?.itcEligible ?? purchaseInvoices[index].itcEligible,
           updatedAt: new Date().toISOString(),
         };
         return purchaseInvoices[index];
@@ -686,7 +741,7 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions, suppliers };
 }
 
 describe("TransactionService", () => {
@@ -1937,6 +1992,122 @@ describe("TransactionService", () => {
       });
       expect(completed.invoice.status).not.toBe("draft");
       expect(netQty(product.id)).toBe(-1);
+    });
+  });
+
+  describe("GST snapshots", () => {
+    function seedSupplier(overrides: Partial<Supplier> = {}): Supplier {
+      const now = new Date().toISOString();
+      const supplier: Supplier = {
+        id: overrides.id ?? `s-${services.suppliers.length + 1}`,
+        businessId: "b-1",
+        name: overrides.name ?? "Supplier",
+        phone: null,
+        email: null,
+        gstin: overrides.gstin ?? "27AAAAA0000A1Z5",
+        pan: null,
+        address: null,
+        city: null,
+        state: overrides.state ?? "Maharashtra",
+        pincode: null,
+        country: "India",
+        gstRegistrationType: overrides.gstRegistrationType ?? "registered",
+        placeOfSupplyState: overrides.placeOfSupplyState ?? overrides.state ?? "Maharashtra",
+        paymentTerms: null,
+        notes: null,
+        openingBalance: 0,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+        ...overrides,
+      };
+      services.suppliers.push(supplier);
+      return supplier;
+    }
+
+    it("does not apply reverse charge just because the tax setting is on", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+        gstEnabled: true,
+        defaultGstRate: 18,
+        defaultIntraState: true,
+        reverseChargeEnabled: true,
+      }, "u-1");
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-OFF", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(false);
+      expect(invoice.itcEligible).toBe(true);
+      expect(invoice.taxTotal).toBe(18);
+    });
+
+    it("records reverse charge only when the bill is flagged", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-ON", {
+        supplierId: supplier.id,
+        reverseCharge: true,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(true);
+      expect(invoice.itcEligible).toBe(true);
+      expect(invoice.taxTotal).toBe(18);
+    });
+
+    it("records reverse charge when a product is flagged", async () => {
+      const product = await services.repos.products.createProduct("b-1", "u-1", {
+        name: "RCM item",
+        gstRate: 18,
+        purchasePrice: 100,
+        salePrice: 200,
+        reverseCharge: true,
+      });
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-PROD", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(true);
+      expect(invoice.itcEligible).toBe(true);
+    });
+
+    it("does not charge tax on a composition supplier bill", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "composition" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-COMP", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.gstDocumentType).toBe("bill_of_supply");
+      expect(invoice.taxTotal).toBe(0);
+      expect(invoice.total).toBe(100);
+      expect(invoice.itcEligible).toBe(false);
+      expect(invoice.items[0].gstRate).toBe(0);
+    });
+
+    it("does not default ITC on a bill with no tax", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "unregistered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-ITC", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.itcEligible).toBe(false);
+      expect(invoice.taxTotal).toBe(0);
+    });
+
+    it("snapshots taxable value after discounts on a sale", async () => {
+      const product = await seedProduct();
+      const { invoice, totals } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-SNAP", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 500, gstRate: 18, discount: 20 }],
+        discount: 30,
+        payments: [{ mode: "cash", amount: 531 }],
+      });
+      expect(invoice.gstDocumentType).toBe("tax_invoice");
+      expect(invoice.items[0].taxableAmount).toBe(450);
+      expect(totals.taxableAmount).toBe(450);
     });
   });
 });

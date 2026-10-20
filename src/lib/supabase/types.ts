@@ -480,6 +480,9 @@ export type PurchaseInvoiceItem = {
   quantity: number;
   unit_price: number;
   gst_rate: number;
+  discount?: number;
+  taxable_amount?: number;
+  tax_amount?: number;
   amount: number;
   sale_unit: string | null;
   base_quantity: number | null;

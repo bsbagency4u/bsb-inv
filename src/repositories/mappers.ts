@@ -503,7 +503,7 @@ export function mapPurchaseInvoice(row: PurchaseInvoice): PurchaseInvoiceModel {
         : null,
     intraState: row.intra_state ?? true,
     reverseCharge: row.reverse_charge ?? false,
-    itcEligible: row.itc_eligible ?? true,
+    itcEligible: row.itc_eligible ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

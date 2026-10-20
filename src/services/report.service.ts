@@ -126,7 +126,7 @@ export class ReportService {
           documentType: invoice.gstDocumentType ?? "tax_invoice",
           placeOfSupplyState: invoice.placeOfSupplyState ?? customer?.placeOfSupplyState ?? null,
           reverseCharge: invoice.reverseCharge ?? false,
-          taxableAmount: invoice.subtotal,
+          taxableAmount: Math.max(0, invoice.total - taxAmount),
           taxAmount,
           cgst: intraState ? taxAmount / 2 : 0,
           sgst: intraState ? taxAmount / 2 : 0,

@@ -53,6 +53,7 @@ export interface LineItemInput {
   baseQuantity?: number | null;
   gstSupplyType?: string | null;
   hsn?: string | null;
+  itcEligible?: boolean;
 }
 
 export interface GstDocumentSnapshot {
@@ -199,6 +200,7 @@ const GST_SNAPSHOT_COLUMNS = [
 ] as const;
 
 const GST_ITEM_COLUMNS = ["gst_supply_type", "hsn", "itc_eligible"] as const;
+const PURCHASE_ITEM_TAX_COLUMNS = ["discount", "taxable_amount", "tax_amount"] as const;
 
 function gstHeaderColumns(gst: GstDocumentSnapshot | undefined) {
   return {
@@ -235,20 +237,28 @@ const lineItemToSalesRow = (invoiceId: string, item: LineItemInput) => {
   };
 };
 
-const lineItemToPurchaseRow = (invoiceId: string, item: LineItemInput) => ({
-  purchase_invoice_id: invoiceId,
-  product_id: item.productId,
-  batch_id: item.batchId ?? null,
-  quantity: item.quantity,
-  unit_price: item.unitPrice,
-  gst_rate: item.gstRate,
-  amount: item.quantity * item.unitPrice,
-  sale_unit: item.saleUnit ?? null,
-  base_quantity: item.baseQuantity ?? item.quantity,
-  gst_supply_type: item.gstSupplyType ?? null,
-  hsn: item.hsn ?? null,
-  itc_eligible: true,
-});
+const lineItemToPurchaseRow = (invoiceId: string, item: LineItemInput) => {
+  const gross = item.quantity * item.unitPrice;
+  const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+  const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+  return {
+    purchase_invoice_id: invoiceId,
+    product_id: item.productId,
+    batch_id: item.batchId ?? null,
+    quantity: item.quantity,
+    unit_price: item.unitPrice,
+    gst_rate: item.gstRate,
+    discount: item.discount ?? 0,
+    taxable_amount: taxable,
+    tax_amount: tax,
+    amount: item.amount ?? taxable + tax,
+    sale_unit: item.saleUnit ?? null,
+    base_quantity: item.baseQuantity ?? item.quantity,
+    gst_supply_type: item.gstSupplyType ?? null,
+    hsn: item.hsn ?? null,
+    itc_eligible: item.itcEligible ?? false,
+  };
+};
 
 const lineItemToOrderRow = (orderId: string, item: LineItemInput) => ({
   purchase_order_id: orderId,
@@ -596,9 +606,9 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       quantity: row.quantity,
       unitPrice: row.unit_price,
       gstRate: row.gst_rate,
-      discount: 0,
-      taxableAmount: row.quantity * row.unit_price,
-      taxAmount: row.quantity * row.unit_price * (row.gst_rate / 100),
+      discount: row.discount ?? 0,
+      taxableAmount: row.taxable_amount ?? row.quantity * row.unit_price,
+      taxAmount: row.tax_amount ?? row.quantity * row.unit_price * (row.gst_rate / 100),
       amount: row.amount,
       saleUnit: row.sale_unit ?? null,
       baseQuantity: row.base_quantity ?? row.quantity,
@@ -645,7 +655,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       created_by: userId,
       ...gstHeaderColumns(header.gst),
       supplier_gstin: header.gst?.supplierGstin ?? null,
-      itc_eligible: header.gst?.itcEligible ?? true,
+      itc_eligible: header.gst?.itcEligible ?? false,
     };
     let data;
     {
@@ -674,7 +684,11 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         }
         const fallback = await this.client
           .from("purchase_invoice_items")
-          .insert(rows.map((row) => omitColumns(row, [...GST_ITEM_COLUMNS, "sale_unit", "base_quantity"])));
+          .insert(
+            rows.map((row) =>
+              omitColumns(row, [...GST_ITEM_COLUMNS, ...PURCHASE_ITEM_TAX_COLUMNS, "sale_unit", "base_quantity"])
+            )
+          );
         if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
       }
     }
@@ -702,7 +716,7 @@ export class SupabaseTransactionRepository implements TransactionRepository {
       notes: header.notes ?? null,
       ...gstHeaderColumns(header.gst),
       supplier_gstin: header.gst?.supplierGstin ?? null,
-      itc_eligible: header.gst?.itcEligible ?? true,
+      itc_eligible: header.gst?.itcEligible ?? false,
     };
     let data;
     {
@@ -745,7 +759,11 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         }
         const fallback = await this.client
           .from("purchase_invoice_items")
-          .insert(rows.map((row) => omitColumns(row, [...GST_ITEM_COLUMNS, "sale_unit", "base_quantity"])));
+          .insert(
+            rows.map((row) =>
+              omitColumns(row, [...GST_ITEM_COLUMNS, ...PURCHASE_ITEM_TAX_COLUMNS, "sale_unit", "base_quantity"])
+            )
+          );
         if (fallback.error) throw annotateDatabaseError(fallback.error, "purchase_invoice_items", "insert");
       }
     }
