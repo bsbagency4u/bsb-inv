@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, Boxes, Download, FileText, Wallet } from "lucide-react";
+import { BarChart3, Boxes, Download, FileText, Landmark, Wallet } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -23,6 +23,7 @@ import { EmptyState } from "@/components/states/empty-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
 import { StockReportsCentre } from "@/components/reports/stock-reports-centre";
+import { FinanceCentre } from "@/components/reports/finance-centre";
 import { AgingSummary, OutstandingTable } from "@/components/ledger/outstanding-table";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -32,7 +33,7 @@ import { GST_DOCUMENT_TYPE_LABELS } from "@/lib/gst";
 import type { GstReportRow, ReportPeriod } from "@/types/domain";
 
 export default function ReportsPage() {
-  const { business } = useSession();
+  const { business, user } = useSession();
   const [tab, setTab] = React.useState("stock");
   const [period, setPeriod] = React.useState<ReportPeriod>(defaultPeriod);
 
@@ -99,9 +100,9 @@ export default function ReportsPage() {
     <div>
       <PageHeader
         title="Reports"
-        description="Stock, sales, GST and outstanding summaries from live ledger data."
+        description="Stock, sales, GST, outstanding and finance summaries from live ledger data."
         actions={
-          tab === "sales" || tab === "gst" ? (
+          tab === "sales" || tab === "gst" || tab === "finance" ? (
             <div className="flex items-end gap-2">
               <Field label="From">
                 <Input
@@ -126,6 +127,7 @@ export default function ReportsPage() {
         <Tabs
           tabs={[
             { value: "stock", label: "Stock", icon: <Boxes className="size-4" /> },
+            { value: "finance", label: "Finance", icon: <Landmark className="size-4" /> },
             { value: "sales", label: "Sales", icon: <FileText className="size-4" /> },
             { value: "gst", label: "GST", icon: <BarChart3 className="size-4" /> },
             { value: "receivables", label: "Receivables", icon: <Wallet className="size-4" /> },
@@ -139,7 +141,16 @@ export default function ReportsPage() {
           <StockReportsCentre businessId={business.id} currency={currency} />
         ) : null}
 
-        {tab !== "stock" && totals ? (
+        {tab === "finance" && business ? (
+          <FinanceCentre
+            businessId={business.id}
+            currency={currency}
+            period={period}
+            userId={user?.id ?? null}
+          />
+        ) : null}
+
+        {tab !== "stock" && tab !== "finance" && totals ? (
           <div className="flex flex-wrap gap-3">
             <Badge variant="info" className="px-3 py-1 text-sm">
               {tab === "gst" ? "Tax" : tab === "receivables" || tab === "payables" ? "Outstanding" : "Total"}: {formatCurrency(totals.amount, currency)}
@@ -155,9 +166,9 @@ export default function ReportsPage() {
           </div>
         ) : null}
 
-        {tab !== "stock" && query.isLoading ? (
+        {tab !== "stock" && tab !== "finance" && query.isLoading ? (
           <LoadingState label="Loading report…" />
-        ) : tab !== "stock" && query.isError ? (
+        ) : tab !== "stock" && tab !== "finance" && query.isError ? (
           <ErrorState
             error={normalizeError(query.error).userMessage}
             onRetry={() => query.refetch()}
