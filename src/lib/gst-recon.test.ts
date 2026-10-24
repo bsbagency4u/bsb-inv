@@ -69,6 +69,8 @@ describe("filingCapability", () => {
     expect(filingCapability("composition").gstr1Allowed).toBe(false);
     expect(filingCapability("unregistered").gstr1Allowed).toBe(false);
     expect(filingCapability("composition").itcAllowed).toBe(false);
+    expect(filingCapability("composition").gstr4Allowed).toBe(true);
+    expect(filingCapability("unregistered").gstr4Allowed).toBe(false);
   });
 
   it("allows GSTR-1 and ITC for regular taxpayers", () => {

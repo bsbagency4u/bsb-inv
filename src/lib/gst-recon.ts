@@ -76,6 +76,7 @@ export interface GstFilingCapability {
   filingKind: GstFilingKind;
   gstr1Allowed: boolean;
   gstr3bAllowed: boolean;
+  gstr4Allowed: boolean;
   itcAllowed: boolean;
   reason: string;
 }
@@ -90,6 +91,7 @@ export function filingCapability(registrationType: GstRegistrationType): GstFili
       filingKind: "none",
       gstr1Allowed: false,
       gstr3bAllowed: false,
+      gstr4Allowed: false,
       itcAllowed: false,
       reason: "Unregistered businesses do not file GSTR-1 or GSTR-3B. Sales here are commercial invoices only.",
     };
@@ -100,8 +102,9 @@ export function filingCapability(registrationType: GstRegistrationType): GstFili
       filingKind: "none",
       gstr1Allowed: false,
       gstr3bAllowed: false,
+      gstr4Allowed: true,
       itcAllowed: false,
-      reason: "Composition dealers do not file GSTR-1. Use CMP-08 / GSTR-4 outside this workspace; ITC is not claimed.",
+      reason: "Composition dealers do not file GSTR-1. GSTR-4 prep here is books-only; CMP-08 / GSTR-4 filing stays outside this workspace.",
     };
   }
   if (registrationType === "isd") {
@@ -110,6 +113,7 @@ export function filingCapability(registrationType: GstRegistrationType): GstFili
       filingKind: "none",
       gstr1Allowed: false,
       gstr3bAllowed: false,
+      gstr4Allowed: false,
       itcAllowed: false,
       reason: "ISD units distribute credit and do not prepare GSTR-1 outward supplies from this register.",
     };
@@ -119,6 +123,7 @@ export function filingCapability(registrationType: GstRegistrationType): GstFili
     filingKind: "gstr1",
     gstr1Allowed: true,
     gstr3bAllowed: true,
+    gstr4Allowed: false,
     itcAllowed,
     reason: canIssueTaxInvoice(registrationType)
       ? "Regular-style taxpayer: GSTR-1 outward supplies and purchase ITC can be prepared from stored snapshots."

@@ -144,6 +144,52 @@ describe("stock report engine", () => {
     expect(result.rows[0]).toMatchObject({ quantity: 78, costPrice: 10, stockValue: 780 });
   });
 
+  it("groups stock value by GST rate with cost vs selling valuation", () => {
+    const extra = product({
+      id: "p-2",
+      name: "Syrup",
+      sku: "SYR-1",
+      gstRate: 18,
+      purchasePrice: 20,
+      salePrice: 30,
+    });
+    const mixed: ReportCatalog = {
+      ...catalog,
+      products: [product(), extra],
+      movements: [
+        ...catalog.movements,
+        movement({
+          id: "m-p2",
+          productId: "p-2",
+          change: 10,
+          movementType: "PURCHASE",
+          createdAt: "2026-03-02T10:00:00.000Z",
+        }),
+      ],
+    };
+    const result = runStockReport(mixed, query("stock-value-by-gst-rate"));
+    expect(result.rows).toEqual([
+      expect.objectContaining({
+        gstRate: 12,
+        productCount: 1,
+        quantity: 78,
+        costValue: 780,
+        sellingValue: 1170,
+        taxEstimate: 140.4,
+      }),
+      expect.objectContaining({
+        gstRate: 18,
+        productCount: 1,
+        quantity: 10,
+        costValue: 200,
+        sellingValue: 300,
+        taxEstimate: 54,
+      }),
+    ]);
+    expect(result.totals.costValue).toBe(980);
+    expect(result.totals.sellingValue).toBe(1470);
+  });
+
   it("flags low stock from product threshold", () => {
     const low = runStockReport(
       { ...catalog, products: [product({ lowStockThreshold: 80 })] },

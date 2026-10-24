@@ -169,6 +169,7 @@ describe("ReportService.financeSnapshot", () => {
     const snapshot = await reports.financeSnapshot("b-1", { from: "2026-10-01", to: "2026-10-31" });
     expect(snapshot.filing.gstr1Allowed).toBe(false);
     expect(snapshot.filing.itcAllowed).toBe(false);
+    expect(snapshot.filing.gstr4Allowed).toBe(true);
   });
 
   it("throws when the business record cannot be loaded instead of showing zero balances", async () => {
@@ -191,5 +192,41 @@ describe("ReportService.financeSnapshot", () => {
     const note = await reports.saveGstReconNote("b-1", "u-1", { from: "2026-10-01", to: "2026-10-31" }, "BILL-1", "2B missing");
     expect(note.documentNo).toBe("BILL-1");
     expect(stored).toHaveLength(1);
+  });
+});
+
+describe("ReportService.gstReportsSnapshot", () => {
+  it("reuses sales snapshots and matches taxable totals to the GST register", async () => {
+    const reports = new ReportService(
+      financeRepos({
+        invoices: [
+          invoice({
+            businessId: "b-1",
+            total: 531,
+            taxTotal: 81,
+            items: [
+              {
+                productId: "p-1",
+                quantity: 1,
+                unitPrice: 450,
+                gstRate: 18,
+                discount: 0,
+                taxableAmount: 450,
+                taxAmount: 81,
+                amount: 531,
+                hsn: "3004",
+              },
+            ],
+          }),
+        ],
+      })
+    );
+    const period = { from: "2026-10-01", to: "2026-10-31" };
+    const register = await reports.gstReport("b-1", period);
+    const snapshot = await reports.gstReportsSnapshot("b-1", period);
+    expect(snapshot.salesTotals.taxable).toBe(register[0].taxableAmount);
+    expect(snapshot.salesTotals.tax).toBe(register[0].taxAmount);
+    expect(snapshot.hsn[0]).toMatchObject({ hsn: "3004", taxableAmount: 450, taxAmount: 81 });
+    expect(snapshot.gstr3b.netTaxEstimate).toBe(81);
   });
 });

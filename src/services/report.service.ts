@@ -48,6 +48,18 @@ import {
   type GstFilingCapability,
   type GstReconNote,
 } from "@/lib/gst-recon";
+import {
+  buildGstr3b,
+  buildGstr4,
+  debitNoteLines,
+  hsnFromInvoices,
+  rateWiseFromInvoices,
+  splitB2bB2c,
+  type Gstr3bResult,
+  type Gstr4Result,
+  type GstHsnRow,
+  type GstRateRow,
+} from "@/lib/gst-reports";
 
 
 export interface FinanceSnapshot {
@@ -75,6 +87,29 @@ export interface FinanceSnapshot {
   salesGstTotals: ReturnType<typeof gstTotals>;
   purchaseGstTotals: ReturnType<typeof gstTotals>;
   reconNotes: GstReconNote[];
+  lockedSalesCount: number;
+  lockedPurchaseCount: number;
+}
+
+export interface GstReportsSnapshot {
+  period: ReportPeriod;
+  registrationType: GstRegistrationType;
+  filing: GstFilingCapability;
+  sales: GstBooksLine[];
+  purchases: GstBooksLine[];
+  creditNotes: GstBooksLine[];
+  debitNotes: GstBooksLine[];
+  salesTotals: ReturnType<typeof gstTotals>;
+  purchaseTotals: ReturnType<typeof gstTotals>;
+  creditTotals: ReturnType<typeof gstTotals>;
+  gstr3b: Gstr3bResult;
+  gstr4: Gstr4Result;
+  hsn: GstHsnRow[];
+  rateWise: GstRateRow[];
+  b2b: GstBooksLine[];
+  b2c: GstBooksLine[];
+  b2bTotals: ReturnType<typeof gstTotals>;
+  b2cTotals: ReturnType<typeof gstTotals>;
   lockedSalesCount: number;
   lockedPurchaseCount: number;
 }
@@ -276,6 +311,40 @@ export class ReportService {
       reconNotes: notes,
       lockedSalesCount: salesLines.filter((line) => line.locked).length,
       lockedPurchaseCount: purchaseLines.filter((line) => line.locked).length,
+    };
+  }
+
+  async gstReportsSnapshot(businessId: string, period: ReportPeriod): Promise<GstReportsSnapshot> {
+    const snapshot = await this.financeSnapshot(businessId, period);
+    const books = await this.ledger.loadBooks(businessId);
+    const split = splitB2bB2c(snapshot.salesGst);
+    const debitNotes = debitNoteLines(snapshot.salesGst, snapshot.purchaseGst);
+    return {
+      period,
+      registrationType: snapshot.registrationType,
+      filing: snapshot.filing,
+      sales: snapshot.salesGst,
+      purchases: snapshot.purchaseGst,
+      creditNotes: snapshot.creditNotes,
+      debitNotes,
+      salesTotals: snapshot.salesGstTotals,
+      purchaseTotals: snapshot.purchaseGstTotals,
+      creditTotals: gstTotals(snapshot.creditNotes),
+      gstr3b: buildGstr3b({
+        sales: snapshot.salesGst,
+        creditNotes: snapshot.creditNotes,
+        purchaseTotals: snapshot.purchaseGstTotals,
+        itcAllowed: snapshot.filing.itcAllowed,
+      }),
+      gstr4: buildGstr4({ sales: snapshot.salesGst, purchases: snapshot.purchaseGst }),
+      hsn: hsnFromInvoices(books.sales, period),
+      rateWise: rateWiseFromInvoices(books.sales, period),
+      b2b: split.b2b,
+      b2c: split.b2c,
+      b2bTotals: split.b2bTotals,
+      b2cTotals: split.b2cTotals,
+      lockedSalesCount: snapshot.lockedSalesCount,
+      lockedPurchaseCount: snapshot.lockedPurchaseCount,
     };
   }
 
