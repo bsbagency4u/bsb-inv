@@ -228,5 +228,9 @@ describe("ReportService.gstReportsSnapshot", () => {
     expect(snapshot.salesTotals.tax).toBe(register[0].taxAmount);
     expect(snapshot.hsn[0]).toMatchObject({ hsn: "3004", taxableAmount: 450, taxAmount: 81 });
     expect(snapshot.gstr3b.netTaxEstimate).toBe(81);
+    expect(snapshot.gstr1.b2cs).toHaveLength(1);
+    expect(snapshot.gstr1.tables.find((row) => row.id === "b2cs")?.taxableAmount).toBe(450);
+    expect(snapshot.documentSeries[0]?.prefix).toBe("SAL");
+    expect(snapshot.placeOfSupply[0]?.placeOfSupplyState).toBe("Maharashtra");
   });
 });

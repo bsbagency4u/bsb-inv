@@ -49,16 +49,27 @@ import {
   type GstReconNote,
 } from "@/lib/gst-recon";
 import {
-  buildGstr3b,
+  buildCmp08,
+  buildGstr1Prep,
+  buildGstr3bPrep,
   buildGstr4,
   debitNoteLines,
+  documentSeriesFromInvoices,
   hsnFromInvoices,
+  nilExemptFromInvoices,
+  placeOfSupplyFromLines,
   rateWiseFromInvoices,
+  rcmLines,
   splitB2bB2c,
-  type Gstr3bResult,
-  type Gstr4Result,
+  type Cmp08Result,
+  type GstDocumentSeriesRow,
   type GstHsnRow,
+  type GstNilExemptRow,
+  type GstPosRow,
   type GstRateRow,
+  type Gstr1PrepResult,
+  type Gstr3bPrepResult,
+  type Gstr4Result,
 } from "@/lib/gst-reports";
 
 
@@ -102,14 +113,20 @@ export interface GstReportsSnapshot {
   salesTotals: ReturnType<typeof gstTotals>;
   purchaseTotals: ReturnType<typeof gstTotals>;
   creditTotals: ReturnType<typeof gstTotals>;
-  gstr3b: Gstr3bResult;
+  gstr1: Gstr1PrepResult;
+  gstr3b: Gstr3bPrepResult;
   gstr4: Gstr4Result;
+  cmp08: Cmp08Result;
   hsn: GstHsnRow[];
   rateWise: GstRateRow[];
   b2b: GstBooksLine[];
   b2c: GstBooksLine[];
   b2bTotals: ReturnType<typeof gstTotals>;
   b2cTotals: ReturnType<typeof gstTotals>;
+  rcm: GstBooksLine[];
+  nilExempt: GstNilExemptRow[];
+  placeOfSupply: GstPosRow[];
+  documentSeries: GstDocumentSeriesRow[];
   lockedSalesCount: number;
   lockedPurchaseCount: number;
 }
@@ -281,7 +298,13 @@ export class ReportService {
       supplierGstin,
       lockSettings
     );
-    const creditNotes = salesReturnCreditNotes(books.salesReturns, books.sales, period, customerNames);
+    const creditNotes = salesReturnCreditNotes(
+      books.salesReturns,
+      books.sales,
+      period,
+      customerNames,
+      customerGstin
+    );
     const notes = notesForPeriod(parseGstReconNotes(notesStored), period);
 
     return {
@@ -319,6 +342,26 @@ export class ReportService {
     const books = await this.ledger.loadBooks(businessId);
     const split = splitB2bB2c(snapshot.salesGst);
     const debitNotes = debitNoteLines(snapshot.salesGst, snapshot.purchaseGst);
+    const hsn = hsnFromInvoices(books.sales, period);
+    const documentSeries = [
+      ...documentSeriesFromInvoices(books.sales, period, "Invoices for outward supply"),
+      ...documentSeriesFromInvoices(
+        books.salesReturns.map((item) => ({
+          invoiceNo: item.returnNo,
+          invoiceDate: item.returnDate,
+          status: "posted",
+        })),
+        period,
+        "Credit notes (sales returns)"
+      ),
+    ];
+    const gstr1 = buildGstr1Prep({
+      sales: snapshot.salesGst,
+      creditNotes: snapshot.creditNotes,
+      debitNotes,
+      hsn,
+      docs: documentSeries,
+    });
     return {
       period,
       registrationType: snapshot.registrationType,
@@ -330,19 +373,26 @@ export class ReportService {
       salesTotals: snapshot.salesGstTotals,
       purchaseTotals: snapshot.purchaseGstTotals,
       creditTotals: gstTotals(snapshot.creditNotes),
-      gstr3b: buildGstr3b({
+      gstr1,
+      gstr3b: buildGstr3bPrep({
         sales: snapshot.salesGst,
         creditNotes: snapshot.creditNotes,
         purchaseTotals: snapshot.purchaseGstTotals,
         itcAllowed: snapshot.filing.itcAllowed,
+        gstr1,
       }),
       gstr4: buildGstr4({ sales: snapshot.salesGst, purchases: snapshot.purchaseGst }),
-      hsn: hsnFromInvoices(books.sales, period),
+      cmp08: buildCmp08({ sales: snapshot.salesGst, purchases: snapshot.purchaseGst }),
+      hsn,
       rateWise: rateWiseFromInvoices(books.sales, period),
       b2b: split.b2b,
       b2c: split.b2c,
       b2bTotals: split.b2bTotals,
       b2cTotals: split.b2cTotals,
+      rcm: rcmLines(snapshot.purchaseGst),
+      nilExempt: nilExemptFromInvoices(books.sales, period),
+      placeOfSupply: placeOfSupplyFromLines(snapshot.salesGst),
+      documentSeries,
       lockedSalesCount: snapshot.lockedSalesCount,
       lockedPurchaseCount: snapshot.lockedPurchaseCount,
     };

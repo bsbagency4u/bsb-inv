@@ -37,6 +37,7 @@ export interface GstBooksLine {
   sgst: number;
   igst: number;
   invoiceValue: number;
+  intraState: boolean;
   locked: boolean;
 }
 
@@ -104,7 +105,7 @@ export function filingCapability(registrationType: GstRegistrationType): GstFili
       gstr3bAllowed: false,
       gstr4Allowed: true,
       itcAllowed: false,
-      reason: "Composition dealers do not file GSTR-1. GSTR-4 prep here is books-only; CMP-08 / GSTR-4 filing stays outside this workspace.",
+      reason: "Composition dealers do not file GSTR-1 or GSTR-3B. CMP-08 / GSTR-4 prep here is books turnover only; levy rate and filing stay outside this workspace.",
     };
   }
   if (registrationType === "isd") {
@@ -180,6 +181,7 @@ export function salesBooksLine(
     sgst: split.sgst,
     igst: split.igst,
     invoiceValue: roundMoney(invoice.total),
+    intraState: invoice.intraState ?? true,
     locked: documentIsLocked(lockSettings, invoice.invoiceDate, invoice.status, now),
   };
 }
@@ -212,6 +214,7 @@ export function purchaseBooksLine(
     sgst: split.sgst,
     igst: split.igst,
     invoiceValue: roundMoney(invoice.total),
+    intraState: invoice.intraState ?? true,
     locked: documentIsLocked(lockSettings, invoice.invoiceDate, invoice.status, now),
   };
 }
@@ -237,7 +240,8 @@ export function salesReturnCreditNotes(
   returns: SalesReturn[],
   invoices: SalesInvoice[],
   period: ReportPeriod,
-  partyNameById: Map<string, string>
+  partyNameById: Map<string, string>,
+  partyGstinById?: Map<string, string | null>
 ): GstBooksLine[] {
   const invoiceById = new Map(invoices.map((invoice) => [invoice.id, invoice]));
   return returns
@@ -248,13 +252,14 @@ export function salesReturnCreditNotes(
       const taxShare =
         invoice && invoice.total > 0 ? roundMoney((item.total / invoice.total) * invoice.taxTotal) : 0;
       const split = splitTax(taxShare, intraState);
+      const customerId = item.customerId ?? invoice?.customerId ?? null;
       return {
         id: item.id,
         side: "sale" as const,
         documentNo: item.returnNo,
         documentDate: toIsoDate(item.returnDate),
-        partyName: item.customerId ? partyNameById.get(item.customerId) ?? "Customer" : "Walk-in",
-        gstin: null,
+        partyName: customerId ? partyNameById.get(customerId) ?? "Customer" : "Walk-in",
+        gstin: customerId ? partyGstinById?.get(customerId) ?? null : null,
         documentType: "credit_note" as const,
         placeOfSupplyState: invoice?.placeOfSupplyState ?? null,
         reverseCharge: invoice?.reverseCharge ?? false,
@@ -265,6 +270,7 @@ export function salesReturnCreditNotes(
         sgst: split.sgst,
         igst: split.igst,
         invoiceValue: roundMoney(item.total),
+        intraState,
         locked: false,
       };
     });

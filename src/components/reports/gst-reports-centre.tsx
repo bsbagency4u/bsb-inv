@@ -21,10 +21,12 @@ import {
 import { EmptyState } from "@/components/states/empty-state";
 import { LoadingState } from "@/components/states/loading-state";
 import { ErrorState } from "@/components/states/error-state";
+import { Alert } from "@/components/ui/alert";
+import { Tabs } from "@/components/ui/tabs";
 import { normalizeError } from "@/lib/errors";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 import { GST_DOCUMENT_TYPE_LABELS, GST_REGISTRATION_TYPE_LABELS } from "@/lib/gst";
-import { gstDocumentLabel } from "@/lib/gst-recon";
+import { gstDocumentLabel, gstTotals } from "@/lib/gst-recon";
 import {
   GST_REPORT_CATEGORIES,
   GST_REPORT_DEFINITIONS,
@@ -34,6 +36,7 @@ import {
   hsnTotals,
   rateWiseTotals,
   type GstReportId,
+  type Gstr1TableId,
 } from "@/lib/gst-reports";
 import { fyContaining, fyOptions, taxPeriodPresets } from "@/lib/gst-period";
 import { downloadCsv, printReport } from "@/reports/export";
@@ -164,6 +167,18 @@ const BOOKS_CSV_HEADER = [
   "Total tax",
 ];
 
+const GSTR1_TABS: { value: "summary" | Gstr1TableId; label: string }[] = [
+  { value: "summary", label: "Summary" },
+  { value: "b2b", label: "B2B" },
+  { value: "b2cl", label: "B2CL" },
+  { value: "b2cs", label: "B2CS" },
+  { value: "exp", label: "Exports" },
+  { value: "cdnr", label: "CDNR" },
+  { value: "cdnur", label: "CDNUR" },
+  { value: "hsn", label: "HSN" },
+  { value: "docs", label: "Docs" },
+];
+
 export function GstReportsCentre({
   businessId,
   currency,
@@ -185,6 +200,7 @@ export function GstReportsCentre({
   const period: ReportPeriod =
     presetId === "custom" ? custom : { from: preset?.from ?? fy.from, to: preset?.to ?? fy.to };
   const [reportId, setReportId] = React.useState<GstReportId>("sales-register");
+  const [gstr1Table, setGstr1Table] = React.useState<"summary" | Gstr1TableId>("summary");
 
   const query = useQuery({
     queryKey: ["gst-reports", businessId, period],
@@ -215,18 +231,45 @@ export function GstReportsCentre({
       downloadRows(`rate-wise-${stamp}.csv`, ["Rate", "Documents", "Taxable", "CGST", "SGST", "IGST", "Tax"], snapshot.rateWise.map((row) => [row.rate, row.documentCount, row.taxableAmount, row.cgst, row.sgst, row.igst, row.taxAmount]));
       return;
     }
+    if (definition.id === "gstr-1") {
+      downloadRows(
+        `gstr-1-prep-${stamp}.csv`,
+        ["Table", "Documents", "Taxable", "Tax", "Invoice value"],
+        snapshot.gstr1.tables.map((row) => [row.label, row.count, row.taxableAmount, row.taxAmount, row.invoiceValue])
+      );
+      return;
+    }
     if (definition.id === "gstr-3b") {
       downloadRows(`gstr-3b-prep-${stamp}.csv`, ["Section", "Taxable", "CGST", "SGST", "IGST", "Tax"], snapshot.gstr3b.rows.map((row) => [row.label, row.taxableAmount, row.cgst, row.sgst, row.igst, row.taxAmount]));
       return;
     }
-    if (definition.id === "gstr-4") {
-      downloadRows(`gstr-4-prep-${stamp}.csv`, ["Metric", "Value"], [
-        ["Outward turnover", snapshot.gstr4.outwardTurnover],
-        ["Tax collected on invoices", snapshot.gstr4.taxCollected],
-        ["Purchase turnover", snapshot.gstr4.purchaseTurnover],
-        ["Sales documents", snapshot.gstr4.documentCount],
-        ["Purchase documents", snapshot.gstr4.purchaseCount],
-      ]);
+    if (definition.id === "gstr-4" || definition.id === "cmp-08") {
+      const source = definition.id === "cmp-08" ? snapshot.cmp08 : snapshot.gstr4;
+      const rows: Array<Array<string | number>> = [
+        ["Outward turnover", source.outwardTurnover],
+        ["Tax collected on invoices", source.taxCollected],
+        ["Purchase turnover", source.purchaseTurnover],
+        ["Sales documents", source.documentCount],
+        ["Purchase documents", source.purchaseCount],
+      ];
+      if (definition.id === "cmp-08") rows.push(["RCM tax in books", snapshot.cmp08.rcmTax]);
+      downloadRows(`${definition.id}-prep-${stamp}.csv`, ["Metric", "Value"], rows);
+      return;
+    }
+    if (definition.id === "place-of-supply") {
+      downloadRows(`place-of-supply-${stamp}.csv`, ["Place of supply", "Documents", "Taxable", "CGST", "SGST", "IGST", "Tax"], snapshot.placeOfSupply.map((row) => [row.placeOfSupplyState, row.documentCount, row.taxableAmount, row.cgst, row.sgst, row.igst, row.taxAmount]));
+      return;
+    }
+    if (definition.id === "document-series") {
+      downloadRows(`document-series-${stamp}.csv`, ["Nature", "Prefix", "From", "To", "Total", "Cancelled", "Net issued"], snapshot.documentSeries.map((row) => [row.nature, row.prefix, row.fromNo, row.toNo, row.total, row.cancelled, row.netIssued]));
+      return;
+    }
+    if (definition.id === "nil-exempt") {
+      downloadRows(`nil-exempt-${stamp}.csv`, ["Supply type", "Documents", "Taxable", "Invoice value"], snapshot.nilExempt.map((row) => [row.supplyType, row.documentCount, row.taxableAmount, row.invoiceValue]));
+      return;
+    }
+    if (definition.id === "tax-estimate") {
+      downloadRows(`tax-estimate-${stamp}.csv`, ["Section", "Taxable", "Tax"], snapshot.gstr3b.rows.map((row) => [row.label, row.taxableAmount, row.taxAmount]));
       return;
     }
     const rows =
@@ -236,13 +279,33 @@ export function GstReportsCentre({
           ? [...snapshot.b2b, ...snapshot.b2c]
           : definition.id === "credit-debit-notes"
             ? [...snapshot.creditNotes, ...snapshot.debitNotes]
-            : snapshot.sales;
+            : definition.id === "rcm"
+              ? snapshot.rcm
+              : snapshot.sales;
     downloadRows(`${definition.id}-${stamp}.csv`, BOOKS_CSV_HEADER, booksCsvRows(rows));
   }
 
   function printCurrent() {
     if (!snapshot || !definition) return;
-    if (definition.id === "gstr-3b") {
+    if (definition.id === "gstr-1") {
+      printReport(
+        definition.title,
+        [
+          { key: "label", label: "Table", type: "text" },
+          { key: "count", label: "Documents", type: "number" },
+          { key: "taxableAmount", label: "Taxable", type: "currency" },
+          { key: "taxAmount", label: "Tax", type: "currency" },
+        ],
+        snapshot.gstr1.tables.map((row) => ({
+          label: row.label,
+          count: row.count,
+          taxableAmount: row.taxableAmount,
+          taxAmount: row.taxAmount,
+        }))
+      );
+      return;
+    }
+    if (definition.id === "gstr-3b" || definition.id === "tax-estimate") {
       printReport(
         definition.title,
         [
@@ -292,6 +355,46 @@ export function GstReportsCentre({
       );
       return;
     }
+    if (definition.id === "place-of-supply") {
+      printReport(
+        definition.title,
+        [
+          { key: "placeOfSupplyState", label: "Place of supply", type: "text" },
+          { key: "documentCount", label: "Documents", type: "number" },
+          { key: "taxableAmount", label: "Taxable", type: "currency" },
+          { key: "taxAmount", label: "Tax", type: "currency" },
+        ],
+        snapshot.placeOfSupply.map((row) => ({
+          placeOfSupplyState: row.placeOfSupplyState,
+          documentCount: row.documentCount,
+          taxableAmount: row.taxableAmount,
+          taxAmount: row.taxAmount,
+        }))
+      );
+      return;
+    }
+    if (definition.id === "document-series") {
+      printReport(
+        definition.title,
+        [
+          { key: "nature", label: "Nature", type: "text" },
+          { key: "prefix", label: "Prefix", type: "text" },
+          { key: "fromNo", label: "From", type: "text" },
+          { key: "toNo", label: "To", type: "text" },
+          { key: "total", label: "Total", type: "number" },
+          { key: "cancelled", label: "Cancelled", type: "number" },
+        ],
+        snapshot.documentSeries.map((row) => ({
+          nature: row.nature,
+          prefix: row.prefix,
+          fromNo: row.fromNo,
+          toNo: row.toNo,
+          total: row.total,
+          cancelled: row.cancelled,
+        }))
+      );
+      return;
+    }
     const rows =
       definition.id === "purchase-itc"
         ? snapshot.purchases
@@ -299,7 +402,9 @@ export function GstReportsCentre({
           ? [...snapshot.creditNotes, ...snapshot.debitNotes]
           : definition.id === "b2b-b2c"
             ? [...snapshot.b2b, ...snapshot.b2c]
-            : snapshot.sales;
+            : definition.id === "rcm"
+              ? snapshot.rcm
+              : snapshot.sales;
     printReport(
       definition.title,
       [
@@ -437,7 +542,7 @@ export function GstReportsCentre({
 
         <p className="text-xs text-muted-foreground">{snapshot.filing.reason}</p>
 
-        {activeReportId === "sales-register" || activeReportId === "gstr-1" ? (
+        {activeReportId === "sales-register" ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <Tile label="Taxable" value={formatCurrency(snapshot.salesTotals.taxable, currency)} />
@@ -457,6 +562,137 @@ export function GstReportsCentre({
           </div>
         ) : null}
 
+        {activeReportId === "gstr-1" ? (
+          <div className="space-y-3">
+            <Alert variant="info" title="Books prep only">
+              Figures use GST snapshots stored on each document. This is not a filed GSTR-1 and is not JSON for the GST portal.
+            </Alert>
+            {snapshot.gstr1.issues.length > 0 ? (
+              <Alert variant="warning" title="Missing stored data">
+                {snapshot.gstr1.issues.map((issue) => `${issue.label} (${issue.count})`).join(". ")}.
+              </Alert>
+            ) : null}
+            <Tabs
+              className="flex-wrap"
+              tabs={GSTR1_TABS}
+              value={gstr1Table}
+              onValueChange={(value) => setGstr1Table(value as typeof gstr1Table)}
+            />
+            {gstr1Table === "summary" ? (
+              <>
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <Tile label="B2B taxable" value={formatCurrency(gstTotals(snapshot.gstr1.b2b).taxable, currency)} hint={`${snapshot.gstr1.b2b.length} invoices`} />
+                  <Tile label="B2C taxable" value={formatCurrency(gstTotals([...snapshot.gstr1.b2cl, ...snapshot.gstr1.b2cs]).taxable, currency)} hint={`${snapshot.gstr1.b2cl.length} B2CL / ${snapshot.gstr1.b2cs.length} B2CS`} />
+                  <Tile label="Exports" value={formatCurrency(gstTotals(snapshot.gstr1.exp).taxable, currency)} />
+                  <Tile label="Notes" value={`${snapshot.gstr1.cdnr.length} CDNR / ${snapshot.gstr1.cdnur.length} CDNUR`} />
+                </div>
+                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Table</TableHead>
+                        <TableHead className="text-right">Documents</TableHead>
+                        <TableHead className="text-right">Taxable</TableHead>
+                        <TableHead className="text-right">Tax</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {snapshot.gstr1.tables.map((row) => (
+                        <TableRow key={row.id}>
+                          <TableCell className="font-medium">{row.label}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.taxableAmount, currency)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.taxAmount, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            ) : gstr1Table === "hsn" ? (
+              snapshot.gstr1.hsn.length === 0 ? (
+                <EmptyState icon={<FileSpreadsheet className="size-6" />} title="No HSN lines" description="Posted sales lines with stored HSN appear in table 12." />
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>HSN</TableHead>
+                        <TableHead className="text-right">Rate</TableHead>
+                        <TableHead className="text-right">Qty</TableHead>
+                        <TableHead className="text-right">Taxable</TableHead>
+                        <TableHead className="text-right">Tax</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {snapshot.gstr1.hsn.map((row) => (
+                        <TableRow key={`${row.hsn}-${row.rate}`}>
+                          <TableCell className="font-medium">{row.hsn}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.rate}%</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(row.quantity)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.taxableAmount, currency)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.taxAmount, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
+            ) : gstr1Table === "docs" ? (
+              snapshot.gstr1.docs.length === 0 ? (
+                <EmptyState icon={<FileSpreadsheet className="size-6" />} title="No document series" description="Issued invoice and credit-note numbers in this period appear in table 13." />
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Nature</TableHead>
+                        <TableHead>Prefix</TableHead>
+                        <TableHead>From</TableHead>
+                        <TableHead>To</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="text-right">Cancelled</TableHead>
+                        <TableHead className="text-right">Net</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {snapshot.gstr1.docs.map((row) => (
+                        <TableRow key={`${row.nature}-${row.prefix}`}>
+                          <TableCell className="font-medium">{row.nature}</TableCell>
+                          <TableCell>{row.prefix}</TableCell>
+                          <TableCell>{row.fromNo}</TableCell>
+                          <TableCell>{row.toNo}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.total}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.cancelled}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.netIssued}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
+            ) : (
+              <BooksTable
+                rows={
+                  gstr1Table === "b2b"
+                    ? snapshot.gstr1.b2b
+                    : gstr1Table === "b2cl"
+                      ? snapshot.gstr1.b2cl
+                      : gstr1Table === "b2cs"
+                        ? snapshot.gstr1.b2cs
+                        : gstr1Table === "exp"
+                          ? snapshot.gstr1.exp
+                          : gstr1Table === "cdnr"
+                            ? snapshot.gstr1.cdnr
+                            : snapshot.gstr1.cdnur
+                }
+                currency={currency}
+                empty={`No ${gstr1Table.toUpperCase()} documents in this period.`}
+              />
+            )}
+          </div>
+        ) : null}
+
         {activeReportId === "purchase-itc" ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -472,16 +708,30 @@ export function GstReportsCentre({
           </div>
         ) : null}
 
-        {activeReportId === "gstr-3b" ? (
+        {activeReportId === "gstr-3b" || activeReportId === "tax-estimate" ? (
           <div className="space-y-3">
+            <Alert variant="info" title="Estimate only">
+              Net tax is a books review figure from stored snapshots. Interest, late fee and portal liability are not calculated.
+            </Alert>
+            {snapshot.gstr3b.mismatches.length > 0 ? (
+              <Alert variant="warning" title="GSTR-1 vs GSTR-3B mismatch">
+                {snapshot.gstr3b.mismatches
+                  .map(
+                    (row) =>
+                      `${row.label}: GSTR-1 ${formatCurrency(row.gstr1Value, currency)} vs 3B ${formatCurrency(row.gstr3bValue, currency)}`
+                  )
+                  .join(". ")}
+                .
+              </Alert>
+            ) : null}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Tile label="Outward tax" value={formatCurrency(snapshot.salesTotals.tax, currency)} />
+              <Tile label="3.1(a) tax" value={formatCurrency(snapshot.gstr3b.rows.find((row) => row.key === "3_1_a")?.taxAmount ?? 0, currency)} />
               <Tile label="Credit notes" value={formatCurrency(snapshot.creditTotals.tax, currency)} />
               <Tile
                 label="ITC in books"
                 value={snapshot.filing.itcAllowed ? formatCurrency(snapshot.purchaseTotals.itc, currency) : "Not claimed"}
               />
-              <Tile label="Net tax estimate" value={formatCurrency(snapshot.gstr3b.netTaxEstimate, currency)} hint="Estimate only, not a filed liability" />
+              <Tile label="Net tax estimate" value={formatCurrency(snapshot.gstr3b.netTaxEstimate, currency)} hint="Not a filed liability" />
             </div>
             <div className="overflow-hidden rounded-lg border border-border bg-surface">
               <Table>
@@ -509,26 +759,49 @@ export function GstReportsCentre({
                 </TableBody>
               </Table>
             </div>
-            <p className="text-xs text-muted-foreground">
-              GSTR-3B prep uses stored invoice snapshots. Net tax is an estimate for books review, not GST payable on the portal.
-            </p>
           </div>
         ) : null}
 
-        {activeReportId === "gstr-4" ? (
+        {activeReportId === "gstr-4" || activeReportId === "cmp-08" ? (
           <div className="space-y-3">
+            <Alert variant="info" title="Books turnover only">
+              Composition levy rate is not stored, so tax due is not calculated. This is not a CMP-08 or GSTR-4 filing.
+            </Alert>
             <Card>
               <CardHeader>
-                <CardTitle>Composition books summary</CardTitle>
+                <CardTitle>{activeReportId === "cmp-08" ? "CMP-08 books summary" : "GSTR-4 books summary"}</CardTitle>
                 <CardDescription>
-                  Turnover from stored bills of supply. This is not a CMP-08 or GSTR-4 filing.
+                  Turnover from stored bills of supply. ITC is not claimed for composition dealers.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Tile label="Outward turnover" value={formatCurrency(snapshot.gstr4.outwardTurnover, currency)} />
-                <Tile label="Tax on invoices" value={formatCurrency(snapshot.gstr4.taxCollected, currency)} hint="Should be zero for composition" />
-                <Tile label="Purchase turnover" value={formatCurrency(snapshot.gstr4.purchaseTurnover, currency)} />
-                <Tile label="Documents" value={`${snapshot.gstr4.documentCount} sales / ${snapshot.gstr4.purchaseCount} purchases`} />
+                <Tile
+                  label="Outward turnover"
+                  value={formatCurrency(
+                    activeReportId === "cmp-08" ? snapshot.cmp08.outwardTurnover : snapshot.gstr4.outwardTurnover,
+                    currency
+                  )}
+                />
+                <Tile
+                  label="Tax on invoices"
+                  value={formatCurrency(
+                    activeReportId === "cmp-08" ? snapshot.cmp08.taxCollected : snapshot.gstr4.taxCollected,
+                    currency
+                  )}
+                  hint="Should be zero for composition"
+                />
+                <Tile
+                  label="Purchase turnover"
+                  value={formatCurrency(
+                    activeReportId === "cmp-08" ? snapshot.cmp08.purchaseTurnover : snapshot.gstr4.purchaseTurnover,
+                    currency
+                  )}
+                />
+                {activeReportId === "cmp-08" ? (
+                  <Tile label="RCM tax in books" value={formatCurrency(snapshot.cmp08.rcmTax, currency)} hint="Stored on purchase bills; levy not computed" />
+                ) : (
+                  <Tile label="Documents" value={`${snapshot.gstr4.documentCount} sales / ${snapshot.gstr4.purchaseCount} purchases`} />
+                )}
               </CardContent>
             </Card>
             <BooksTable rows={snapshot.sales} currency={currency} empty="No composition sales in this period." />
@@ -638,6 +911,120 @@ export function GstReportsCentre({
             <BooksTable rows={snapshot.creditNotes} currency={currency} empty="No sales-return credit notes in this period." />
             <h3 className="text-sm font-semibold">Debit notes</h3>
             <BooksTable rows={snapshot.debitNotes} currency={currency} empty="No debit-note documents are stored in this period." />
+          </div>
+        ) : null}
+
+        {activeReportId === "rcm" ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <Tile label="RCM documents" value={String(snapshot.rcm.length)} />
+              <Tile label="RCM tax" value={formatCurrency(gstTotals(snapshot.rcm).tax, currency)} hint="Stored on the bill" />
+              <Tile label="Taxable" value={formatCurrency(gstTotals(snapshot.rcm).taxable, currency)} />
+            </div>
+            <BooksTable rows={snapshot.rcm} currency={currency} empty="No reverse-charge purchase bills in this period." showItc />
+          </div>
+        ) : null}
+
+        {activeReportId === "nil-exempt" ? (
+          <div className="space-y-3">
+            {snapshot.nilExempt.length === 0 ? (
+              <EmptyState icon={<FileSpreadsheet className="size-6" />} title="No nil / exempt lines" description="Posted sales stored as nil-rated, exempt, out of scope, or zero-tax bills of supply appear here." />
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Supply type</TableHead>
+                      <TableHead className="text-right">Documents</TableHead>
+                      <TableHead className="text-right">Taxable</TableHead>
+                      <TableHead className="text-right">Invoice value</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {snapshot.nilExempt.map((row) => (
+                      <TableRow key={row.supplyType}>
+                        <TableCell className="font-medium">{row.supplyType}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.documentCount}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.taxableAmount, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.invoiceValue, currency)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeReportId === "place-of-supply" ? (
+          <div className="space-y-3">
+            {snapshot.placeOfSupply.length === 0 ? (
+              <EmptyState icon={<FileSpreadsheet className="size-6" />} title="No place-of-supply rows" description="Posted sales with a stored place of supply appear here." />
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Place of supply</TableHead>
+                      <TableHead className="text-right">Documents</TableHead>
+                      <TableHead className="text-right">Taxable</TableHead>
+                      <TableHead className="text-right">CGST</TableHead>
+                      <TableHead className="text-right">SGST</TableHead>
+                      <TableHead className="text-right">IGST</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {snapshot.placeOfSupply.map((row) => (
+                      <TableRow key={row.placeOfSupplyState}>
+                        <TableCell className="font-medium">{row.placeOfSupplyState}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.documentCount}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.taxableAmount, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.cgst, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.sgst, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.igst, currency)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeReportId === "document-series" ? (
+          <div className="space-y-3">
+            {snapshot.documentSeries.length === 0 ? (
+              <EmptyState icon={<FileSpreadsheet className="size-6" />} title="No document series" description="Issued invoice and credit-note numbers in this period appear here. Drafts are excluded." />
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nature</TableHead>
+                      <TableHead>Prefix</TableHead>
+                      <TableHead>From</TableHead>
+                      <TableHead>To</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                      <TableHead className="text-right">Cancelled</TableHead>
+                      <TableHead className="text-right">Net issued</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {snapshot.documentSeries.map((row) => (
+                      <TableRow key={`${row.nature}-${row.prefix}`}>
+                        <TableCell className="font-medium">{row.nature}</TableCell>
+                        <TableCell>{row.prefix}</TableCell>
+                        <TableCell>{row.fromNo}</TableCell>
+                        <TableCell>{row.toNo}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.total}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.cancelled}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.netIssued}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </div>
         ) : null}
 
