@@ -7,6 +7,7 @@ import type { PartyRepository } from "./party.repository";
 import type { TransactionRepository } from "./transaction.repository";
 import type { NotificationRepository } from "./notification.repository";
 import type { TeamRepository } from "./team.repository";
+import type { ComplianceRepository } from "./compliance.repository";
 
 export interface Repositories {
   businesses: BusinessRepository;
@@ -18,6 +19,8 @@ export interface Repositories {
   transactions: TransactionRepository;
   notifications: NotificationRepository;
   team: TeamRepository;
+  /** Optional so product/inventory/transaction test stubs stay valid. */
+  compliance?: ComplianceRepository;
 }
 
 export type {
@@ -30,6 +33,7 @@ export type {
   TransactionRepository,
   NotificationRepository,
   TeamRepository,
+  ComplianceRepository,
 };
 export type { BusinessProfile } from "@/types/domain";
 export type { AuditLogInput } from "./audit.repository";

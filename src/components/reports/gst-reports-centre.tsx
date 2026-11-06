@@ -96,6 +96,7 @@ function BooksTable({
             <TableHead className="text-right">CGST</TableHead>
             <TableHead className="text-right">SGST</TableHead>
             <TableHead className="text-right">IGST</TableHead>
+            <TableHead>IRN</TableHead>
             {showItc ? <TableHead>ITC</TableHead> : null}
           </TableRow>
         </TableHeader>
@@ -120,6 +121,7 @@ function BooksTable({
               <TableCell className="text-right tabular-nums">{formatCurrency(row.cgst, currency)}</TableCell>
               <TableCell className="text-right tabular-nums">{formatCurrency(row.sgst, currency)}</TableCell>
               <TableCell className="text-right tabular-nums">{formatCurrency(row.igst, currency)}</TableCell>
+              <TableCell className="text-xs text-muted-foreground">{row.irn ?? "—"}</TableCell>
               {showItc ? (
                 <TableCell>
                   <Badge variant={row.itcEligible ? "success" : "outline"}>{row.itcEligible ? "Yes" : "No"}</Badge>
@@ -148,6 +150,7 @@ function booksCsvRows(rows: GstReportsSnapshot["sales"]) {
     row.sgst,
     row.igst,
     row.taxAmount,
+    row.irn ?? "",
   ]);
 }
 
@@ -165,6 +168,7 @@ const BOOKS_CSV_HEADER = [
   "SGST",
   "IGST",
   "Total tax",
+  "IRN",
 ];
 
 const GSTR1_TABS: { value: "summary" | Gstr1TableId; label: string }[] = [

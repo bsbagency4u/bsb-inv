@@ -145,6 +145,10 @@ export type Warehouse = {
   name: string;
   code: string;
   address: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  phone?: string | null;
+  email?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -157,9 +161,16 @@ export type StockLocation = {
   parent_id: string | null;
   name: string;
   code: string;
+  kind?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type WarehouseUser = {
+  warehouse_id: string;
+  user_id: string;
+  created_at: string;
 }
 
 export type ProductVariant = {
@@ -235,9 +246,12 @@ export type ProductBatch = {
   business_id: string;
   product_id: string;
   batch_no: string;
+  manufacturing_date?: string | null;
   expiry_date: string | null;
   mrp: number | null;
   purchase_price: number | null;
+  supplier_id?: string | null;
+  purchase_invoice_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -415,6 +429,131 @@ export type StockBalanceView = {
   last_movement_at: string | null;
 }
 
+export type StockTransfer = {
+  id: string;
+  business_id: string;
+  transfer_no: string;
+  status: string;
+  from_warehouse_id: string;
+  from_location_id: string | null;
+  to_warehouse_id: string;
+  to_location_id: string | null;
+  requested_by: string | null;
+  dispatched_by: string | null;
+  received_by: string | null;
+  requested_at: string;
+  dispatched_at: string | null;
+  received_at: string | null;
+  notes: string | null;
+  shortage_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StockTransferItem = {
+  id: string;
+  transfer_id: string;
+  product_id: string;
+  variant_id: string | null;
+  batch_id: string | null;
+  quantity: number;
+  dispatched_quantity: number;
+  received_quantity: number;
+  shortage_quantity: number;
+  unit: string | null;
+  notes: string | null;
+}
+
+export type StockAdjustment = {
+  id: string;
+  business_id: string;
+  adjustment_no: string;
+  status: string;
+  reason: string;
+  warehouse_id: string | null;
+  location_id: string | null;
+  notes: string | null;
+  requested_by: string | null;
+  approved_by: string | null;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StockAdjustmentItem = {
+  id: string;
+  adjustment_id: string;
+  product_id: string;
+  variant_id: string | null;
+  batch_id: string | null;
+  change: number;
+  unit: string | null;
+  notes: string | null;
+}
+
+export type StockCount = {
+  id: string;
+  business_id: string;
+  count_no: string;
+  status: string;
+  warehouse_id: string;
+  location_id: string | null;
+  notes: string | null;
+  counted_by: string | null;
+  approved_by: string | null;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type StockCountItem = {
+  id: string;
+  count_id: string;
+  product_id: string;
+  variant_id: string | null;
+  batch_id: string | null;
+  system_quantity: number;
+  counted_quantity: number | null;
+  unit: string | null;
+  notes: string | null;
+}
+
+export type StockReservation = {
+  id: string;
+  business_id: string;
+  product_id: string;
+  variant_id: string | null;
+  batch_id: string | null;
+  warehouse_id: string | null;
+  location_id: string | null;
+  quantity: number;
+  status: string;
+  reference_type: string;
+  reference_id: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ProductSerial = {
+  id: string;
+  business_id: string;
+  product_id: string;
+  variant_id: string | null;
+  serial_no: string;
+  imei: string | null;
+  warranty_months: number | null;
+  warranty_expires_on: string | null;
+  warehouse_id: string | null;
+  location_id: string | null;
+  batch_id: string | null;
+  status: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type PurchaseOrder = {
   id: string;
   business_id: string;
@@ -577,6 +716,84 @@ export type Notification = {
   created_at: string;
 }
 
+export type GstIrpCredential = {
+  business_id: string;
+  provider: string;
+  environment: string;
+  gstin: string | null;
+  username: string | null;
+  secret_ciphertext: string | null;
+  secret_iv: string | null;
+  last_validated_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GstEinvoice = {
+  id: string;
+  business_id: string;
+  document_kind: string;
+  document_id: string;
+  document_no: string;
+  document_date: string;
+  status: string;
+  irn: string | null;
+  ack_no: string | null;
+  ack_date: string | null;
+  signed_qr_code: string | null;
+  cancel_reason: string | null;
+  cancelled_at: string | null;
+  last_error: string | null;
+  request_hash: string | null;
+  payload: Record<string, unknown>;
+  response: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GstEwayBill = {
+  id: string;
+  business_id: string;
+  document_kind: string;
+  document_id: string;
+  document_no: string;
+  document_date: string;
+  status: string;
+  ewb_no: string | null;
+  ewb_date: string | null;
+  valid_upto: string | null;
+  trans_mode: string | null;
+  trans_doc_no: string | null;
+  trans_doc_date: string | null;
+  vehicle_no: string | null;
+  trans_distance: number | null;
+  from_place: string | null;
+  to_place: string | null;
+  cancel_reason: string | null;
+  cancelled_at: string | null;
+  last_error: string | null;
+  request_hash: string | null;
+  payload: Record<string, unknown>;
+  response: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GstComplianceAttempt = {
+  id: string;
+  business_id: string;
+  kind: string;
+  document_kind: string;
+  document_id: string;
+  action: string;
+  status: string;
+  request_hash: string | null;
+  error: string | null;
+  response: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface Database {
   public: {
     Tables: {
@@ -662,6 +879,12 @@ export interface Database {
         Row: StockLocation;
         Insert: Partial<StockLocation> & { business_id: string; warehouse_id: string; name: string; code: string };
         Update: Partial<StockLocation>;
+        Relationships: [];
+      };
+      warehouse_users: {
+        Row: WarehouseUser;
+        Insert: Partial<WarehouseUser> & { warehouse_id: string; user_id: string };
+        Update: Partial<WarehouseUser>;
         Relationships: [];
       };
       product_variants: {
@@ -806,6 +1029,78 @@ export interface Database {
         Row: SalesReturnItem;
         Insert: Partial<SalesReturnItem> & { return_id: string };
         Update: Partial<SalesReturnItem>;
+        Relationships: [];
+      };
+      gst_irp_credentials: {
+        Row: GstIrpCredential;
+        Insert: Partial<GstIrpCredential> & { business_id: string };
+        Update: Partial<GstIrpCredential>;
+        Relationships: [];
+      };
+      gst_einvoices: {
+        Row: GstEinvoice;
+        Insert: Partial<GstEinvoice> & { business_id: string; document_kind: string; document_id: string; document_no: string; document_date: string };
+        Update: Partial<GstEinvoice>;
+        Relationships: [];
+      };
+      gst_eway_bills: {
+        Row: GstEwayBill;
+        Insert: Partial<GstEwayBill> & { business_id: string; document_kind: string; document_id: string; document_no: string; document_date: string };
+        Update: Partial<GstEwayBill>;
+        Relationships: [];
+      };
+      gst_compliance_attempts: {
+        Row: GstComplianceAttempt;
+        Insert: Partial<GstComplianceAttempt> & { business_id: string; kind: string; document_kind: string; document_id: string; action: string };
+        Update: Partial<GstComplianceAttempt>;
+        Relationships: [];
+      };
+      stock_transfers: {
+        Row: StockTransfer;
+        Insert: Partial<StockTransfer> & { business_id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string };
+        Update: Partial<StockTransfer>;
+        Relationships: [];
+      };
+      stock_transfer_items: {
+        Row: StockTransferItem;
+        Insert: Partial<StockTransferItem> & { transfer_id: string; product_id: string; quantity: number };
+        Update: Partial<StockTransferItem>;
+        Relationships: [];
+      };
+      stock_adjustments: {
+        Row: StockAdjustment;
+        Insert: Partial<StockAdjustment> & { business_id: string; adjustment_no: string; reason: string };
+        Update: Partial<StockAdjustment>;
+        Relationships: [];
+      };
+      stock_adjustment_items: {
+        Row: StockAdjustmentItem;
+        Insert: Partial<StockAdjustmentItem> & { adjustment_id: string; product_id: string; change: number };
+        Update: Partial<StockAdjustmentItem>;
+        Relationships: [];
+      };
+      stock_counts: {
+        Row: StockCount;
+        Insert: Partial<StockCount> & { business_id: string; count_no: string; warehouse_id: string };
+        Update: Partial<StockCount>;
+        Relationships: [];
+      };
+      stock_count_items: {
+        Row: StockCountItem;
+        Insert: Partial<StockCountItem> & { count_id: string; product_id: string };
+        Update: Partial<StockCountItem>;
+        Relationships: [];
+      };
+      stock_reservations: {
+        Row: StockReservation;
+        Insert: Partial<StockReservation> & { business_id: string; product_id: string; quantity: number; reference_type: string; reference_id: string };
+        Update: Partial<StockReservation>;
+        Relationships: [];
+      };
+      product_serials: {
+        Row: ProductSerial;
+        Insert: Partial<ProductSerial> & { business_id: string; product_id: string; serial_no: string };
+        Update: Partial<ProductSerial>;
         Relationships: [];
       };
     };

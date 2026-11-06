@@ -24,6 +24,9 @@ import {
   Monitor,
   Archive,
   History,
+  ShieldCheck,
+  ClipboardList,
+  SlidersHorizontal,
 } from "lucide-react";
 
 export interface NavItem {
@@ -61,7 +64,9 @@ export const NAVIGATION: NavSection[] = [
         phase: 2,
       },
       { title: "Transfers", href: "/inventory/transfers", icon: Boxes, phase: 3 },
-      { title: "Barcode", href: "/inventory/barcode", icon: ScanBarcode, phase: 4 },
+      { title: "Adjustments", href: "/inventory/adjustments", icon: SlidersHorizontal, phase: 3 },
+      { title: "Stock counts", href: "/inventory/counts", icon: ClipboardList, phase: 3 },
+      { title: "Barcode", href: "/inventory/barcode", icon: ScanBarcode, phase: 3 },
     ],
   },
   {
@@ -87,6 +92,13 @@ export const NAVIGATION: NavSection[] = [
       { title: "Suppliers", href: "/suppliers", icon: Truck, phase: 2 },
       { title: "Payments", href: "/payments", icon: Wallet, phase: 2 },
       { title: "Outstanding", href: "/outstanding", icon: Receipt, phase: 2 },
+    ],
+  },
+  {
+    label: "GST Compliance",
+    items: [
+      { title: "E-Invoice", href: "/gst/einvoice", icon: ShieldCheck, phase: 2 },
+      { title: "E-Way Bill", href: "/gst/ewaybill", icon: Truck, phase: 2 },
     ],
   },
   {

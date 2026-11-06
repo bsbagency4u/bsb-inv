@@ -151,6 +151,26 @@ export interface PurchaseDefaults {
   defaultIntraState: boolean;
 }
 
+export interface InventoryDefaults {
+  allowNegativeStock: boolean;
+  reserveOnConfirm: boolean;
+  defaultWarehouseId: string | null;
+  defaultLocationId: string | null;
+  transferApproval: boolean;
+  adjustmentApproval: boolean;
+  countApproval: boolean;
+  batchTracking: boolean;
+  expiryTracking: boolean;
+  fefoPreferred: boolean;
+  nearExpiryDays: number;
+  barcodeEnabled: boolean;
+  labelWidthMm: number;
+  labelHeightMm: number;
+  labelsPerRow: number;
+  showMrpOnLabel: boolean;
+  showBatchOnLabel: boolean;
+}
+
 export interface TaxDefaults {
   gstEnabled: boolean;
   defaultGstRate: number;
@@ -318,10 +338,23 @@ export interface Warehouse {
   name: string;
   code: string;
   address: string | null;
+  state: string | null;
+  pincode: string | null;
+  phone: string | null;
+  email: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+export type StockLocationKind =
+  | "main_store"
+  | "godown"
+  | "rack"
+  | "shelf"
+  | "bin"
+  | "damaged"
+  | "quarantine";
 
 export interface StockLocation {
   id: string;
@@ -330,9 +363,17 @@ export interface StockLocation {
   parentId: string | null;
   name: string;
   code: string;
+  kind: StockLocationKind;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WarehouseAssignment {
+  warehouseId: string;
+  userId: string;
+  fullName: string | null;
+  email: string | null;
 }
 
 export interface ProductVariant {
@@ -431,9 +472,12 @@ export interface ProductBatch {
   businessId: string;
   productId: string;
   batchNo: string;
+  manufacturingDate: string | null;
   expiryDate: string | null;
   mrp: number | null;
   purchasePrice: number | null;
+  supplierId: string | null;
+  purchaseInvoiceId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -461,7 +505,178 @@ export type StockMovementType =
   | "ADJUSTMENT"
   | "TRANSFER_IN"
   | "TRANSFER_OUT"
-  | "SCRAP";
+  | "SCRAP"
+  | "COUNT";
+
+export type StockTransferStatus =
+  | "draft"
+  | "requested"
+  | "approved"
+  | "dispatched"
+  | "in_transit"
+  | "partially_received"
+  | "completed"
+  | "cancelled";
+
+export interface StockTransferItem {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  quantity: number;
+  dispatchedQuantity: number;
+  receivedQuantity: number;
+  shortageQuantity: number;
+  unit: string | null;
+  notes: string | null;
+}
+
+export interface StockTransfer {
+  id: string;
+  businessId: string;
+  transferNo: string;
+  status: StockTransferStatus;
+  fromWarehouseId: string;
+  fromLocationId: string | null;
+  toWarehouseId: string;
+  toLocationId: string | null;
+  requestedBy: string | null;
+  dispatchedBy: string | null;
+  receivedBy: string | null;
+  requestedAt: string;
+  dispatchedAt: string | null;
+  receivedAt: string | null;
+  notes: string | null;
+  shortageReason: string | null;
+  items: StockTransferItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockAdjustmentReasonCode =
+  | "physical_count"
+  | "damage"
+  | "expiry"
+  | "theft"
+  | "found"
+  | "opening_correction"
+  | "other";
+
+export type StockAdjustmentStatus = "draft" | "pending_approval" | "posted" | "cancelled";
+
+export interface StockAdjustmentItem {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  change: number;
+  unit: string | null;
+  notes: string | null;
+}
+
+export interface StockAdjustment {
+  id: string;
+  businessId: string;
+  adjustmentNo: string;
+  status: StockAdjustmentStatus;
+  reason: StockAdjustmentReasonCode;
+  warehouseId: string | null;
+  locationId: string | null;
+  notes: string | null;
+  requestedBy: string | null;
+  approvedBy: string | null;
+  postedAt: string | null;
+  items: StockAdjustmentItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockCountStatus =
+  | "draft"
+  | "counting"
+  | "review"
+  | "pending_approval"
+  | "posted"
+  | "cancelled";
+
+export interface StockCountItem {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  systemQuantity: number;
+  countedQuantity: number | null;
+  unit: string | null;
+  notes: string | null;
+}
+
+export interface StockCountSession {
+  id: string;
+  businessId: string;
+  countNo: string;
+  status: StockCountStatus;
+  warehouseId: string;
+  locationId: string | null;
+  notes: string | null;
+  countedBy: string | null;
+  approvedBy: string | null;
+  postedAt: string | null;
+  items: StockCountItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockReservationStatus = "open" | "consumed" | "released";
+
+export interface StockReservation {
+  id: string;
+  businessId: string;
+  productId: string;
+  variantId: string | null;
+  batchId: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
+  quantity: number;
+  status: StockReservationStatus;
+  referenceType: string;
+  referenceId: string;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProductSerialStatus = "in_stock" | "reserved" | "sold" | "returned" | "scrapped";
+
+export interface ProductSerial {
+  id: string;
+  businessId: string;
+  productId: string;
+  variantId: string | null;
+  serialNo: string;
+  imei: string | null;
+  warrantyMonths: number | null;
+  warrantyExpiresOn: string | null;
+  warehouseId: string | null;
+  locationId: string | null;
+  batchId: string | null;
+  status: ProductSerialStatus;
+  referenceType: string | null;
+  referenceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StockAvailability {
+  productId: string;
+  warehouseId: string | null;
+  locationId: string | null;
+  batchId: string | null;
+  physical: number;
+  reserved: number;
+  inTransit: number;
+  blocked: number;
+  available: number;
+}
 
 export type StockMovementReason =
   | "opening"
@@ -809,4 +1024,77 @@ export interface GstReportRow {
   cgst: number;
   sgst: number;
   igst: number;
+}
+
+export type EinvoiceStatus = "pending" | "generated" | "cancelled" | "failed";
+export type EwayBillStatus = "pending" | "generated" | "cancelled" | "failed";
+export type GstIrpDocumentKind = "sales_invoice" | "sales_return";
+export type GstIrpEnvironment = "sandbox" | "production";
+
+export interface GstEinvoiceRecord {
+  id: string;
+  businessId: string;
+  documentKind: GstIrpDocumentKind;
+  documentId: string;
+  documentNo: string;
+  documentDate: string;
+  status: EinvoiceStatus;
+  irn: string | null;
+  ackNo: string | null;
+  ackDate: string | null;
+  signedQrCode: string | null;
+  cancelReason: string | null;
+  cancelledAt: string | null;
+  lastError: string | null;
+  requestHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GstEwayBillRecord {
+  id: string;
+  businessId: string;
+  documentKind: GstIrpDocumentKind;
+  documentId: string;
+  documentNo: string;
+  documentDate: string;
+  status: EwayBillStatus;
+  ewbNo: string | null;
+  ewbDate: string | null;
+  validUpto: string | null;
+  transMode: string | null;
+  transDocNo: string | null;
+  transDocDate: string | null;
+  vehicleNo: string | null;
+  transDistance: number | null;
+  fromPlace: string | null;
+  toPlace: string | null;
+  cancelReason: string | null;
+  cancelledAt: string | null;
+  lastError: string | null;
+  requestHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GstIrpCredentialPublic {
+  configured: boolean;
+  provider: string;
+  environment: GstIrpEnvironment;
+  gstin: string | null;
+  usernameMasked: string | null;
+  lastValidatedAt: string | null;
+  lastError: string | null;
+}
+
+export interface GstComplianceAttempt {
+  id: string;
+  businessId: string;
+  kind: "einvoice" | "ewaybill";
+  documentKind: GstIrpDocumentKind;
+  documentId: string;
+  action: string;
+  status: "queued" | "success" | "failed";
+  error: string | null;
+  createdAt: string;
 }

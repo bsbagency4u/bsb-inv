@@ -39,6 +39,7 @@ export interface GstBooksLine {
   invoiceValue: number;
   intraState: boolean;
   locked: boolean;
+  irn?: string | null;
 }
 
 export interface GstPortalLine {
@@ -183,6 +184,7 @@ export function salesBooksLine(
     invoiceValue: roundMoney(invoice.total),
     intraState: invoice.intraState ?? true,
     locked: documentIsLocked(lockSettings, invoice.invoiceDate, invoice.status, now),
+    irn: null,
   };
 }
 
@@ -216,6 +218,7 @@ export function purchaseBooksLine(
     invoiceValue: roundMoney(invoice.total),
     intraState: invoice.intraState ?? true,
     locked: documentIsLocked(lockSettings, invoice.invoiceDate, invoice.status, now),
+    irn: null,
   };
 }
 
@@ -272,6 +275,7 @@ export function salesReturnCreditNotes(
         invoiceValue: roundMoney(item.total),
         intraState,
         locked: false,
+        irn: null,
       };
     });
 }

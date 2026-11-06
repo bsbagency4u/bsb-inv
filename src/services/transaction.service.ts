@@ -50,6 +50,7 @@ import { InventoryService } from "./inventory.service";
 import type { AuditService } from "./audit.service";
 import type { NotificationService } from "./notification.service";
 import { AuthorizationService } from "./authorization.service";
+import { GstComplianceService } from "./compliance.service";
 import { parseTaxDefaults, TAX_KEY } from "./business.service";
 import type { TaxDefaults } from "@/types/domain";
 import {
@@ -208,6 +209,7 @@ export class TransactionService {
   private inventory: InventoryService;
   private auth: AuthorizationService;
   private documents: DocumentControlService;
+  private compliance: GstComplianceService;
 
   constructor(
     private repos: Repositories,
@@ -218,6 +220,7 @@ export class TransactionService {
     this.auth = auth ?? new AuthorizationService(repos);
     this.inventory = new InventoryService(repos, audits, notifications, this.auth);
     this.documents = new DocumentControlService(repos, this.auth);
+    this.compliance = new GstComplianceService(repos, audits, this.auth);
   }
 
   private async taxComputeOptions(
@@ -885,6 +888,9 @@ export class TransactionService {
   ): Promise<{ invoice: SalesInvoice; totals: InvoiceTotals }> {
     const existing = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!existing) throw AppError.notFound("Invoice not found.");
+    if (this.repos.compliance) {
+      await this.compliance.assertInvoiceMutable(businessId, invoiceId);
+    }
     const guard = await this.guardDocument(businessId, userId, {
       kind: "sales_invoice",
       action: "edit",
@@ -1000,6 +1006,9 @@ export class TransactionService {
   ): Promise<void> {
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Invoice not found.");
+    if (this.repos.compliance) {
+      await this.compliance.assertInvoiceMutable(businessId, invoiceId);
+    }
     const guard = await this.guardDocument(businessId, userId, {
       kind: "sales_invoice",
       action: "delete",
@@ -1035,6 +1044,9 @@ export class TransactionService {
     const invoice = await this.repos.transactions.getSalesInvoice(businessId, invoiceId);
     if (!invoice) throw AppError.notFound("Invoice not found.");
     if (invoice.status === "cancelled") return;
+    if (this.repos.compliance) {
+      await this.compliance.assertInvoiceMutable(businessId, invoiceId);
+    }
     const guard = await this.guardDocument(businessId, userId, {
       kind: "sales_invoice",
       action: "cancel",

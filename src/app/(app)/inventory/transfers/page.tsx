@@ -28,6 +28,29 @@ import { ErrorState } from "@/components/states/error-state";
 import { useToast } from "@/components/ui/toast";
 import { normalizeError } from "@/lib/errors";
 import { formatDateTime } from "@/lib/utils";
+import type { StockTransfer, StockTransferStatus } from "@/types/domain";
+
+const STATUS_LABEL: Record<StockTransferStatus, string> = {
+  draft: "Draft",
+  requested: "Requested",
+  approved: "Approved",
+  dispatched: "Dispatched",
+  in_transit: "In transit",
+  partially_received: "Partial",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+const STATUS_VARIANT: Record<StockTransferStatus, "secondary" | "warning" | "success" | "destructive"> = {
+  draft: "secondary",
+  requested: "warning",
+  approved: "warning",
+  dispatched: "warning",
+  in_transit: "warning",
+  partially_received: "warning",
+  completed: "success",
+  cancelled: "destructive",
+};
 
 export default function StockTransfersPage() {
   const { user, business } = useSession();
@@ -41,6 +64,10 @@ export default function StockTransfersPage() {
   const [fromWarehouseId, setFromWarehouseId] = React.useState("");
   const [toWarehouseId, setToWarehouseId] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [active, setActive] = React.useState<StockTransfer | null>(null);
+  const [receiveQty, setReceiveQty] = React.useState<Record<string, string>>({});
+  const [shortageReason, setShortageReason] = React.useState("");
+  const [acting, setActing] = React.useState(false);
 
   const { data: products, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["products-with-stock", business?.id],
@@ -60,31 +87,30 @@ export default function StockTransfersPage() {
     enabled: Boolean(business),
   });
 
-  const { data: movements } = useQuery({
-    queryKey: ["stock-movements", business?.id],
+  const { data: transfers } = useQuery({
+    queryKey: ["stock-transfers", business?.id],
     queryFn: async () => {
       if (!business) throw new Error("No active business.");
-      return getClientServices().inventory.listMovements(business.id, undefined, 200);
+      return getClientServices().inventory.listTransfers(business.id);
     },
     enabled: Boolean(business),
   });
 
-  const transfers = React.useMemo(() => {
-    const rows = (movements ?? []).filter(
-      (movement) =>
-        movement.movementType === "TRANSFER_IN" || movement.movementType === "TRANSFER_OUT"
-    );
+  const rows = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((movement) => {
-      const product = products?.find((p) => p.id === movement.productId);
+    const list = transfers ?? [];
+    if (!q) return list;
+    return list.filter((transfer) => {
+      const from = warehouses?.find((w) => w.id === transfer.fromWarehouseId)?.name ?? "";
+      const to = warehouses?.find((w) => w.id === transfer.toWarehouseId)?.name ?? "";
       return (
-        (product?.name ?? "").toLowerCase().includes(q) ||
-        (product?.sku ?? "").toLowerCase().includes(q) ||
-        (movement.notes ?? "").toLowerCase().includes(q)
+        transfer.transferNo.toLowerCase().includes(q) ||
+        from.toLowerCase().includes(q) ||
+        to.toLowerCase().includes(q) ||
+        (transfer.notes ?? "").toLowerCase().includes(q)
       );
     });
-  }, [movements, products, search]);
+  }, [search, transfers, warehouses]);
 
   const resetForm = () => {
     setProductId(products?.[0]?.id ?? "");
@@ -94,9 +120,12 @@ export default function StockTransfersPage() {
     setNotes("");
   };
 
-  const openForm = () => {
-    resetForm();
-    setFormOpen(true);
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+    await queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
+    await queryClient.invalidateQueries({ queryKey: ["stock-balances"] });
+    await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
+    await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
   };
 
   const submit = async () => {
@@ -116,23 +145,34 @@ export default function StockTransfersPage() {
     }
     setSaving(true);
     try {
-      await getClientServices().inventory.transferStock(business.id, user.id, {
-        productId,
-        quantity: qty,
+      await getClientServices().inventory.requestTransfer(business.id, user.id, {
         fromWarehouseId,
         toWarehouseId,
         notes: notes || null,
+        items: [{ productId, quantity: qty }],
       });
-      toastSuccess("Stock transferred", "Transfer movements were recorded.");
+      toastSuccess("Transfer requested", "The transfer was saved.");
       setFormOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["stock-movements"] });
-      await queryClient.invalidateQueries({ queryKey: ["stock-balances"] });
-      await queryClient.invalidateQueries({ queryKey: ["products-with-stock"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      await invalidate();
     } catch (err) {
-      toastError("Could not transfer stock", normalizeError(err).userMessage);
+      toastError("Could not request transfer", normalizeError(err).userMessage);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runAction = async (label: string, fn: () => Promise<unknown>) => {
+    if (!business || !user) return;
+    setActing(true);
+    try {
+      await fn();
+      toastSuccess(label, "The transfer was updated.");
+      setActive(null);
+      await invalidate();
+    } catch (err) {
+      toastError("Could not update transfer", normalizeError(err).userMessage);
+    } finally {
+      setActing(false);
     }
   };
 
@@ -151,9 +191,14 @@ export default function StockTransfersPage() {
     <div>
       <PageHeader
         title="Stock Transfers"
-        description="Move stock between warehouses. Each transfer writes a matched pair of ledger movements."
+        description="Request, dispatch and receive stock. Quantity leaves the source on dispatch and arrives on receive."
         actions={
-          <Button onClick={openForm}>
+          <Button
+            onClick={() => {
+              resetForm();
+              setFormOpen(true);
+            }}
+          >
             <Repeat className="size-4" />
             New transfer
           </Button>
@@ -171,57 +216,72 @@ export default function StockTransfersPage() {
             aria-label="Search transfers"
           />
           <span className="shrink-0 text-xs text-muted-foreground">
-            {transfers.length} {transfers.length === 1 ? "movement" : "movements"}
+            {rows.length} {rows.length === 1 ? "transfer" : "transfers"}
           </span>
         </div>
 
-        {transfers.length === 0 ? (
+        {rows.length === 0 ? (
           <EmptyState
             icon={<ArrowRightLeft className="size-6" />}
             title="No transfers yet"
             description="Transfer stock between warehouses. You need at least two warehouses."
-            action={{ label: "New transfer", onClick: openForm }}
+            action={{
+              label: "New transfer",
+              onClick: () => {
+                resetForm();
+                setFormOpen(true);
+              },
+            }}
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>No</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>From</TableHead>
+                  <TableHead>To</TableHead>
+                  <TableHead className="text-right">Lines</TableHead>
                   <TableHead>When</TableHead>
-                  <TableHead>Product</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Warehouse</TableHead>
-                  <TableHead className="text-right">Qty</TableHead>
-                  <TableHead>Notes</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {transfers.map((movement) => {
-                  const product = products?.find((p) => p.id === movement.productId);
-                  const warehouse = warehouses?.find((w) => w.id === movement.warehouseId);
-                  const outbound = movement.movementType === "TRANSFER_OUT";
+                {rows.map((transfer) => {
+                  const from = warehouses?.find((w) => w.id === transfer.fromWarehouseId);
+                  const to = warehouses?.find((w) => w.id === transfer.toWarehouseId);
                   return (
-                    <TableRow key={movement.id}>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDateTime(movement.createdAt)}
-                      </TableCell>
-                      <TableCell className="font-medium text-foreground">
-                        {product?.name ?? movement.productId}
-                      </TableCell>
+                    <TableRow key={transfer.id}>
+                      <TableCell className="font-mono text-xs">{transfer.transferNo}</TableCell>
                       <TableCell>
-                        <Badge variant={outbound ? "warning" : "success"}>
-                          {outbound ? "Out" : "In"}
-                        </Badge>
+                        <Badge variant={STATUS_VARIANT[transfer.status]}>{STATUS_LABEL[transfer.status]}</Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {warehouse?.name ?? "Unassigned"}
+                      <TableCell>{from?.name ?? transfer.fromWarehouseId}</TableCell>
+                      <TableCell>{to?.name ?? transfer.toWarehouseId}</TableCell>
+                      <TableCell className="text-right tabular-nums">{transfer.items.length}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {formatDateTime(transfer.requestedAt)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {movement.change > 0 ? "+" : ""}
-                        {movement.change}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {movement.notes ?? "—"}
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setActive(transfer);
+                            setShortageReason(transfer.shortageReason ?? "");
+                            setReceiveQty(
+                              Object.fromEntries(
+                                transfer.items.map((item) => [
+                                  item.id,
+                                  String(Math.max(0, item.dispatchedQuantity - item.receivedQuantity)),
+                                ])
+                              )
+                            );
+                          }}
+                        >
+                          Open
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
@@ -235,8 +295,8 @@ export default function StockTransfersPage() {
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title="Transfer stock"
-        description="Source and destination warehouses must differ."
+        title="Request transfer"
+        description="Source and destination warehouses must differ. Stock leaves the source only when dispatched."
         size="md"
         footer={
           <>
@@ -244,18 +304,14 @@ export default function StockTransfersPage() {
               Cancel
             </Button>
             <Button onClick={() => void submit()} loading={saving}>
-              Transfer
+              Request transfer
             </Button>
           </>
         }
       >
         <div className="space-y-4">
           <Field label="Product" htmlFor="transfer-product" required>
-            <Select
-              id="transfer-product"
-              value={productId}
-              onChange={(event) => setProductId(event.target.value)}
-            >
+            <Select id="transfer-product" value={productId} onChange={(event) => setProductId(event.target.value)}>
               <option value="">Select product</option>
               {(products ?? []).map((product) => (
                 <option key={product.id} value={product.id}>
@@ -276,11 +332,7 @@ export default function StockTransfersPage() {
             />
           </Field>
           <Field label="From warehouse" htmlFor="transfer-from" required>
-            <Select
-              id="transfer-from"
-              value={fromWarehouseId}
-              onChange={(event) => setFromWarehouseId(event.target.value)}
-            >
+            <Select id="transfer-from" value={fromWarehouseId} onChange={(event) => setFromWarehouseId(event.target.value)}>
               <option value="">Select source</option>
               {(warehouses ?? []).map((warehouse) => (
                 <option key={warehouse.id} value={warehouse.id}>
@@ -290,11 +342,7 @@ export default function StockTransfersPage() {
             </Select>
           </Field>
           <Field label="To warehouse" htmlFor="transfer-to" required>
-            <Select
-              id="transfer-to"
-              value={toWarehouseId}
-              onChange={(event) => setToWarehouseId(event.target.value)}
-            >
+            <Select id="transfer-to" value={toWarehouseId} onChange={(event) => setToWarehouseId(event.target.value)}>
               <option value="">Select destination</option>
               {(warehouses ?? []).map((warehouse) => (
                 <option key={warehouse.id} value={warehouse.id}>
@@ -312,6 +360,130 @@ export default function StockTransfersPage() {
             />
           </Field>
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(active)}
+        onClose={() => setActive(null)}
+        title={active ? `Transfer ${active.transferNo}` : "Transfer"}
+        description="Dispatch removes stock from the source. Receive posts it at the destination."
+        size="lg"
+        footer={
+          active ? (
+            <>
+              <Button variant="outline" onClick={() => setActive(null)}>
+                Close
+              </Button>
+              {active.status === "requested" || active.status === "draft" || active.status === "approved" ? (
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void runAction("Transfer cancelled", () =>
+                      getClientServices().inventory.cancelTransfer(business!.id, user!.id, active.id)
+                    )
+                  }
+                  loading={acting}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {active.status === "requested" || active.status === "draft" ? (
+                <Button
+                  onClick={() =>
+                    void runAction("Transfer approved", () =>
+                      getClientServices().inventory.approveTransfer(business!.id, user!.id, active.id)
+                    )
+                  }
+                  loading={acting}
+                >
+                  Approve
+                </Button>
+              ) : null}
+              {active.status === "approved" || active.status === "requested" || active.status === "draft" ? (
+                <Button
+                  onClick={() =>
+                    void runAction("Transfer dispatched", () =>
+                      getClientServices().inventory.dispatchTransfer(business!.id, user!.id, active.id)
+                    )
+                  }
+                  loading={acting}
+                >
+                  Dispatch
+                </Button>
+              ) : null}
+              {active.status === "in_transit" || active.status === "dispatched" || active.status === "partially_received" ? (
+                <Button
+                  onClick={() =>
+                    void runAction("Transfer received", () =>
+                      getClientServices().inventory.receiveTransfer(business!.id, user!.id, active.id, {
+                        shortageReason: shortageReason || null,
+                        items: active.items.map((item) => ({
+                          itemId: item.id,
+                          receivedQuantity: Number(receiveQty[item.id] || 0),
+                        })),
+                      })
+                    )
+                  }
+                  loading={acting}
+                >
+                  Receive
+                </Button>
+              ) : null}
+            </>
+          ) : null
+        }
+      >
+        {active ? (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {STATUS_LABEL[active.status]} · {active.items.length} line{active.items.length === 1 ? "" : "s"}
+            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Product</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="text-right">Dispatched</TableHead>
+                  <TableHead className="text-right">Received</TableHead>
+                  <TableHead className="text-right">This receipt</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {active.items.map((item) => {
+                  const product = products?.find((p) => p.id === item.productId);
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell>{product?.name ?? item.productId}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.quantity}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.dispatchedQuantity}</TableCell>
+                      <TableCell className="text-right tabular-nums">{item.receivedQuantity}</TableCell>
+                      <TableCell className="text-right">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="any"
+                          value={receiveQty[item.id] ?? "0"}
+                          onChange={(event) =>
+                            setReceiveQty((current) => ({ ...current, [item.id]: event.target.value }))
+                          }
+                          className="ml-auto w-24"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <Field label="Shortage reason" htmlFor="transfer-shortage">
+              <Textarea
+                id="transfer-shortage"
+                value={shortageReason}
+                onChange={(event) => setShortageReason(event.target.value)}
+                placeholder="Required when receiving less than dispatched"
+              />
+            </Field>
+          </div>
+        ) : null}
       </Modal>
     </div>
   );

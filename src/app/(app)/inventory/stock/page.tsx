@@ -41,6 +41,7 @@ const MOVEMENT_LABELS: Record<StockMovementType, string> = {
   TRANSFER_IN: "Transfer in",
   TRANSFER_OUT: "Transfer out",
   SCRAP: "Scrap",
+  COUNT: "Count",
 };
 
 type StockTab = "levels" | "ledger";

@@ -3,6 +3,7 @@ import type { Repositories } from "@/repositories/types";
 import type {
   AuditEvent,
   BusinessProfile,
+  GstEinvoiceRecord,
   GstSupplyType,
   Product,
   ProductBatch,
@@ -76,6 +77,7 @@ function memoryRepositories() {
   const salesReturns: unknown[] = [];
   const settings = new Map<string, unknown>();
   const suppliers: Supplier[] = [];
+  const einvoices: GstEinvoiceRecord[] = [];
   const paymentModes: Array<{ id: string; businessId: string; code: string; name: string; isActive: boolean; sortOrder: number; createdAt: string; updatedAt: string }> = [
     { id: "m-cash", businessId: "b-1", code: "cash", name: "Cash", isActive: true, sortOrder: 10, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: "m-upi", businessId: "b-1", code: "upi", name: "UPI", isActive: true, sortOrder: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
@@ -144,9 +146,12 @@ function memoryRepositories() {
           businessId,
           productId: input.productId,
           batchNo: input.batchNo,
+          manufacturingDate: null,
           expiryDate: input.expiryDate ?? null,
           mrp: input.mrp ?? null,
           purchasePrice: input.purchasePrice ?? null,
+          supplierId: null,
+          purchaseInvoiceId: null,
           createdAt: now,
           updatedAt: now,
         };
@@ -265,6 +270,26 @@ function memoryRepositories() {
       async createLocation() { throw new Error("not used"); },
       async updateLocation() { throw new Error("not used"); },
       async deleteLocation() {},
+      async listWarehouseAssignments() { return []; },
+      async setWarehouseAssignments() { return []; },
+      async listTransfers() { return []; },
+      async getTransfer() { return null; },
+      async createTransfer() { throw new Error("not used"); },
+      async updateTransfer() { throw new Error("not used"); },
+      async listAdjustments() { return []; },
+      async getAdjustment() { return null; },
+      async createAdjustment() { throw new Error("not used"); },
+      async updateAdjustment() { throw new Error("not used"); },
+      async listCounts() { return []; },
+      async getCount() { return null; },
+      async createCount() { throw new Error("not used"); },
+      async updateCount() { throw new Error("not used"); },
+      async listReservations() { return []; },
+      async createReservation() { throw new Error("not used"); },
+      async updateReservationStatus() { throw new Error("not used"); },
+      async listSerials() { return []; },
+      async createSerial() { throw new Error("not used"); },
+      async updateSerial() { throw new Error("not used"); },
     },
     parties: {
       async listCustomers() { return []; },
@@ -739,9 +764,44 @@ function memoryRepositories() {
       async removeMember() {},
       async getMemberPermissions() { return [...memberPermissions]; },
     },
+    compliance: {
+      async getCredentialPublic() {
+        return {
+          configured: false,
+          provider: "nic",
+          environment: "sandbox" as const,
+          gstin: null,
+          usernameMasked: null,
+          lastValidatedAt: null,
+          lastError: null,
+        };
+      },
+      async getCredentialSecret() { return null; },
+      async upsertCredentials() {
+        return {
+          configured: true,
+          provider: "nic",
+          environment: "sandbox" as const,
+          gstin: null,
+          usernameMasked: null,
+          lastValidatedAt: null,
+          lastError: null,
+        };
+      },
+      async listEinvoices() { return einvoices; },
+      async getEinvoice(_b: string, documentKind: GstEinvoiceRecord["documentKind"], documentId: string) {
+        return einvoices.find((item) => item.documentKind === documentKind && item.documentId === documentId) ?? null;
+      },
+      async upsertEinvoice() { throw new Error("not used"); },
+      async listEwayBills() { return []; },
+      async getEwayBill() { return null; },
+      async upsertEwayBill() { throw new Error("not used"); },
+      async listAttempts() { return []; },
+      async addAttempt() { throw new Error("not used"); },
+    },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions, suppliers };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions, suppliers, einvoices };
 }
 
 describe("TransactionService", () => {
@@ -2096,6 +2156,76 @@ describe("TransactionService", () => {
       });
       expect(invoice.itcEligible).toBe(false);
       expect(invoice.taxTotal).toBe(0);
+    });
+
+    it("locks a posted invoice after a generated IRN", async () => {
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-IRN", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      services.einvoices.push({
+        id: "einvoice-1",
+        businessId: "b-1",
+        documentKind: "sales_invoice",
+        documentId: invoice.id,
+        documentNo: invoice.invoiceNo,
+        documentDate: invoice.invoiceDate,
+        status: "generated",
+        irn: "irn-generated-value",
+        ackNo: "1",
+        ackDate: invoice.invoiceDate,
+        signedQrCode: "qr",
+        cancelReason: null,
+        cancelledAt: null,
+        lastError: null,
+        requestHash: "h1",
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+      });
+      await expect(
+        transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+          items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 18 }],
+        })
+      ).rejects.toThrow(/generated IRN/i);
+      await expect(transactions.cancelSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/generated IRN/i);
+      await expect(transactions.deleteSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/generated IRN/i);
+    });
+
+    it("does not lock a posted invoice while the IRN is still pending", async () => {
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-GST-IRN-P", {
+        items: [{ productId: product.id, quantity: 10, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-IRN-P", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      services.einvoices.push({
+        id: "einvoice-pending",
+        businessId: "b-1",
+        documentKind: "sales_invoice",
+        documentId: invoice.id,
+        documentNo: invoice.invoiceNo,
+        documentDate: invoice.invoiceDate,
+        status: "pending",
+        irn: null,
+        ackNo: null,
+        ackDate: null,
+        signedQrCode: null,
+        cancelReason: null,
+        cancelledAt: null,
+        lastError: null,
+        requestHash: "h-pending",
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+      });
+      const updated = await transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+        notes: "pending IRN still editable",
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      expect(updated.invoice.notes).toBe("pending IRN still editable");
     });
 
     it("snapshots taxable value after discounts on a sale", async () => {

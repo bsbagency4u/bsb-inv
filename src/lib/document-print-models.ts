@@ -1,5 +1,7 @@
 import type {
   Customer,
+  GstEinvoiceRecord,
+  GstEwayBillRecord,
   LineItem,
   Payment,
   ProductWithStock,
@@ -40,6 +42,23 @@ function lineFromItem(item: LineItem, product?: ProductWithStock | null): PrintL
   };
 }
 
+function officialPrintMeta(
+  einvoice?: GstEinvoiceRecord | null,
+  ewayBill?: GstEwayBillRecord | null
+): Pick<PrintDocumentModel, "irn" | "ackNo" | "ackDate" | "signedQrCode" | "ewbNo" | "ewbDate" | "ewbValidUpto"> {
+  const irnReady = einvoice?.status === "generated" && einvoice.irn && einvoice.signedQrCode;
+  const ewbReady = ewayBill?.status === "generated" && ewayBill.ewbNo;
+  return {
+    irn: irnReady ? einvoice.irn : null,
+    ackNo: irnReady ? einvoice.ackNo : null,
+    ackDate: irnReady ? einvoice.ackDate : null,
+    signedQrCode: irnReady ? einvoice.signedQrCode : null,
+    ewbNo: ewbReady ? ewayBill.ewbNo : null,
+    ewbDate: ewbReady ? ewayBill.ewbDate : null,
+    ewbValidUpto: ewbReady ? ewayBill.validUpto : null,
+  };
+}
+
 export function salesInvoicePrintModel(
   invoice: SalesInvoice,
   options: {
@@ -47,6 +66,8 @@ export function salesInvoicePrintModel(
     partyGstin?: string | null;
     partyPhone?: string | null;
     products?: ProductWithStock[] | null;
+    einvoice?: GstEinvoiceRecord | null;
+    ewayBill?: GstEwayBillRecord | null;
   }
 ): PrintDocumentModel {
   const byId = productLookup(options.products);
@@ -71,6 +92,7 @@ export function salesInvoicePrintModel(
     placeOfSupplyState: invoice.placeOfSupplyState ?? null,
     reverseCharge: invoice.reverseCharge ?? false,
     ...gstPrintMeta(invoice.intraState, invoice.taxTotal),
+    ...officialPrintMeta(options.einvoice, options.ewayBill),
   };
 }
 
@@ -114,6 +136,7 @@ export function salesReturnPrintModel(
     partyGstin?: string | null;
     partyPhone?: string | null;
     products?: ProductWithStock[] | null;
+    einvoice?: GstEinvoiceRecord | null;
   }
 ): PrintDocumentModel {
   const byId = productLookup(options.products);
@@ -144,6 +167,7 @@ export function salesReturnPrintModel(
     discount: 0,
     taxTotal: 0,
     total: item.total,
+    ...officialPrintMeta(options.einvoice, null),
   };
 }
 

@@ -15,6 +15,7 @@ import { ReportService } from "./report.service";
 import { NotificationService } from "./notification.service";
 import { StorageService } from "./storage.service";
 import { GstEngine } from "./gst.service";
+import { GstComplianceService } from "./compliance.service";
 import { TeamService } from "./team.service";
 import { AuthorizationService } from "./authorization.service";
 
@@ -35,6 +36,7 @@ export interface Services {
   reports: ReportService;
   notifications: NotificationService;
   gst: GstEngine;
+  compliance: GstComplianceService;
   team: TeamService;
   authorization: AuthorizationService;
 }
@@ -67,6 +69,7 @@ function buildServices(repos: Repositories): Services {
     reports: new ReportService(repos),
     notifications,
     gst: new GstEngine(),
+    compliance: new GstComplianceService(repos, audits, authorization),
     team: new TeamService(repos, audits),
     authorization,
   };

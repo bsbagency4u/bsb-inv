@@ -340,8 +340,18 @@ export class ReportService {
   async gstReportsSnapshot(businessId: string, period: ReportPeriod): Promise<GstReportsSnapshot> {
     const snapshot = await this.financeSnapshot(businessId, period);
     const books = await this.ledger.loadBooks(businessId);
-    const split = splitB2bB2c(snapshot.salesGst);
-    const debitNotes = debitNoteLines(snapshot.salesGst, snapshot.purchaseGst);
+    const einvoices = this.repos.compliance ? await this.repos.compliance.listEinvoices(businessId) : [];
+    const irnByKey = new Map(
+      einvoices
+        .filter((item) => item.status === "generated" && item.irn)
+        .map((item) => [`${item.documentKind}:${item.documentId}`, item.irn as string])
+    );
+    const withIrn = (lines: GstBooksLine[], kind: "sales_invoice" | "sales_return") =>
+      lines.map((line) => ({ ...line, irn: irnByKey.get(`${kind}:${line.id}`) ?? null }));
+    const sales = withIrn(snapshot.salesGst, "sales_invoice");
+    const creditNotes = withIrn(snapshot.creditNotes, "sales_return");
+    const split = splitB2bB2c(sales);
+    const debitNotes = debitNoteLines(sales, snapshot.purchaseGst);
     const hsn = hsnFromInvoices(books.sales, period);
     const documentSeries = [
       ...documentSeriesFromInvoices(books.sales, period, "Invoices for outward supply"),
@@ -356,8 +366,8 @@ export class ReportService {
       ),
     ];
     const gstr1 = buildGstr1Prep({
-      sales: snapshot.salesGst,
-      creditNotes: snapshot.creditNotes,
+      sales,
+      creditNotes,
       debitNotes,
       hsn,
       docs: documentSeries,
@@ -366,23 +376,23 @@ export class ReportService {
       period,
       registrationType: snapshot.registrationType,
       filing: snapshot.filing,
-      sales: snapshot.salesGst,
+      sales,
       purchases: snapshot.purchaseGst,
-      creditNotes: snapshot.creditNotes,
+      creditNotes,
       debitNotes,
       salesTotals: snapshot.salesGstTotals,
       purchaseTotals: snapshot.purchaseGstTotals,
-      creditTotals: gstTotals(snapshot.creditNotes),
+      creditTotals: gstTotals(creditNotes),
       gstr1,
       gstr3b: buildGstr3bPrep({
-        sales: snapshot.salesGst,
-        creditNotes: snapshot.creditNotes,
+        sales,
+        creditNotes,
         purchaseTotals: snapshot.purchaseGstTotals,
         itcAllowed: snapshot.filing.itcAllowed,
         gstr1,
       }),
-      gstr4: buildGstr4({ sales: snapshot.salesGst, purchases: snapshot.purchaseGst }),
-      cmp08: buildCmp08({ sales: snapshot.salesGst, purchases: snapshot.purchaseGst }),
+      gstr4: buildGstr4({ sales, purchases: snapshot.purchaseGst }),
+      cmp08: buildCmp08({ sales, purchases: snapshot.purchaseGst }),
       hsn,
       rateWise: rateWiseFromInvoices(books.sales, period),
       b2b: split.b2b,
@@ -391,7 +401,7 @@ export class ReportService {
       b2cTotals: split.b2cTotals,
       rcm: rcmLines(snapshot.purchaseGst),
       nilExempt: nilExemptFromInvoices(books.sales, period),
-      placeOfSupply: placeOfSupplyFromLines(snapshot.salesGst),
+      placeOfSupply: placeOfSupplyFromLines(sales),
       documentSeries,
       lockedSalesCount: snapshot.lockedSalesCount,
       lockedPurchaseCount: snapshot.lockedPurchaseCount,

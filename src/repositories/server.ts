@@ -9,6 +9,7 @@ import { SupabasePartyRepository } from "./party.repository";
 import { SupabaseTransactionRepository } from "./transaction.repository";
 import { SupabaseNotificationRepository } from "./notification.repository";
 import { SupabaseTeamRepository } from "./team.repository";
+import { SupabaseComplianceRepository } from "./compliance.repository";
 import type { Repositories } from "./types";
 
 /**
@@ -33,5 +34,6 @@ export async function getServerRepositories(): Promise<Repositories> {
     transactions: new SupabaseTransactionRepository(client),
     notifications: new SupabaseNotificationRepository(client),
     team: new SupabaseTeamRepository(client),
+    compliance: new SupabaseComplianceRepository(client),
   };
 }

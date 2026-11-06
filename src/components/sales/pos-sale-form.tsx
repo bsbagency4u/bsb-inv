@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Paperclip, Plus, ScanLine, Split, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Paperclip, Plus, ScanLine, ShieldCheck, Split, Trash2, UserPlus } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -49,10 +49,18 @@ import {
   type UnitKind,
   validateSaleQuantity,
 } from "@/lib/packaging";
-import type { ProductVariant, ProductWithStock, SalesInvoice, SellableLot } from "@/types/domain";
+import type {
+  GstEinvoiceRecord,
+  GstEwayBillRecord,
+  ProductVariant,
+  ProductWithStock,
+  SalesInvoice,
+  SellableLot,
+} from "@/types/domain";
 import type { PartyValues } from "@/lib/validation/schemas";
 import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
 import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
+import { einvoiceLocksDocument } from "@/lib/gst-einvoice";
 
 type CustomerMode = "existing" | "walkin";
 type DiscountKind = "amount" | "percent";
@@ -270,6 +278,27 @@ export function PosSaleForm({
     },
     enabled: Boolean(business),
   });
+
+  const { data: gstWorkspace } = useQuery({
+    queryKey: ["gst-compliance", business?.id],
+    queryFn: async () => {
+      if (!business || !user) throw new Error("No active business.");
+      return getClientServices().compliance.getWorkspace(business.id, user.id);
+    },
+    enabled: Boolean(business && user && invoiceId),
+  });
+
+  const invoiceEinvoice: GstEinvoiceRecord | null =
+    invoiceId
+      ? gstWorkspace?.einvoices.find((item) => item.documentKind === "sales_invoice" && item.documentId === invoiceId) ??
+        null
+      : null;
+  const invoiceEwayBill: GstEwayBillRecord | null =
+    invoiceId
+      ? gstWorkspace?.ewayBills.find((item) => item.documentKind === "sales_invoice" && item.documentId === invoiceId) ??
+        null
+      : null;
+  const irnLocked = einvoiceLocksDocument(invoiceEinvoice?.status);
 
   const currency = business?.currency ?? "INR";
   const tracksBatches = businessTracksBatches(business?.type);
@@ -519,6 +548,13 @@ export function PosSaleForm({
       documentLabel: gstDocumentHeading(gstDocumentType),
       placeOfSupplyState: customer?.placeOfSupplyState ?? customer?.state ?? null,
       reverseCharge: false,
+      irn: invoiceEinvoice?.status === "generated" ? invoiceEinvoice.irn : null,
+      ackNo: invoiceEinvoice?.status === "generated" ? invoiceEinvoice.ackNo : null,
+      ackDate: invoiceEinvoice?.status === "generated" ? invoiceEinvoice.ackDate : null,
+      signedQrCode: invoiceEinvoice?.status === "generated" ? invoiceEinvoice.signedQrCode : null,
+      ewbNo: invoiceEwayBill?.status === "generated" ? invoiceEwayBill.ewbNo : null,
+      ewbDate: invoiceEwayBill?.status === "generated" ? invoiceEwayBill.ewbDate : null,
+      ewbValidUpto: invoiceEwayBill?.status === "generated" ? invoiceEwayBill.validUpto : null,
     };
   };
 
@@ -807,6 +843,13 @@ export function PosSaleForm({
   const saveSale = async (asDraft: boolean) => {
     if (!business || !user) return;
     if (savingLock.current) return;
+    if (irnLocked) {
+      toastError(
+        "IRN generated",
+        "This invoice has a generated IRN. Cancel the IRN with the IRP before changing GST-mandatory fields."
+      );
+      return;
+    }
     if (lines.length === 0) {
       toastError("Empty cart", "Add at least one product.");
       return;
@@ -923,19 +966,31 @@ export function PosSaleForm({
               Print
             </Button>
             {existingInvoice?.status === "draft" ? (
-              <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
+              <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving) || irnLocked}>
                 Save draft
               </Button>
             ) : null}
-            <Button className="h-11 min-w-[148px] px-5" onClick={() => void saveSale(false)} loading={saving === "complete"} disabled={Boolean(saving)}>
-              {existingInvoice ? "Save changes" : "Complete sale"}
-            </Button>
+            {irnLocked ? (
+              <Button variant="outline" className={controlClass} onClick={() => router.push("/gst/einvoice")}>
+                <ShieldCheck className="size-4" />
+                IRN locked
+              </Button>
+            ) : (
+              <Button className="h-11 min-w-[148px] px-5" onClick={() => void saveSale(false)} loading={saving === "complete"} disabled={Boolean(saving)}>
+                {existingInvoice ? "Save changes" : "Complete sale"}
+              </Button>
+            )}
           </>
         }
       />
 
       <div className="grid gap-5 p-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
+          {irnLocked ? (
+            <Alert variant="warning" title="IRN generated">
+              GST-mandatory fields are locked until the IRN is cancelled with the IRP. Print still includes the IRN and signed QR.
+            </Alert>
+          ) : null}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle>Customer</CardTitle>
@@ -1586,13 +1641,13 @@ export function PosSaleForm({
               className="h-12 w-full text-base"
               onClick={() => void saveSale(false)}
               loading={saving === "complete"}
-              disabled={Boolean(saving)}
+              disabled={Boolean(saving) || irnLocked}
             >
-              {existingInvoice ? "Save changes" : "Complete sale"}
+              {irnLocked ? "IRN locked" : existingInvoice ? "Save changes" : "Complete sale"}
             </Button>
             <div className="grid grid-cols-2 gap-2">
               {!existingInvoice || existingInvoice.status === "draft" ? (
-                <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving)}>
+                <Button variant="outline" className={controlClass} onClick={() => void saveSale(true)} loading={saving === "draft"} disabled={Boolean(saving) || irnLocked}>
                   Save draft
                 </Button>
               ) : (

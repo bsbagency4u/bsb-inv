@@ -389,6 +389,40 @@ export const purchaseDefaultsSchema = z.object({
 
 export type PurchaseDefaultsValues = z.infer<typeof purchaseDefaultsSchema>;
 
+export const inventoryDefaultsSchema = z.object({
+  allowNegativeStock: z.boolean(),
+  reserveOnConfirm: z.boolean(),
+  defaultWarehouseId: z.string().trim().optional().or(z.literal("")),
+  defaultLocationId: z.string().trim().optional().or(z.literal("")),
+  transferApproval: z.boolean(),
+  adjustmentApproval: z.boolean(),
+  countApproval: z.boolean(),
+  batchTracking: z.boolean(),
+  expiryTracking: z.boolean(),
+  fefoPreferred: z.boolean(),
+  nearExpiryDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 30 : Number(v)))
+    .pipe(z.number().min(1).max(365)),
+  barcodeEnabled: z.boolean(),
+  labelWidthMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 50 : Number(v)))
+    .pipe(z.number().min(20).max(210)),
+  labelHeightMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 30 : Number(v)))
+    .pipe(z.number().min(10).max(297)),
+  labelsPerRow: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 3 : Number(v)))
+    .pipe(z.number().min(1).max(8)),
+  showMrpOnLabel: z.boolean(),
+  showBatchOnLabel: z.boolean(),
+});
+
+export type InventoryDefaultsValues = z.infer<typeof inventoryDefaultsSchema>;
+
 export const taxDefaultsSchema = z.object({
   gstEnabled: z.boolean(),
   defaultGstRate: z

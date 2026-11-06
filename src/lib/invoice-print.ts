@@ -45,6 +45,13 @@ export interface PrintDocumentModel {
   documentLabel?: string | null;
   placeOfSupplyState?: string | null;
   reverseCharge?: boolean;
+  irn?: string | null;
+  ackNo?: string | null;
+  ackDate?: string | null;
+  signedQrCode?: string | null;
+  ewbNo?: string | null;
+  ewbDate?: string | null;
+  ewbValidUpto?: string | null;
 }
 
 export interface SalesPrintLine {
@@ -78,6 +85,13 @@ export interface SalesPrintModel {
   cgst?: number;
   sgst?: number;
   igst?: number;
+  irn?: string | null;
+  ackNo?: string | null;
+  ackDate?: string | null;
+  signedQrCode?: string | null;
+  ewbNo?: string | null;
+  ewbDate?: string | null;
+  ewbValidUpto?: string | null;
 }
 
 export interface PrintResult {
@@ -128,6 +142,13 @@ function salesToPrintModel(model: SalesPrintModel): PrintDocumentModel {
     cgst: model.cgst,
     sgst: model.sgst,
     igst: model.igst,
+    irn: model.irn,
+    ackNo: model.ackNo,
+    ackDate: model.ackDate,
+    signedQrCode: model.signedQrCode,
+    ewbNo: model.ewbNo,
+    ewbDate: model.ewbDate,
+    ewbValidUpto: model.ewbValidUpto,
   };
 }
 
@@ -273,6 +294,26 @@ function documentBodyHtml(
     .filter(Boolean)
     .join(" · ");
   const gstMetaBlock = gstMeta ? `<p class="muted">${gstMeta}</p>` : "";
+  const irn = (model.irn ?? "").trim();
+  const ewbNo = (model.ewbNo ?? "").trim();
+  const qr = (model.signedQrCode ?? "").trim();
+  const complianceBits = [
+    irn ? `IRN: ${escapeHtml(irn)}` : "",
+    model.ackNo ? `Ack ${escapeHtml(model.ackNo)}` : "",
+    model.ackDate ? `Ack date ${escapeHtml(formatDate(model.ackDate))}` : "",
+    ewbNo ? `E-Way Bill: ${escapeHtml(ewbNo)}` : "",
+    model.ewbValidUpto ? `Valid upto ${escapeHtml(formatDate(model.ewbValidUpto))}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const qrBlock =
+    qr && irn
+      ? `<div class="qr"><img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(qr)}" alt="Signed IRN QR" width="96" height="96" /></div>`
+      : "";
+  const complianceBlock =
+    complianceBits || qrBlock
+      ? `<div class="compliance">${qrBlock}${complianceBits ? `<p class="muted">${complianceBits}</p>` : ""}</div>`
+      : "";
   const items =
     defaults.paperSize === "thermal"
       ? thermalRows(model, defaults, currency)
@@ -300,6 +341,7 @@ function documentBodyHtml(
   </div>
   <p><strong>${escapeHtml(partyRole(model.kind))}:</strong> ${escapeHtml(model.partyLabel)}${partyGstin}</p>
   ${gstMetaBlock}
+  ${complianceBlock}
   ${items}
   <div class="totals">
     <div class="row"><span>Subtotal</span><span>${escapeHtml(formatCurrency(model.subtotal, currency))}</span></div>
@@ -350,6 +392,8 @@ export function documentPrintHtml(
   .item { border-bottom: 1px dashed #e4e7ec; padding: 6px 0; }
   .sign { margin-top: 36px; width: 180px; margin-left: auto; text-align: center; }
   .sign-line { border-top: 1px solid #c9cdd4; margin-bottom: 4px; }
+  .compliance { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+  .qr img { display: block; }
 </style></head><body>
   ${sheets}
 </body></html>`;

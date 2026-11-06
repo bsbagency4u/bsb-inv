@@ -8,6 +8,7 @@ import {
   salesDefaultsSchema,
   taxDefaultsSchema,
   documentControlDefaultsSchema,
+  inventoryDefaultsSchema,
   type BusinessProfileValues,
   type InvoiceDefaultsValues,
   type InvoiceNumberingValues,
@@ -15,16 +16,23 @@ import {
   type SalesDefaultsValues,
   type TaxDefaultsValues,
   type DocumentControlDefaultsValues,
+  type InventoryDefaultsValues,
 } from "@/lib/validation/schemas";
 import type {
   BusinessProfile,
   DocumentControlDefaults,
+  InventoryDefaults,
   InvoiceDefaults,
   PurchaseDefaults,
   SalesDefaults,
   TaxDefaults,
 } from "@/types/domain";
 import { DEFAULT_INVOICE, parseInvoiceDefaults } from "@/lib/invoice-settings";
+import {
+  DEFAULT_INVENTORY,
+  INVENTORY_SETTINGS_KEY,
+  parseInventoryDefaults,
+} from "@/lib/inventory-settings";
 import {
   DEFAULT_DOCUMENT_CONTROL,
   DOCUMENT_CONTROL_KEY,
@@ -60,7 +68,7 @@ export const DEFAULT_TAX: TaxDefaults = {
   reverseChargeEnabled: false,
 };
 
-export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL };
+export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL, DEFAULT_INVENTORY };
 
 const SALES_KEY = "sales.defaults";
 const PURCHASE_KEY = "purchase.defaults";
@@ -443,6 +451,41 @@ export class BusinessService {
       businessId,
       userId,
       action: "settings.document_control.updated",
+      entityType: "business_settings",
+      entityId: businessId,
+      metadata: value as unknown as Record<string, unknown>,
+    });
+    return value;
+  }
+
+  async getInventoryDefaults(businessId: string): Promise<InventoryDefaults> {
+    const stored = await this.repos.businesses.getSetting(businessId, INVENTORY_SETTINGS_KEY);
+    return parseInventoryDefaults(stored);
+  }
+
+  async updateInventoryDefaults(
+    userId: string,
+    businessId: string,
+    input: InventoryDefaultsValues
+  ): Promise<InventoryDefaults> {
+    await this.auth.requirePermission(businessId, userId, "settings.manage");
+    const parsed = inventoryDefaultsSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(
+        "Please fix the highlighted fields.",
+        parsed.error.flatten().fieldErrors
+      );
+    }
+    const value = parseInventoryDefaults({
+      ...parsed.data,
+      defaultWarehouseId: parsed.data.defaultWarehouseId || null,
+      defaultLocationId: parsed.data.defaultLocationId || null,
+    });
+    await this.repos.businesses.setSetting(businessId, INVENTORY_SETTINGS_KEY, value, userId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "settings.inventory.updated",
       entityType: "business_settings",
       entityId: businessId,
       metadata: value as unknown as Record<string, unknown>,

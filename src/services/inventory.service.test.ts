@@ -1,15 +1,30 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { Repositories } from "@/repositories/types";
-import type { AuditEvent, Product, ProductBatch } from "@/types/domain";
+import type {
+  AuditEvent,
+  Product,
+  ProductBatch,
+  StockAdjustment,
+  StockCountSession,
+  StockLocation,
+  StockReservation,
+  StockTransfer,
+} from "@/types/domain";
 import { AuditService } from "./audit.service";
 import { NotificationService } from "./notification.service";
 import { InventoryService } from "./inventory.service";
 
 function memoryRepositories() {
   const products: Product[] = [];
-  const ledger: Array<{ productId: string; change: number; businessId: string; movementType: string; batchId: string | null; warehouseId: string | null }> = [];
+  const ledger: Array<{ productId: string; change: number; businessId: string; movementType: string; batchId: string | null; warehouseId: string | null; locationId: string | null }> = [];
   const batches: ProductBatch[] = [];
   const auditLogs: AuditEvent[] = [];
+  const locations: StockLocation[] = [];
+  const transfers: StockTransfer[] = [];
+  const adjustments: StockAdjustment[] = [];
+  const counts: StockCountSession[] = [];
+  const reservations: StockReservation[] = [];
+  let docSeq = 0;
 
   const repos: Repositories = {
     products: {
@@ -74,9 +89,12 @@ function memoryRepositories() {
           businessId,
           productId: input.productId,
           batchNo: input.batchNo,
+          manufacturingDate: null,
           expiryDate: input.expiryDate ?? null,
           mrp: input.mrp ?? null,
           purchasePrice: input.purchasePrice ?? null,
+          supplierId: null,
+          purchaseInvoiceId: null,
           createdAt: now,
           updatedAt: now,
         };
@@ -96,13 +114,14 @@ function memoryRepositories() {
         }));
       },
       async listBalances() {
-        const map = new Map<string, { productId: string; batchId: string | null; warehouseId: string | null; quantity: number }>();
+        const map = new Map<string, { productId: string; batchId: string | null; warehouseId: string | null; locationId: string | null; quantity: number }>();
         for (const entry of ledger) {
-          const key = `${entry.productId}|${entry.batchId ?? ""}|${entry.warehouseId ?? ""}`;
+          const key = `${entry.productId}|${entry.batchId ?? ""}|${entry.warehouseId ?? ""}|${entry.locationId ?? ""}`;
           const current = map.get(key) ?? {
             productId: entry.productId,
             batchId: entry.batchId ?? null,
             warehouseId: entry.warehouseId ?? null,
+            locationId: entry.locationId ?? null,
             quantity: 0,
           };
           current.quantity += entry.change;
@@ -113,7 +132,7 @@ function memoryRepositories() {
           variantId: null,
           batchId: b.batchId,
           warehouseId: b.warehouseId,
-          locationId: null,
+          locationId: b.locationId,
           quantity: b.quantity,
           lastMovementAt: null,
         }));
@@ -127,7 +146,7 @@ function memoryRepositories() {
           variantId: null,
           batchId: null,
           warehouseId: null,
-          locationId: null,
+          locationId: entry.locationId,
           toWarehouseId: null,
           toLocationId: null,
           change: entry.change,
@@ -147,6 +166,7 @@ function memoryRepositories() {
           movementType: input.movementType,
           batchId: input.batchId ?? null,
           warehouseId: input.warehouseId ?? null,
+          locationId: input.locationId ?? null,
         });
       },
       async listVariants() { return []; },
@@ -172,10 +192,193 @@ function memoryRepositories() {
       async createWarehouse() { throw new Error("not used"); },
       async updateWarehouse() { throw new Error("not used"); },
       async deleteWarehouse() {},
-      async listLocations() { return []; },
+      async listLocations() { return locations; },
       async createLocation() { throw new Error("not used"); },
       async updateLocation() { throw new Error("not used"); },
       async deleteLocation() {},
+      async listWarehouseAssignments() { return []; },
+      async setWarehouseAssignments() { return []; },
+      async listTransfers() { return transfers; },
+      async getTransfer(_b, id) { return transfers.find((row) => row.id === id) ?? null; },
+      async createTransfer(businessId, input) {
+        const now = new Date().toISOString();
+        const transfer: StockTransfer = {
+          id: `tr-${transfers.length + 1}`,
+          businessId,
+          transferNo: input.transferNo,
+          status: input.status ?? "draft",
+          fromWarehouseId: input.fromWarehouseId,
+          fromLocationId: input.fromLocationId ?? null,
+          toWarehouseId: input.toWarehouseId,
+          toLocationId: input.toLocationId ?? null,
+          requestedBy: input.requestedBy ?? null,
+          dispatchedBy: null,
+          receivedBy: null,
+          requestedAt: now,
+          dispatchedAt: null,
+          receivedAt: null,
+          notes: input.notes ?? null,
+          shortageReason: null,
+          items: input.items.map((item, index) => ({
+            id: `tri-${index + 1}`,
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            quantity: item.quantity,
+            dispatchedQuantity: 0,
+            receivedQuantity: 0,
+            shortageQuantity: 0,
+            unit: item.unit ?? null,
+            notes: item.notes ?? null,
+          })),
+          createdAt: now,
+          updatedAt: now,
+        };
+        transfers.push(transfer);
+        return transfer;
+      },
+      async updateTransfer(_b, transferId, input) {
+        const index = transfers.findIndex((row) => row.id === transferId);
+        const current = transfers[index];
+        transfers[index] = {
+          ...current,
+          status: input.status ?? current.status,
+          dispatchedBy: input.dispatchedBy === undefined ? current.dispatchedBy : input.dispatchedBy,
+          dispatchedAt: input.dispatchedAt === undefined ? current.dispatchedAt : input.dispatchedAt,
+          receivedBy: input.receivedBy === undefined ? current.receivedBy : input.receivedBy,
+          receivedAt: input.receivedAt === undefined ? current.receivedAt : input.receivedAt,
+          shortageReason: input.shortageReason === undefined ? current.shortageReason : input.shortageReason,
+          items: input.items ?? current.items,
+          updatedAt: new Date().toISOString(),
+        };
+        return transfers[index];
+      },
+      async listAdjustments() { return adjustments; },
+      async getAdjustment(_b, id) { return adjustments.find((row) => row.id === id) ?? null; },
+      async createAdjustment(businessId, input) {
+        const now = new Date().toISOString();
+        const adjustment: StockAdjustment = {
+          id: `adj-${adjustments.length + 1}`,
+          businessId,
+          adjustmentNo: input.adjustmentNo,
+          status: input.status ?? "draft",
+          reason: input.reason,
+          warehouseId: input.warehouseId ?? null,
+          locationId: input.locationId ?? null,
+          notes: input.notes ?? null,
+          requestedBy: input.requestedBy ?? null,
+          approvedBy: null,
+          postedAt: null,
+          items: input.items.map((item, index) => ({
+            id: `adji-${index + 1}`,
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            change: item.change,
+            unit: item.unit ?? null,
+            notes: item.notes ?? null,
+          })),
+          createdAt: now,
+          updatedAt: now,
+        };
+        adjustments.push(adjustment);
+        return adjustment;
+      },
+      async updateAdjustment(_b, adjustmentId, input) {
+        const index = adjustments.findIndex((row) => row.id === adjustmentId);
+        const current = adjustments[index];
+        adjustments[index] = {
+          ...current,
+          status: input.status ?? current.status,
+          approvedBy: input.approvedBy === undefined ? current.approvedBy : input.approvedBy,
+          postedAt: input.postedAt === undefined ? current.postedAt : input.postedAt,
+          items: input.items ?? current.items,
+          updatedAt: new Date().toISOString(),
+        };
+        return adjustments[index];
+      },
+      async listCounts() { return counts; },
+      async getCount(_b, id) { return counts.find((row) => row.id === id) ?? null; },
+      async createCount(businessId, input) {
+        const now = new Date().toISOString();
+        const session: StockCountSession = {
+          id: `cnt-${counts.length + 1}`,
+          businessId,
+          countNo: input.countNo,
+          status: input.status ?? "draft",
+          warehouseId: input.warehouseId,
+          locationId: input.locationId ?? null,
+          notes: input.notes ?? null,
+          countedBy: input.countedBy ?? null,
+          approvedBy: null,
+          postedAt: null,
+          items: input.items.map((item, index) => ({
+            id: `cnti-${index + 1}`,
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            batchId: item.batchId ?? null,
+            systemQuantity: item.systemQuantity,
+            countedQuantity: item.countedQuantity ?? null,
+            unit: item.unit ?? null,
+            notes: item.notes ?? null,
+          })),
+          createdAt: now,
+          updatedAt: now,
+        };
+        counts.push(session);
+        return session;
+      },
+      async updateCount(_b, countId, input) {
+        const index = counts.findIndex((row) => row.id === countId);
+        const current = counts[index];
+        counts[index] = {
+          ...current,
+          status: input.status ?? current.status,
+          countedBy: input.countedBy === undefined ? current.countedBy : input.countedBy,
+          approvedBy: input.approvedBy === undefined ? current.approvedBy : input.approvedBy,
+          postedAt: input.postedAt === undefined ? current.postedAt : input.postedAt,
+          items: input.items ?? current.items,
+          updatedAt: new Date().toISOString(),
+        };
+        return counts[index];
+      },
+      async listReservations(_b, filter) {
+        return reservations.filter((row) => {
+          if (filter?.productId && row.productId !== filter.productId) return false;
+          if (filter?.status && row.status !== filter.status) return false;
+          return true;
+        });
+      },
+      async createReservation(businessId, input) {
+        const now = new Date().toISOString();
+        const reservation: StockReservation = {
+          id: `rsv-${reservations.length + 1}`,
+          businessId,
+          productId: input.productId,
+          variantId: input.variantId ?? null,
+          batchId: input.batchId ?? null,
+          warehouseId: input.warehouseId ?? null,
+          locationId: input.locationId ?? null,
+          quantity: input.quantity,
+          status: input.status ?? "open",
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+          notes: input.notes ?? null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        reservations.push(reservation);
+        return reservation;
+      },
+      async updateReservationStatus(_b, reservationId, status) {
+        const row = reservations.find((item) => item.id === reservationId);
+        if (!row) throw new Error("not found");
+        row.status = status;
+        return row;
+      },
+      async listSerials() { return []; },
+      async createSerial() { throw new Error("not used"); },
+      async updateSerial() { throw new Error("not used"); },
     },
     parties: {
       async listCustomers() { return []; },
@@ -217,7 +420,10 @@ function memoryRepositories() {
       async listPaymentModes() { return []; },
       async createPaymentMode() { throw new Error("not used"); },
       async updatePaymentMode() { throw new Error("not used"); },
-      async nextDocumentNumber() { return "X-1"; },
+      async nextDocumentNumber(_b, _kind, prefix) {
+        docSeq += 1;
+        return `${prefix}-${docSeq}`;
+      },
       async createPurchaseReceipt() { throw new Error("not used"); },
       async listPurchaseReceipts() { return []; },
       async createPurchaseReturn() { throw new Error("not used"); },
@@ -291,7 +497,7 @@ function memoryRepositories() {
     },
   };
 
-  return { repos, products, ledger, auditLogs, batches };
+  return { repos, products, ledger, auditLogs, batches, locations, transfers, adjustments, counts, reservations };
 }
 
 async function seedProduct(services: ReturnType<typeof memoryRepositories>) {
@@ -453,5 +659,124 @@ describe("InventoryService", () => {
     await inventory.recordPurchaseMovement("b-1", "u-1", product.id, null, 5, "inv-3", "purchase_invoice", null, batch.id);
     const lots = await inventory.listSellableLots("b-1", { productId: product.id });
     expect(lots[0].mrp).toBe(60);
+  });
+
+  it("dispatches a transfer then receives the full quantity", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", {
+      productId: product.id,
+      quantity: 20,
+      costPrice: 100,
+      warehouseId: "wh-1",
+    });
+    const transfer = await inventory.requestTransfer("b-1", "u-1", {
+      fromWarehouseId: "wh-1",
+      toWarehouseId: "wh-2",
+      items: [{ productId: product.id, quantity: 8 }],
+    });
+    expect(transfer.status).toBe("approved");
+    const dispatched = await inventory.dispatchTransfer("b-1", "u-1", transfer.id);
+    expect(dispatched.status).toBe("in_transit");
+    expect(services.ledger.map((row) => row.movementType)).toContain("TRANSFER_OUT");
+    const received = await inventory.receiveTransfer("b-1", "u-1", transfer.id, {
+      items: [{ itemId: dispatched.items[0].id, receivedQuantity: 8 }],
+    });
+    expect(received.status).toBe("completed");
+    expect(services.ledger.map((row) => row.movementType)).toEqual([
+      "OPENING",
+      "TRANSFER_OUT",
+      "TRANSFER_IN",
+    ]);
+  });
+
+  it("allows partial receive and blocks cancel while in transit", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", {
+      productId: product.id,
+      quantity: 10,
+      costPrice: 100,
+      warehouseId: "wh-1",
+    });
+    const transfer = await inventory.requestTransfer("b-1", "u-1", {
+      fromWarehouseId: "wh-1",
+      toWarehouseId: "wh-2",
+      items: [{ productId: product.id, quantity: 6 }],
+    });
+    await inventory.dispatchTransfer("b-1", "u-1", transfer.id);
+    await expect(inventory.cancelTransfer("b-1", "u-1", transfer.id)).rejects.toThrow();
+    const partial = await inventory.receiveTransfer("b-1", "u-1", transfer.id, {
+      items: [{ itemId: transfer.items[0].id, receivedQuantity: 4 }],
+      shortageReason: "short loaded",
+    });
+    expect(partial.status).toBe("partially_received");
+    expect(partial.items[0].receivedQuantity).toBe(4);
+  });
+
+  it("posts adjustments through the ledger", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 12, costPrice: 100 });
+    const adjustment = await inventory.requestAdjustment("b-1", "u-1", {
+      reason: "damage",
+      warehouseId: "wh-1",
+      items: [{ productId: product.id, change: -2 }],
+    });
+    expect(adjustment.status).toBe("posted");
+    const stock = await inventory.listBalances("b-1");
+    expect(stock.reduce((sum, row) => sum + row.quantity, 0)).toBe(10);
+  });
+
+  it("does not change stock until a count is posted", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", {
+      productId: product.id,
+      quantity: 10,
+      costPrice: 100,
+      warehouseId: "wh-1",
+    });
+    const session = await inventory.createCountSession("b-1", "u-1", {
+      warehouseId: "wh-1",
+      items: [{ productId: product.id, systemQuantity: 10, countedQuantity: 7 }],
+    });
+    expect(session.status).toBe("counting");
+    expect(services.ledger.filter((row) => row.movementType === "COUNT")).toHaveLength(0);
+    const posted = await inventory.postCount("b-1", "u-1", session.id);
+    expect(posted.status).toBe("posted");
+    expect(services.ledger.map((row) => row.movementType)).toContain("COUNT");
+    const stock = await inventory.listBalances("b-1");
+    expect(stock.reduce((sum, row) => sum + row.quantity, 0)).toBe(7);
+  });
+
+  it("reserves available stock and hides it from sellable lots", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", {
+      productId: product.id,
+      quantity: 10,
+      costPrice: 100,
+      warehouseId: "wh-1",
+    });
+    await inventory.reserveStock("b-1", "u-1", {
+      productId: product.id,
+      warehouseId: "wh-1",
+      quantity: 4,
+      referenceType: "sales_invoice",
+      referenceId: "inv-r1",
+    });
+    const availability = await inventory.listAvailability("b-1", { productId: product.id });
+    expect(availability[0].available).toBe(6);
+    const lots = await inventory.listSellableLots("b-1", { productId: product.id });
+    expect(lots[0].quantity).toBe(6);
+  });
+
+  it("rejects reservations that exceed available quantity", async () => {
+    const product = await seedProduct(services);
+    await inventory.recordOpeningStock("b-1", "u-1", { productId: product.id, quantity: 2, costPrice: 100 });
+    await expect(
+      inventory.reserveStock("b-1", "u-1", {
+        productId: product.id,
+        quantity: 5,
+        referenceType: "sales_invoice",
+        referenceId: "inv-r2",
+      })
+    ).rejects.toThrow();
   });
 });

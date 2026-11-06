@@ -74,9 +74,12 @@ const catalog: ReportCatalog = {
       businessId: "b-1",
       productId: "p-1",
       batchNo: "B001",
+      manufacturingDate: null,
       expiryDate: "2026-12-31",
       mrp: 22,
       purchasePrice: 10,
+      supplierId: null,
+      purchaseInvoiceId: null,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     } satisfies ProductBatch,
@@ -88,6 +91,10 @@ const catalog: ReportCatalog = {
       name: "Main",
       code: "MAIN",
       address: null,
+      state: null,
+      pincode: null,
+      phone: null,
+      email: null,
       isActive: true,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -216,5 +223,22 @@ describe("stock report engine", () => {
     const result = runStockReport(catalog, query("current-stock", { productId: "missing" }));
     expect(result.rows).toHaveLength(0);
     expect(result.totalCount).toBe(0);
+  });
+
+  it("treats COUNT movements as adjustments, not inward/outward", () => {
+    const withCount: ReportCatalog = {
+      ...catalog,
+      movements: [
+        ...catalog.movements,
+        movement({ change: -5, movementType: "COUNT", createdAt: "2026-03-09T10:00:00.000Z", batchId: "batch-1" }),
+      ],
+    };
+    const flow = accumulateFlow(withCount.movements, "2026-03-01", "2026-03-31");
+    expect(flow.inward).toBe(105);
+    expect(flow.outward).toBe(30);
+    expect(flow.negativeAdj).toBe(5);
+    expect(flow.closing).toBe(73);
+    const adjustments = runStockReport(withCount, query("stock-adjustment"));
+    expect(adjustments.rows.some((row) => row.movementType === "COUNT")).toBe(true);
   });
 });

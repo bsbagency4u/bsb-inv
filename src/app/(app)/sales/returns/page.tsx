@@ -32,7 +32,7 @@ import { DocumentPrintActions } from "@/components/documents/document-print-acti
 import { customerContact, salesReturnPrintModel } from "@/lib/document-print-models";
 import { autoOutputDocument } from "@/lib/invoice-print";
 import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
-import type { SalesReturn } from "@/types/domain";
+import type { GstEinvoiceRecord, SalesReturn } from "@/types/domain";
 import {
   packagingFromProduct,
   resolveUnitKind,
@@ -104,6 +104,19 @@ export default function SalesReturnsPage() {
     },
     enabled: Boolean(business),
   });
+
+  const { data: gstWorkspace } = useQuery({
+    queryKey: ["gst-compliance", business?.id],
+    queryFn: async () => {
+      if (!business || !user) throw new Error("No active business.");
+      return getClientServices().compliance.getWorkspace(business.id, user.id);
+    },
+    enabled: Boolean(business && user),
+  });
+
+  const einvoiceFor = (returnId: string): GstEinvoiceRecord | null =>
+    gstWorkspace?.einvoices.find((item) => item.documentKind === "sales_return" && item.documentId === returnId) ??
+    null;
 
   if (isLoading) return <LoadingState label="Loading sales returns…" />;
   if (isError) {
@@ -277,6 +290,7 @@ export default function SalesReturnsPage() {
                             partyLabel: customers?.find((c) => c.id === item.customerId)?.name ?? "Customer",
                             ...customerContact(customers?.find((c) => c.id === item.customerId)),
                             products,
+                            einvoice: einvoiceFor(item.id),
                           })}
                           currency={business.currency ?? "INR"}
                         />

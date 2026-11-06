@@ -344,7 +344,11 @@ export function runStockReport(catalog: ReportCatalog, query: StockReportQuery):
           warehouse: warehouseName(catalog.warehouses, movement.warehouseId),
           batchNo: batch?.batchNo ?? null,
           inQty: qtyIn(movement) || posAdj(movement),
-          outQty: qtyOut(movement) || (movement.movementType === "ADJUSTMENT" && movement.change < 0 ? Math.abs(movement.change) : 0),
+          outQty:
+            qtyOut(movement) ||
+            ((movement.movementType === "ADJUSTMENT" || movement.movementType === "COUNT") && movement.change < 0
+              ? Math.abs(movement.change)
+              : 0),
           balance: after,
           reference: movement.referenceId ?? movement.notes,
         });
@@ -365,7 +369,7 @@ export function runStockReport(catalog: ReportCatalog, query: StockReportQuery):
           : definition.id === "stock-out"
             ? (type: StockMovement["movementType"]) => OUT_TYPES.includes(type)
             : definition.id === "stock-adjustment"
-              ? (type: StockMovement["movementType"]) => type === "ADJUSTMENT"
+              ? (type: StockMovement["movementType"]) => type === "ADJUSTMENT" || type === "COUNT"
               : definition.id === "stock-transfer"
                 ? (type: StockMovement["movementType"]) => type === "TRANSFER_IN" || type === "TRANSFER_OUT"
                 : definition.id === "purchase-return-stock"
