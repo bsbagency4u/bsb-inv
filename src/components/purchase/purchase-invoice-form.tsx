@@ -261,10 +261,11 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
   const showsManufacturer = getProductAttributesForType(business?.type).some((item) => item.key === "manufacturer");
   const pricesIncludeTax = taxDefaults?.pricesIncludeTax ?? false;
   const supplier = suppliers?.find((item) => item.id === supplierId) ?? null;
-  const supplierRegistered =
+  const supplierChargesTax =
     !supplier ||
-    ["registered", "composition", "sez"].includes(supplier.gstRegistrationType ?? "registered");
-  const gstEnabled = (taxDefaults?.gstEnabled ?? true) && supplierRegistered;
+    supplier.gstRegistrationType === "registered" ||
+    supplier.gstRegistrationType === "sez";
+  const gstEnabled = (taxDefaults?.gstEnabled ?? true) && supplierChargesTax;
   const paymentMode = paymentModeOverride ?? (paymentModes?.[0]?.code ?? "cash");
   const paymentTerms = supplier?.paymentTerms || purchaseDefaults?.defaultPaymentTerms || "";
   const placeOfSupply = placeOfSupplyOverride ?? supplier?.placeOfSupplyState ?? supplier?.state ?? business?.state ?? "";
@@ -292,6 +293,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
     setDueDate(loadedInvoice.dueDate?.slice(0, 10) ?? "");
     setDiscount(String(loadedInvoice.discount ?? 0));
     setNotesOverride(loadedInvoice.notes);
+    setReverseCharge(loadedInvoice.reverseCharge ?? false);
     const vendorMatch = loadedInvoice.notes?.match(/^Vendor invoice:\s*(.+)$/m);
     if (vendorMatch?.[1]) setVendorInvoiceNo(vendorMatch[1].trim());
     if (loadedInvoice.paidAmount > 0) setPaidAmount(String(loadedInvoice.paidAmount));
@@ -408,7 +410,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
     igst: totals.igst,
     documentLabel: gstDocumentHeading(gstDocumentType),
     placeOfSupplyState: placeOfSupply || supplier?.placeOfSupplyState || supplier?.state || null,
-    reverseCharge: taxDefaults?.reverseChargeEnabled ?? false,
+    reverseCharge,
   });
 
   const printBill = (billNo?: string) => {
@@ -587,6 +589,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
         asDraft,
         discount: invoiceDiscount,
         intraState,
+        reverseCharge,
         items: lines.map((line) => ({
           productId: line.productId,
           variantId: line.variantId,
@@ -924,7 +927,7 @@ export function PurchaseInvoiceForm({ invoiceId }: { invoiceId?: string } = {}) 
               <div className="flex h-11 items-center justify-between gap-4 rounded-md border border-border px-3">
                 <div>
                   <p className="text-sm font-medium text-foreground">Reverse charge</p>
-                  <p className="text-xs text-muted-foreground">Recorded with the bill notes.</p>
+                  <p className="text-xs text-muted-foreground">Applies only when this bill is under reverse charge.</p>
                 </div>
                 <Switch checked={reverseCharge} onCheckedChange={setReverseCharge} />
               </div>

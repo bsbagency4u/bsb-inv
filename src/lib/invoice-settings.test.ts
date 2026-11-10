@@ -25,7 +25,7 @@ describe("parseInvoiceDefaults", () => {
     expect(parsed.copies).toBe(1);
     expect(parsed.autoPrintOnSave).toBe(true);
     expect(parsed.documentTypes.sales_invoice.enabled).toBe(true);
-    expect(parsed.documentTypes.quotation.enabled).toBe(false);
+    expect(parsed.documentTypes.quotation.enabled).toBe(true);
   });
 
   it("keeps custom paper size and copies per stored value", () => {

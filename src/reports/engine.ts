@@ -344,7 +344,11 @@ export function runStockReport(catalog: ReportCatalog, query: StockReportQuery):
           warehouse: warehouseName(catalog.warehouses, movement.warehouseId),
           batchNo: batch?.batchNo ?? null,
           inQty: qtyIn(movement) || posAdj(movement),
-          outQty: qtyOut(movement) || (movement.movementType === "ADJUSTMENT" && movement.change < 0 ? Math.abs(movement.change) : 0),
+          outQty:
+            qtyOut(movement) ||
+            ((movement.movementType === "ADJUSTMENT" || movement.movementType === "COUNT") && movement.change < 0
+              ? Math.abs(movement.change)
+              : 0),
           balance: after,
           reference: movement.referenceId ?? movement.notes,
         });
@@ -365,7 +369,7 @@ export function runStockReport(catalog: ReportCatalog, query: StockReportQuery):
           : definition.id === "stock-out"
             ? (type: StockMovement["movementType"]) => OUT_TYPES.includes(type)
             : definition.id === "stock-adjustment"
-              ? (type: StockMovement["movementType"]) => type === "ADJUSTMENT"
+              ? (type: StockMovement["movementType"]) => type === "ADJUSTMENT" || type === "COUNT"
               : definition.id === "stock-transfer"
                 ? (type: StockMovement["movementType"]) => type === "TRANSFER_IN" || type === "TRANSFER_OUT"
                 : definition.id === "purchase-return-stock"
@@ -499,6 +503,49 @@ export function runStockReport(catalog: ReportCatalog, query: StockReportQuery):
       });
       return result(definition, rows, query, ["quantity", "stockValue"], [
         { key: "stockValue", label: "Value", value: numberTotal(rows, ["stockValue"]).stockValue ?? 0, format: "currency" },
+        { key: "quantity", label: "Qty", value: numberTotal(rows, ["quantity"]).quantity ?? 0, format: "qty" },
+      ]);
+    }
+    case "stock-value-by-gst-rate": {
+      const groups = new Map<
+        number,
+        { gstRate: number; productCount: number; quantity: number; costValue: number; sellingValue: number; taxEstimate: number }
+      >();
+      for (const product of products) {
+        const quantity = closingQuantity(grouped.get(product.id) ?? [], query);
+        if (quantity === 0) continue;
+        const gstRate = product.gstRate ?? 0;
+        const current = groups.get(gstRate) ?? {
+          gstRate,
+          productCount: 0,
+          quantity: 0,
+          costValue: 0,
+          sellingValue: 0,
+          taxEstimate: 0,
+        };
+        const costValue = quantity * product.purchasePrice;
+        const sellingValue = quantity * product.salePrice;
+        current.productCount += 1;
+        current.quantity += quantity;
+        current.costValue += costValue;
+        current.sellingValue += sellingValue;
+        current.taxEstimate += (sellingValue * gstRate) / 100;
+        groups.set(gstRate, current);
+      }
+      const rows: ReportRow[] = [...groups.values()]
+        .sort((a, b) => a.gstRate - b.gstRate)
+        .map((row) => ({
+          gstRate: row.gstRate,
+          productCount: row.productCount,
+          quantity: row.quantity,
+          costValue: Math.round((row.costValue + Number.EPSILON) * 100) / 100,
+          sellingValue: Math.round((row.sellingValue + Number.EPSILON) * 100) / 100,
+          taxEstimate: Math.round((row.taxEstimate + Number.EPSILON) * 100) / 100,
+        }));
+      return result(definition, rows, query, ["productCount", "quantity", "costValue", "sellingValue", "taxEstimate"], [
+        { key: "costValue", label: "Cost value", value: numberTotal(rows, ["costValue"]).costValue ?? 0, format: "currency" },
+        { key: "sellingValue", label: "Selling value", value: numberTotal(rows, ["sellingValue"]).sellingValue ?? 0, format: "currency" },
+        { key: "taxEstimate", label: "Tax estimate", value: numberTotal(rows, ["taxEstimate"]).taxEstimate ?? 0, format: "currency" },
         { key: "quantity", label: "Qty", value: numberTotal(rows, ["quantity"]).quantity ?? 0, format: "qty" },
       ]);
     }

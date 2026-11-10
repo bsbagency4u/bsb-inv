@@ -229,6 +229,58 @@ describe("documentPrintHtml", () => {
     expect(a.copies).not.toBe(b.copies);
   });
 
+  it("prints IRN, acknowledgement and signed QR only after a generated IRN", () => {
+    const html = documentPrintHtml(
+      business,
+      DEFAULT_INVOICE,
+      {
+        kind: "sales_invoice",
+        docNo: "INV-1",
+        docDate: "2026-10-01",
+        partyLabel: "Buyer Co",
+        lines: lineModel.lines,
+        subtotal: 100,
+        discount: 0,
+        taxTotal: 18,
+        total: 118,
+        paidAmount: 118,
+        irn: "a".repeat(64),
+        ackNo: "112233",
+        ackDate: "2026-10-01",
+        signedQrCode: "signed-qr-payload",
+        ewbNo: "123456789012",
+        ewbValidUpto: "2026-10-02",
+      },
+      "INR"
+    );
+    expect(html).toContain("IRN:");
+    expect(html).toContain("Ack 112233");
+    expect(html).toContain("E-Way Bill:");
+    expect(html).toContain("signed-qr-payload");
+  });
+
+  it("omits IRN fields when the invoice has not been acknowledged", () => {
+    const html = documentPrintHtml(
+      business,
+      DEFAULT_INVOICE,
+      {
+        kind: "sales_invoice",
+        docNo: "INV-1",
+        docDate: "2026-10-01",
+        partyLabel: "Buyer Co",
+        lines: lineModel.lines,
+        subtotal: 100,
+        discount: 0,
+        taxTotal: 18,
+        total: 118,
+        paidAmount: 118,
+      },
+      "INR"
+    );
+    expect(html).not.toContain("IRN:");
+    expect(html).not.toContain("E-Way Bill:");
+  });
+
   it("auto-prints only when enabled for that document type", () => {
     const off = parseInvoiceDefaults({
       ...DEFAULT_INVOICE,

@@ -389,6 +389,40 @@ export const purchaseDefaultsSchema = z.object({
 
 export type PurchaseDefaultsValues = z.infer<typeof purchaseDefaultsSchema>;
 
+export const inventoryDefaultsSchema = z.object({
+  allowNegativeStock: z.boolean(),
+  reserveOnConfirm: z.boolean(),
+  defaultWarehouseId: z.string().trim().optional().or(z.literal("")),
+  defaultLocationId: z.string().trim().optional().or(z.literal("")),
+  transferApproval: z.boolean(),
+  adjustmentApproval: z.boolean(),
+  countApproval: z.boolean(),
+  batchTracking: z.boolean(),
+  expiryTracking: z.boolean(),
+  fefoPreferred: z.boolean(),
+  nearExpiryDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 30 : Number(v)))
+    .pipe(z.number().min(1).max(365)),
+  barcodeEnabled: z.boolean(),
+  labelWidthMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 50 : Number(v)))
+    .pipe(z.number().min(20).max(210)),
+  labelHeightMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 30 : Number(v)))
+    .pipe(z.number().min(10).max(297)),
+  labelsPerRow: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 3 : Number(v)))
+    .pipe(z.number().min(1).max(8)),
+  showMrpOnLabel: z.boolean(),
+  showBatchOnLabel: z.boolean(),
+});
+
+export type InventoryDefaultsValues = z.infer<typeof inventoryDefaultsSchema>;
+
 export const taxDefaultsSchema = z.object({
   gstEnabled: z.boolean(),
   defaultGstRate: z
@@ -480,6 +514,7 @@ const documentControlKindSchema = z.enum([
   "sales_return",
   "purchase_return",
   "payment",
+  "quotation",
 ]);
 
 const documentNumberingRuleSchema = z.object({
@@ -529,3 +564,67 @@ export const inviteMemberSchema = z.object({
 });
 
 export type InviteMemberValues = z.infer<typeof inviteMemberSchema>;
+
+const quotationFormatSchema = z.enum(["formal_proposal", "product_service"]);
+
+const quotationBankDetailsSchema = z.object({
+  accountName: z.string().trim().max(120).optional().or(z.literal("")),
+  accountNumber: z.string().trim().max(40).optional().or(z.literal("")),
+  ifsc: z.string().trim().max(20).optional().or(z.literal("")),
+  bankName: z.string().trim().max(80).optional().or(z.literal("")),
+  branch: z.string().trim().max(80).optional().or(z.literal("")),
+  upi: z.string().trim().max(80).optional().or(z.literal("")),
+});
+
+const quotationTemplateSchema = z.object({
+  id: z.string().trim().min(1).max(40),
+  name: z.string().trim().min(1, "Template name is required.").max(80),
+  format: quotationFormatSchema,
+  isDefault: z.boolean(),
+  introHtml: z.string().max(4000).optional().or(z.literal("")),
+  termsAndConditions: z.string().max(4000).optional().or(z.literal("")),
+  footerNote: z.string().max(400).optional().or(z.literal("")),
+  showCover: z.boolean(),
+  showScope: z.boolean(),
+  showTimeline: z.boolean(),
+  showAssumptions: z.boolean(),
+});
+
+export const quotationDefaultsSchema = z.object({
+  defaultFormat: quotationFormatSchema,
+  validityDays: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 15 : Number(v)))
+    .pipe(z.number().int().min(1).max(365)),
+  paperSize: z.enum(["a4", "a5", "thermal", "custom"]),
+  orientation: z.enum(["portrait", "landscape"]).optional(),
+  showLogo: z.boolean(),
+  showGstin: z.boolean(),
+  showHsn: z.boolean(),
+  showSku: z.boolean(),
+  showDiscount: z.boolean(),
+  showTaxBreakup: z.boolean(),
+  showBankDetails: z.boolean(),
+  showSignature: z.boolean(),
+  showStamp: z.boolean(),
+  signatureLabel: z.string().trim().max(80).optional().or(z.literal("")),
+  watermarkEnabled: z.boolean(),
+  watermarkMode: z.enum(["text", "image"]),
+  watermarkText: z.string().trim().max(40).optional().or(z.literal("")),
+  watermarkOpacity: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 0.12 : Number(v)))
+    .pipe(z.number().min(0.04).max(0.35)),
+  watermarkImageUrl: z.string().trim().max(500).optional().nullable().or(z.literal("")),
+  logoUrl: z.string().trim().max(500).optional().nullable().or(z.literal("")),
+  signatureImageUrl: z.string().trim().max(500).optional().nullable().or(z.literal("")),
+  stampImageUrl: z.string().trim().max(500).optional().nullable().or(z.literal("")),
+  bankDetails: quotationBankDetailsSchema,
+  termsAndConditions: z.string().max(4000).optional().or(z.literal("")),
+  footerNote: z.string().max(400).optional().or(z.literal("")),
+  whatsappEnabled: z.boolean(),
+  messageTemplate: z.string().trim().max(500).optional().or(z.literal("")),
+  templates: z.array(quotationTemplateSchema).min(1).max(12),
+});
+
+export type QuotationDefaultsValues = z.infer<typeof quotationDefaultsSchema>;

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CheckCircle2, FileText, Pencil, Plus, Trash2, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, FileText, Pencil, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { getClientServices } from "@/services";
 import { PageHeader } from "@/components/layout/page-header";
@@ -34,7 +34,8 @@ import { DEFAULT_INVOICE } from "@/lib/invoice-settings";
 import { DEFAULT_DOCUMENT_CONTROL, documentIsLocked } from "@/lib/document-control";
 import { DocumentConfirmModal } from "@/components/documents/document-confirm-modal";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
+import { einvoiceLocksDocument } from "@/lib/gst-einvoice";
+import type { GstEinvoiceRecord, GstEwayBillRecord, SalesInvoice, SalesInvoiceStatus } from "@/types/domain";
 
 const STATUS_VARIANTS: Record<SalesInvoiceStatus, "success" | "info" | "warning" | "destructive" | "secondary"> = {
   draft: "secondary",
@@ -129,6 +130,15 @@ export default function SalesInvoicesPage() {
     enabled: Boolean(business),
   });
 
+  const { data: gstWorkspace } = useQuery({
+    queryKey: ["gst-compliance", business?.id],
+    queryFn: async () => {
+      if (!business || !user) throw new Error("No active business.");
+      return getClientServices().compliance.getWorkspace(business.id, user.id);
+    },
+    enabled: Boolean(business && user),
+  });
+
   const filtered = React.useMemo(() => {
     if (!invoices) return [];
     const q = search.trim().toLowerCase();
@@ -203,6 +213,14 @@ export default function SalesInvoicesPage() {
 
   const invoiceLocked = (invoice: SalesInvoice) =>
     documentIsLocked(documentControl ?? DEFAULT_DOCUMENT_CONTROL, invoice.invoiceDate, invoice.status);
+
+  const einvoiceFor = (invoiceId: string): GstEinvoiceRecord | null =>
+    gstWorkspace?.einvoices.find((item) => item.documentKind === "sales_invoice" && item.documentId === invoiceId) ?? null;
+
+  const ewayBillFor = (invoiceId: string): GstEwayBillRecord | null =>
+    gstWorkspace?.ewayBills.find((item) => item.documentKind === "sales_invoice" && item.documentId === invoiceId) ?? null;
+
+  const irnLocksInvoice = (invoice: SalesInvoice) => einvoiceLocksDocument(einvoiceFor(invoice.id)?.status);
 
   const completeDraft = async (invoice: SalesInvoice) => {
     if (!business || !user) return;
@@ -305,6 +323,8 @@ export default function SalesInvoicesPage() {
       partyLabel: partyLabel(invoice),
       ...customerContact(customer),
       products,
+      einvoice: einvoiceFor(invoice.id),
+      ewayBill: ewayBillFor(invoice.id),
     });
   };
 
@@ -369,7 +389,15 @@ export default function SalesInvoicesPage() {
                       {formatCurrency(invoice.total, business?.currency ?? "INR")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_VARIANTS[invoice.status]}>{invoice.status}</Badge>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge variant={STATUS_VARIANTS[invoice.status]}>{invoice.status}</Badge>
+                        {einvoiceFor(invoice.id)?.status === "generated" ? (
+                          <Badge variant="success">IRN</Badge>
+                        ) : null}
+                        {ewayBillFor(invoice.id)?.status === "generated" ? (
+                          <Badge variant="info">EWB</Badge>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
@@ -390,7 +418,7 @@ export default function SalesInvoicesPage() {
                             Pay
                           </Button>
                         ) : null}
-                        {invoice.status !== "cancelled" && invoice.status !== "returned" ? (
+                        {invoice.status !== "cancelled" && invoice.status !== "returned" && !irnLocksInvoice(invoice) ? (
                           <Button
                             variant="outline"
                             size="sm"
@@ -400,7 +428,14 @@ export default function SalesInvoicesPage() {
                             Edit
                           </Button>
                         ) : null}
-                        {invoice.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+                        {irnLocksInvoice(invoice) ? (
+                          <Button variant="outline" size="sm" onClick={() => router.push("/gst/einvoice")}>
+                            <ShieldCheck className="size-4" />
+                            IRN
+                          </Button>
+                        ) : null}
+                        {!irnLocksInvoice(invoice) &&
+                        (invoice.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted) ? (
                           <Button variant="outline" size="sm" onClick={() => setDeleting(invoice)}>
                             <Trash2 className="size-4" />
                             Delete
@@ -447,13 +482,20 @@ export default function SalesInvoicesPage() {
                   currency={business.currency ?? "INR"}
                 />
               ) : null}
-              <Button
-                variant="outline"
-                onClick={() => router.push(`/sales/invoices/${detail.id}/edit`)}
-              >
-                <Pencil className="size-4" />
-                Edit
-              </Button>
+              {irnLocksInvoice(detail) ? (
+                <Button variant="outline" onClick={() => router.push("/gst/einvoice")}>
+                  <ShieldCheck className="size-4" />
+                  IRN locked
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={() => router.push(`/sales/invoices/${detail.id}/edit`)}
+                >
+                  <Pencil className="size-4" />
+                  Edit
+                </Button>
+              )}
               {detail.status === "draft" ? (
                 <Button
                   onClick={() => void completeDraft(detail)}
@@ -468,13 +510,14 @@ export default function SalesInvoicesPage() {
                   Record payment
                 </Button>
               ) : null}
-              {detail.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted ? (
+              {!irnLocksInvoice(detail) &&
+              (detail.status === "draft" || (documentControl ?? DEFAULT_DOCUMENT_CONTROL).allowDeletePosted) ? (
                 <Button variant="outline" onClick={() => setDeleting(detail)}>
                   <Trash2 className="size-4" />
                   Delete
                 </Button>
               ) : null}
-              {detail.status !== "draft" ? (
+              {detail.status !== "draft" && !irnLocksInvoice(detail) ? (
                 <Button variant="destructive" onClick={() => void cancelInvoice(detail)}>
                   <XCircle className="size-4" />
                   Cancel invoice
@@ -489,7 +532,13 @@ export default function SalesInvoicesPage() {
         }
       >
         {detail ? (
-          <InvoiceDetail invoice={detail} currency={business?.currency ?? "INR"} partyLabel={partyLabel(detail)} />
+          <InvoiceDetail
+            invoice={detail}
+            currency={business?.currency ?? "INR"}
+            partyLabel={partyLabel(detail)}
+            einvoice={einvoiceFor(detail.id)}
+            ewayBill={ewayBillFor(detail.id)}
+          />
         ) : null}
       </Modal>
 
@@ -576,19 +625,30 @@ function InvoiceDetail({
   invoice,
   currency,
   partyLabel,
+  einvoice,
+  ewayBill,
 }: {
   invoice: SalesInvoice;
   currency: string;
   partyLabel: string;
+  einvoice?: GstEinvoiceRecord | null;
+  ewayBill?: GstEwayBillRecord | null;
 }) {
   const customerLabel = invoice.customerId ? "Customer" : "Walk-in";
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <Badge variant={STATUS_VARIANTS[invoice.status]}>{invoice.status}</Badge>
+          <div className="flex flex-wrap items-center gap-1">
+            <Badge variant={STATUS_VARIANTS[invoice.status]}>{invoice.status}</Badge>
+            {einvoice?.status === "generated" ? <Badge variant="success">IRN</Badge> : null}
+            {ewayBill?.status === "generated" ? <Badge variant="info">EWB</Badge> : null}
+          </div>
           {invoice.paymentMode ? (
             <p className="mt-1 text-xs text-muted-foreground">Paid via {invoice.paymentMode}</p>
+          ) : null}
+          {einvoice?.status === "generated" && einvoice.irn ? (
+            <p className="mt-1 break-all text-xs text-muted-foreground">IRN {einvoice.irn}</p>
           ) : null}
         </div>
         <div className="text-right">

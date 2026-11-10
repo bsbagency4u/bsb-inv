@@ -243,9 +243,12 @@ export class LocalProductRepository implements ProductRepository {
       businessId,
       productId: input.productId,
       batchNo: input.batchNo,
+      manufacturingDate: null,
       expiryDate: input.expiryDate ?? null,
       mrp: input.mrp ?? null,
       purchasePrice: input.purchasePrice ?? null,
+      supplierId: null,
+      purchaseInvoiceId: null,
       createdAt: now,
       updatedAt: now,
     };

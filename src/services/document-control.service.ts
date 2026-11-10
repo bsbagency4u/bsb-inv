@@ -34,7 +34,7 @@ export interface DocumentGuardResult {
   overrideUsed: boolean;
 }
 
-const SALES_KINDS: DocumentControlKind[] = ["sales_invoice", "sales_return"];
+const SALES_KINDS: DocumentControlKind[] = ["sales_invoice", "sales_return", "quotation"];
 
 export function moduleForKind(kind: DocumentControlKind, direction?: "in" | "out"): "sales" | "purchase" {
   if (kind === "payment") return direction === "out" ? "purchase" : "sales";
@@ -50,7 +50,13 @@ export function isDraftStatus(status?: string | null): boolean {
 }
 
 export function isTerminalStatus(status?: string | null): boolean {
-  return status === "cancelled" || status === "returned";
+  return (
+    status === "cancelled" ||
+    status === "returned" ||
+    status === "converted" ||
+    status === "rejected" ||
+    status === "expired"
+  );
 }
 
 export function isPostedStatus(status?: string | null): boolean {

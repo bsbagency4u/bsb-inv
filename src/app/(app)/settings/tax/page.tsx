@@ -218,7 +218,7 @@ export default function TaxSettingsPage() {
               <div>
                 <p className="text-sm font-medium text-foreground">Reverse charge purchases</p>
                 <p className="text-xs text-muted-foreground">
-                  Mark new purchase invoices as reverse charge so GST is self-assessed instead of paid to the supplier.
+                  Enables reverse-charge recording on purchase bills. RCM is applied only when a bill or product is flagged, not on every purchase.
                 </p>
               </div>
               <Switch

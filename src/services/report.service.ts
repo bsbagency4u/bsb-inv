@@ -1,6 +1,8 @@
 import type { Repositories } from "@/repositories/types";
 import type {
+  GstRegistrationType,
   GstReportRow,
+  Payment,
   ReportPeriod,
   SalesReportRow,
   StockReportRow,
@@ -16,6 +18,118 @@ import type {
   StockReportQuery,
 } from "@/reports/types";
 import { DEFAULT_PAGE_SIZE } from "@/reports/stock-math";
+import { DOCUMENT_CONTROL_KEY, parseDocumentControlDefaults } from "@/lib/document-control";
+import { sumPurchases, sumSales } from "@/lib/dashboard";
+import {
+  advanceTotals,
+  cashMovement,
+  customerReconSummaries,
+  overdueFromRows,
+  outstandingTotal,
+  periodPaymentRows,
+  postedPeriodPurchases,
+  postedPeriodSales,
+  supplierReconSummaries,
+  type CashMovement,
+  type AdvanceTotals,
+  type PartyReconSummary,
+} from "@/lib/finance";
+import { customerOutstanding, supplierOutstanding, type OutstandingRow } from "@/lib/party-ledger";
+import {
+  booksPurchaseRegister,
+  booksSalesRegister,
+  filingCapability,
+  GST_RECON_NOTES_KEY,
+  gstTotals,
+  notesForPeriod,
+  parseGstReconNotes,
+  salesReturnCreditNotes,
+  type GstBooksLine,
+  type GstFilingCapability,
+  type GstReconNote,
+} from "@/lib/gst-recon";
+import {
+  buildCmp08,
+  buildGstr1Prep,
+  buildGstr3bPrep,
+  buildGstr4,
+  debitNoteLines,
+  documentSeriesFromInvoices,
+  hsnFromInvoices,
+  nilExemptFromInvoices,
+  placeOfSupplyFromLines,
+  rateWiseFromInvoices,
+  rcmLines,
+  splitB2bB2c,
+  type Cmp08Result,
+  type GstDocumentSeriesRow,
+  type GstHsnRow,
+  type GstNilExemptRow,
+  type GstPosRow,
+  type GstRateRow,
+  type Gstr1PrepResult,
+  type Gstr3bPrepResult,
+  type Gstr4Result,
+} from "@/lib/gst-reports";
+
+
+export interface FinanceSnapshot {
+  period: ReportPeriod;
+  registrationType: GstRegistrationType;
+  filing: GstFilingCapability;
+  salesTotal: number;
+  purchaseTotal: number;
+  salesCount: number;
+  purchaseCount: number;
+  receivables: OutstandingRow[];
+  payables: OutstandingRow[];
+  receivableTotal: number;
+  payableTotal: number;
+  receivableOverdue: number;
+  payableOverdue: number;
+  cash: CashMovement;
+  advances: AdvanceTotals;
+  payments: Payment[];
+  customers: PartyReconSummary[];
+  suppliers: PartyReconSummary[];
+  salesGst: GstBooksLine[];
+  purchaseGst: GstBooksLine[];
+  creditNotes: GstBooksLine[];
+  salesGstTotals: ReturnType<typeof gstTotals>;
+  purchaseGstTotals: ReturnType<typeof gstTotals>;
+  reconNotes: GstReconNote[];
+  lockedSalesCount: number;
+  lockedPurchaseCount: number;
+}
+
+export interface GstReportsSnapshot {
+  period: ReportPeriod;
+  registrationType: GstRegistrationType;
+  filing: GstFilingCapability;
+  sales: GstBooksLine[];
+  purchases: GstBooksLine[];
+  creditNotes: GstBooksLine[];
+  debitNotes: GstBooksLine[];
+  salesTotals: ReturnType<typeof gstTotals>;
+  purchaseTotals: ReturnType<typeof gstTotals>;
+  creditTotals: ReturnType<typeof gstTotals>;
+  gstr1: Gstr1PrepResult;
+  gstr3b: Gstr3bPrepResult;
+  gstr4: Gstr4Result;
+  cmp08: Cmp08Result;
+  hsn: GstHsnRow[];
+  rateWise: GstRateRow[];
+  b2b: GstBooksLine[];
+  b2c: GstBooksLine[];
+  b2bTotals: ReturnType<typeof gstTotals>;
+  b2cTotals: ReturnType<typeof gstTotals>;
+  rcm: GstBooksLine[];
+  nilExempt: GstNilExemptRow[];
+  placeOfSupply: GstPosRow[];
+  documentSeries: GstDocumentSeriesRow[];
+  lockedSalesCount: number;
+  lockedPurchaseCount: number;
+}
 
 const MOVEMENT_TYPE_LABELS: { value: StockMovementType; label: string }[] = [
   { value: "OPENING", label: "Opening" },
@@ -126,13 +240,195 @@ export class ReportService {
           documentType: invoice.gstDocumentType ?? "tax_invoice",
           placeOfSupplyState: invoice.placeOfSupplyState ?? customer?.placeOfSupplyState ?? null,
           reverseCharge: invoice.reverseCharge ?? false,
-          taxableAmount: invoice.subtotal,
+          taxableAmount: Math.max(0, invoice.total - taxAmount),
           taxAmount,
           cgst: intraState ? taxAmount / 2 : 0,
           sgst: intraState ? taxAmount / 2 : 0,
           igst: intraState ? 0 : taxAmount,
         };
       });
+  }
+
+  async financeSnapshot(businessId: string, period: ReportPeriod, today?: string): Promise<FinanceSnapshot> {
+    const [books, business, lockStored, notesStored] = await Promise.all([
+      this.ledger.loadBooks(businessId),
+      this.repos.businesses.getById(businessId),
+      this.repos.businesses.getSetting(businessId, DOCUMENT_CONTROL_KEY),
+      this.repos.businesses.getSetting(businessId, GST_RECON_NOTES_KEY),
+    ]);
+    if (!business) throw new Error("Business not found.");
+
+    const customerNames = new Map(books.customers.map((customer) => [customer.id, customer.name]));
+    const supplierNames = new Map(books.suppliers.map((supplier) => [supplier.id, supplier.name]));
+    const customerGstin = new Map(books.customers.map((customer) => [customer.id, customer.gstin]));
+    const supplierGstin = new Map(books.suppliers.map((supplier) => [supplier.id, supplier.gstin]));
+    const lockSettings = parseDocumentControlDefaults(lockStored);
+    const registrationType = business.gstRegistrationType;
+    const capability = filingCapability(registrationType);
+
+    const receivables = customerOutstanding(
+      books.sales,
+      books.payments,
+      books.salesReturns,
+      customerNames,
+      today
+    );
+    const payables = supplierOutstanding(
+      books.purchases,
+      books.payments,
+      books.purchaseReturns,
+      supplierNames,
+      today
+    );
+    const receivableOverdue = overdueFromRows(receivables);
+    const payableOverdue = overdueFromRows(payables);
+    const cash = cashMovement(books.payments, period);
+    const advances = advanceTotals(books.payments);
+    const salesLines = booksSalesRegister(
+      books.sales,
+      period,
+      customerNames,
+      customerGstin,
+      lockSettings
+    );
+    const purchaseLines = booksPurchaseRegister(
+      books.purchases,
+      period,
+      supplierNames,
+      supplierGstin,
+      lockSettings
+    );
+    const creditNotes = salesReturnCreditNotes(
+      books.salesReturns,
+      books.sales,
+      period,
+      customerNames,
+      customerGstin
+    );
+    const notes = notesForPeriod(parseGstReconNotes(notesStored), period);
+
+    return {
+      period,
+      registrationType,
+      filing: capability,
+      salesTotal: sumSales(books.sales, period.from, period.to),
+      purchaseTotal: sumPurchases(books.purchases, period.from, period.to),
+      salesCount: postedPeriodSales(books.sales, period).length,
+      purchaseCount: postedPeriodPurchases(books.purchases, period).length,
+      receivables,
+      payables,
+      receivableTotal: outstandingTotal(receivables),
+      payableTotal: outstandingTotal(payables),
+      receivableOverdue: receivableOverdue.total,
+      payableOverdue: payableOverdue.total,
+      cash,
+      advances,
+      payments: periodPaymentRows(books.payments, period),
+      customers: customerReconSummaries(books.customers, books.sales, books.salesReturns, books.payments, today),
+      suppliers: supplierReconSummaries(books.suppliers, books.purchases, books.purchaseReturns, books.payments, today),
+      salesGst: salesLines,
+      purchaseGst: purchaseLines,
+      creditNotes,
+      salesGstTotals: gstTotals(salesLines),
+      purchaseGstTotals: gstTotals(purchaseLines),
+      reconNotes: notes,
+      lockedSalesCount: salesLines.filter((line) => line.locked).length,
+      lockedPurchaseCount: purchaseLines.filter((line) => line.locked).length,
+    };
+  }
+
+  async gstReportsSnapshot(businessId: string, period: ReportPeriod): Promise<GstReportsSnapshot> {
+    const snapshot = await this.financeSnapshot(businessId, period);
+    const books = await this.ledger.loadBooks(businessId);
+    const einvoices = this.repos.compliance ? await this.repos.compliance.listEinvoices(businessId) : [];
+    const irnByKey = new Map(
+      einvoices
+        .filter((item) => item.status === "generated" && item.irn)
+        .map((item) => [`${item.documentKind}:${item.documentId}`, item.irn as string])
+    );
+    const withIrn = (lines: GstBooksLine[], kind: "sales_invoice" | "sales_return") =>
+      lines.map((line) => ({ ...line, irn: irnByKey.get(`${kind}:${line.id}`) ?? null }));
+    const sales = withIrn(snapshot.salesGst, "sales_invoice");
+    const creditNotes = withIrn(snapshot.creditNotes, "sales_return");
+    const split = splitB2bB2c(sales);
+    const debitNotes = debitNoteLines(sales, snapshot.purchaseGst);
+    const hsn = hsnFromInvoices(books.sales, period);
+    const documentSeries = [
+      ...documentSeriesFromInvoices(books.sales, period, "Invoices for outward supply"),
+      ...documentSeriesFromInvoices(
+        books.salesReturns.map((item) => ({
+          invoiceNo: item.returnNo,
+          invoiceDate: item.returnDate,
+          status: "posted",
+        })),
+        period,
+        "Credit notes (sales returns)"
+      ),
+    ];
+    const gstr1 = buildGstr1Prep({
+      sales,
+      creditNotes,
+      debitNotes,
+      hsn,
+      docs: documentSeries,
+    });
+    return {
+      period,
+      registrationType: snapshot.registrationType,
+      filing: snapshot.filing,
+      sales,
+      purchases: snapshot.purchaseGst,
+      creditNotes,
+      debitNotes,
+      salesTotals: snapshot.salesGstTotals,
+      purchaseTotals: snapshot.purchaseGstTotals,
+      creditTotals: gstTotals(creditNotes),
+      gstr1,
+      gstr3b: buildGstr3bPrep({
+        sales,
+        creditNotes,
+        purchaseTotals: snapshot.purchaseGstTotals,
+        itcAllowed: snapshot.filing.itcAllowed,
+        gstr1,
+      }),
+      gstr4: buildGstr4({ sales, purchases: snapshot.purchaseGst }),
+      cmp08: buildCmp08({ sales, purchases: snapshot.purchaseGst }),
+      hsn,
+      rateWise: rateWiseFromInvoices(books.sales, period),
+      b2b: split.b2b,
+      b2c: split.b2c,
+      b2bTotals: split.b2bTotals,
+      b2cTotals: split.b2cTotals,
+      rcm: rcmLines(snapshot.purchaseGst),
+      nilExempt: nilExemptFromInvoices(books.sales, period),
+      placeOfSupply: placeOfSupplyFromLines(sales),
+      documentSeries,
+      lockedSalesCount: snapshot.lockedSalesCount,
+      lockedPurchaseCount: snapshot.lockedPurchaseCount,
+    };
+  }
+
+  async saveGstReconNote(
+    businessId: string,
+    userId: string,
+    period: ReportPeriod,
+    documentNo: string,
+    note: string
+  ): Promise<GstReconNote> {
+    const trimmed = note.trim();
+    if (!trimmed) throw new Error("Enter a reconciliation note.");
+    const stored = parseGstReconNotes(await this.repos.businesses.getSetting(businessId, GST_RECON_NOTES_KEY));
+    const entry: GstReconNote = {
+      id: `gst-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      periodFrom: period.from,
+      periodTo: period.to,
+      documentNo: documentNo.trim(),
+      note: trimmed,
+      createdAt: new Date().toISOString(),
+      createdBy: userId,
+    };
+    await this.repos.businesses.setSetting(businessId, GST_RECON_NOTES_KEY, [...stored, entry], userId);
+    return entry;
   }
 
   listStockReportDefinitions(): ReportDefinition[] {

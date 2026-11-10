@@ -24,6 +24,9 @@ import {
   Monitor,
   Archive,
   History,
+  ShieldCheck,
+  ClipboardList,
+  SlidersHorizontal,
 } from "lucide-react";
 
 export interface NavItem {
@@ -61,7 +64,9 @@ export const NAVIGATION: NavSection[] = [
         phase: 2,
       },
       { title: "Transfers", href: "/inventory/transfers", icon: Boxes, phase: 3 },
-      { title: "Barcode", href: "/inventory/barcode", icon: ScanBarcode, phase: 4 },
+      { title: "Adjustments", href: "/inventory/adjustments", icon: SlidersHorizontal, phase: 3 },
+      { title: "Stock counts", href: "/inventory/counts", icon: ClipboardList, phase: 3 },
+      { title: "Barcode", href: "/inventory/barcode", icon: ScanBarcode, phase: 3 },
     ],
   },
   {
@@ -69,6 +74,7 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { title: "POS", href: "/sales/pos", icon: ShoppingCart, phase: 2 },
       { title: "Invoices", href: "/sales/invoices", icon: FileText, phase: 2 },
+      { title: "Quotations", href: "/sales/quotations", icon: ClipboardList, phase: 2 },
       { title: "Returns", href: "/sales/returns", icon: Undo2, phase: 3 },
     ],
   },
@@ -90,6 +96,13 @@ export const NAVIGATION: NavSection[] = [
     ],
   },
   {
+    label: "GST Compliance",
+    items: [
+      { title: "E-Invoice", href: "/gst/einvoice", icon: ShieldCheck, phase: 2 },
+      { title: "E-Way Bill", href: "/gst/ewaybill", icon: Truck, phase: 2 },
+    ],
+  },
+  {
     label: "Insights",
     items: [{ title: "Reports", href: "/reports", icon: BarChart3, phase: 2 }],
   },
@@ -104,6 +117,7 @@ export const SETTINGS_NAVIGATION: NavItem[] = [
   { title: "Users & Roles", href: "/settings/users", icon: Users },
   { title: "Tax", href: "/settings/tax", icon: Receipt },
   { title: "Invoice & Print", href: "/settings/invoice", icon: FileText },
+  { title: "Quotations", href: "/settings/quotations", icon: ClipboardList },
   { title: "Document Control", href: "/settings/document-control", icon: History },
   { title: "Inventory", href: "/settings/inventory", icon: Boxes },
   { title: "Sales", href: "/settings/sales", icon: ShoppingCart },

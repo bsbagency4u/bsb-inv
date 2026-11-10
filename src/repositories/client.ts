@@ -20,6 +20,8 @@ import { LocalPartyRepository } from "./local/party.repository";
 import { LocalTransactionRepository } from "./local/transaction.repository";
 import { LocalNotificationRepository } from "./local/notification.repository";
 import { LocalTeamRepository } from "./local/team.repository";
+import { SupabaseComplianceRepository } from "./compliance.repository";
+import { LocalComplianceRepository } from "./local/compliance.repository";
 import type { Repositories } from "./types";
 
 let cached: Repositories | null = null;
@@ -34,6 +36,7 @@ const buildLocal = (): Repositories => ({
   transactions: new LocalTransactionRepository(),
   notifications: new LocalNotificationRepository(),
   team: new LocalTeamRepository(),
+  compliance: new LocalComplianceRepository(),
 });
 
 /**
@@ -69,6 +72,7 @@ export function getClientRepositories(): Repositories {
     transactions: new SupabaseTransactionRepository(client),
     notifications: new SupabaseNotificationRepository(client),
     team: new SupabaseTeamRepository(client),
+    compliance: new SupabaseComplianceRepository(client),
   };
   return cached;
 }

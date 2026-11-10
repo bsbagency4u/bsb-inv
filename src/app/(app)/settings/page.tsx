@@ -25,7 +25,7 @@ const SETTINGS_GROUPS = [
     items: [
       { label: "Business profile", href: "/settings/business", icon: Store, available: true },
       { label: "Users & roles", href: "/settings/users", icon: Users, available: true },
-      { label: "Warehouses", href: "/settings/warehouses", icon: Warehouse, available: false },
+      { label: "Warehouses", href: "/settings/warehouses", icon: Warehouse, available: true },
     ],
   },
   {
@@ -40,7 +40,7 @@ const SETTINGS_GROUPS = [
   {
     title: "Operations",
     items: [
-      { label: "Inventory", href: "/settings/inventory", icon: Boxes, available: false },
+      { label: "Inventory", href: "/settings/inventory", icon: Boxes, available: true },
       { label: "Sales", href: "/settings/sales", icon: ShoppingCart, available: true },
       { label: "Purchase", href: "/settings/purchase", icon: ShoppingBag, available: true },
       { label: "Counters", href: "/settings/counters", icon: Monitor, available: false },

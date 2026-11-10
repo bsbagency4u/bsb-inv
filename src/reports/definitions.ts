@@ -297,6 +297,21 @@ export const STOCK_REPORT_DEFINITIONS: ReportDefinition[] = [
     ],
   },
   {
+    id: "stock-value-by-gst-rate",
+    title: "Stock Value by GST Rate",
+    description: "On-hand stock grouped by product GST rate, with cost and selling valuation. Tax on selling value is an estimate, not GST return liability.",
+    category: "valuation",
+    filters: PRODUCT_FILTERS,
+    columns: [
+      { key: "gstRate", label: "GST %", type: "number", align: "right", sortable: true },
+      { key: "productCount", label: "Products", type: "number", align: "right", sortable: true },
+      { key: "quantity", label: "Qty", type: "qty", align: "right", sortable: true },
+      { key: "costValue", label: "Cost value", type: "currency", align: "right", sortable: true },
+      { key: "sellingValue", label: "Selling value", type: "currency", align: "right", sortable: true },
+      { key: "taxEstimate", label: "Tax estimate", type: "currency", align: "right" },
+    ],
+  },
+  {
     id: "batch-wise-stock",
     title: "Batch-wise Stock",
     description: "On-hand quantity by batch. Batch identifies stock, never quantity.",

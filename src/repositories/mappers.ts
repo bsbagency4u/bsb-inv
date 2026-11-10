@@ -13,6 +13,7 @@ import type {
   Product,
   ProductBatch,
   ProductImage,
+  ProductSerial as ProductSerialRow,
   ProductStockView,
   ProductVariant,
   Profile,
@@ -22,13 +23,22 @@ import type {
   PurchaseReceiptItem,
   PurchaseReturn,
   PurchaseReturnItem,
+  Quotation as QuotationRow,
+  QuotationItem as QuotationItemRow,
   Role,
   SalesInvoice,
   SalesReturn,
   SalesReturnItem,
+  StockAdjustment as StockAdjustmentRow,
+  StockAdjustmentItem as StockAdjustmentItemRow,
   StockBalanceView,
+  StockCount as StockCountRow,
+  StockCountItem as StockCountItemRow,
   StockLedger,
   StockLocation,
+  StockReservation as StockReservationRow,
+  StockTransfer as StockTransferRow,
+  StockTransferItem as StockTransferItemRow,
   Supplier,
   Unit,
   Warehouse,
@@ -57,19 +67,39 @@ import type {
   PurchaseOrder as PurchaseOrderModel,
   PurchaseReceipt as PurchaseReceiptModel,
   PurchaseReturn as PurchaseReturnModel,
+  Quotation as QuotationModel,
+  QuotationFormat,
+  QuotationLine,
+  QuotationStatus,
   Role as RoleModel,
   SalesInvoice as SalesInvoiceModel,
   SalesReturn as SalesReturnModel,
   SessionUser,
   StockBalance,
   TeamInvitation,
+  ProductSerial as ProductSerialModel,
+  ProductSerialStatus,
+  StockAdjustment as StockAdjustmentModel,
+  StockAdjustmentItem as StockAdjustmentItemModel,
+  StockAdjustmentReasonCode,
+  StockAdjustmentStatus,
+  StockCountItem as StockCountItemModel,
+  StockCountSession,
+  StockCountStatus,
   StockLocation as StockLocationModel,
+  StockLocationKind,
   StockMovement,
+  StockReservation as StockReservationModel,
+  StockReservationStatus,
+  StockTransfer as StockTransferModel,
+  StockTransferItem as StockTransferItemModel,
+  StockTransferStatus,
   Supplier as SupplierModel,
   Unit as UnitModel,
   Warehouse as WarehouseModel,
 } from "@/types/domain";
 import { normalizeGstDocumentType, normalizeGstPartyRegistrationType, normalizeGstRegistrationType, normalizeGstSupplyType } from "@/lib/gst";
+import { normalizeLocationKind } from "@/lib/inventory-settings";
 
 const asNumber = (value: unknown): number => {
   const n = typeof value === "number" ? value : Number(value);
@@ -124,6 +154,10 @@ export function mapWarehouse(row: Warehouse): WarehouseModel {
     name: row.name,
     code: row.code,
     address: row.address,
+    state: row.state ?? null,
+    pincode: row.pincode ?? null,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -138,6 +172,7 @@ export function mapStockLocation(row: StockLocation): StockLocationModel {
     parentId: row.parent_id,
     name: row.name,
     code: row.code,
+    kind: normalizeLocationKind(row.kind) as StockLocationKind,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -233,9 +268,12 @@ export function mapProductBatch(row: ProductBatch): ProductBatchModel {
     businessId: row.business_id,
     productId: row.product_id,
     batchNo: row.batch_no,
+    manufacturingDate: row.manufacturing_date ?? null,
     expiryDate: row.expiry_date,
     mrp: row.mrp === null ? null : asNumber(row.mrp),
     purchasePrice: row.purchase_price === null || row.purchase_price === undefined ? null : asNumber(row.purchase_price),
+    supplierId: row.supplier_id ?? null,
+    purchaseInvoiceId: row.purchase_invoice_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -279,6 +317,183 @@ export function mapStockMovement(row: StockLedger): StockMovement {
     referenceId: row.reference_id,
     notes: row.notes,
     createdAt: row.created_at,
+  };
+}
+
+const TRANSFER_STATUSES: StockTransferStatus[] = [
+  "draft",
+  "requested",
+  "approved",
+  "dispatched",
+  "in_transit",
+  "partially_received",
+  "completed",
+  "cancelled",
+];
+
+const ADJUSTMENT_STATUSES: StockAdjustmentStatus[] = ["draft", "pending_approval", "posted", "cancelled"];
+const ADJUSTMENT_REASONS: StockAdjustmentReasonCode[] = [
+  "physical_count",
+  "damage",
+  "expiry",
+  "theft",
+  "found",
+  "opening_correction",
+  "other",
+];
+const COUNT_STATUSES: StockCountStatus[] = [
+  "draft",
+  "counting",
+  "review",
+  "pending_approval",
+  "posted",
+  "cancelled",
+];
+const RESERVATION_STATUSES: StockReservationStatus[] = ["open", "consumed", "released"];
+const SERIAL_STATUSES: ProductSerialStatus[] = ["in_stock", "reserved", "sold", "returned", "scrapped"];
+
+function asEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+export function mapStockTransferItem(row: StockTransferItemRow): StockTransferItemModel {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    batchId: row.batch_id,
+    quantity: asNumber(row.quantity),
+    dispatchedQuantity: asNumber(row.dispatched_quantity),
+    receivedQuantity: asNumber(row.received_quantity),
+    shortageQuantity: asNumber(row.shortage_quantity),
+    unit: row.unit,
+    notes: row.notes,
+  };
+}
+
+export function mapStockTransfer(row: StockTransferRow, items: StockTransferItemRow[] = []): StockTransferModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    transferNo: row.transfer_no,
+    status: asEnum(row.status, TRANSFER_STATUSES, "draft"),
+    fromWarehouseId: row.from_warehouse_id,
+    fromLocationId: row.from_location_id,
+    toWarehouseId: row.to_warehouse_id,
+    toLocationId: row.to_location_id,
+    requestedBy: row.requested_by,
+    dispatchedBy: row.dispatched_by,
+    receivedBy: row.received_by,
+    requestedAt: row.requested_at,
+    dispatchedAt: row.dispatched_at,
+    receivedAt: row.received_at,
+    notes: row.notes,
+    shortageReason: row.shortage_reason,
+    items: items.map(mapStockTransferItem),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapStockAdjustmentItem(row: StockAdjustmentItemRow): StockAdjustmentItemModel {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    batchId: row.batch_id,
+    change: asNumber(row.change),
+    unit: row.unit,
+    notes: row.notes,
+  };
+}
+
+export function mapStockAdjustment(row: StockAdjustmentRow, items: StockAdjustmentItemRow[] = []): StockAdjustmentModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    adjustmentNo: row.adjustment_no,
+    status: asEnum(row.status, ADJUSTMENT_STATUSES, "draft"),
+    reason: asEnum(row.reason, ADJUSTMENT_REASONS, "other"),
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    notes: row.notes,
+    requestedBy: row.requested_by,
+    approvedBy: row.approved_by,
+    postedAt: row.posted_at,
+    items: items.map(mapStockAdjustmentItem),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapStockCountItem(row: StockCountItemRow): StockCountItemModel {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    batchId: row.batch_id,
+    systemQuantity: asNumber(row.system_quantity),
+    countedQuantity: row.counted_quantity === null || row.counted_quantity === undefined ? null : asNumber(row.counted_quantity),
+    unit: row.unit,
+    notes: row.notes,
+  };
+}
+
+export function mapStockCount(row: StockCountRow, items: StockCountItemRow[] = []): StockCountSession {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    countNo: row.count_no,
+    status: asEnum(row.status, COUNT_STATUSES, "draft"),
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    notes: row.notes,
+    countedBy: row.counted_by,
+    approvedBy: row.approved_by,
+    postedAt: row.posted_at,
+    items: items.map(mapStockCountItem),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapStockReservation(row: StockReservationRow): StockReservationModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    batchId: row.batch_id,
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    quantity: asNumber(row.quantity),
+    status: asEnum(row.status, RESERVATION_STATUSES, "open"),
+    referenceType: row.reference_type,
+    referenceId: row.reference_id,
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapProductSerial(row: ProductSerialRow): ProductSerialModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    productId: row.product_id,
+    variantId: row.variant_id,
+    serialNo: row.serial_no,
+    imei: row.imei,
+    warrantyMonths: row.warranty_months === null || row.warranty_months === undefined ? null : asNumber(row.warranty_months),
+    warrantyExpiresOn: row.warranty_expires_on,
+    warehouseId: row.warehouse_id,
+    locationId: row.location_id,
+    batchId: row.batch_id,
+    status: asEnum(row.status, SERIAL_STATUSES, "in_stock"),
+    referenceType: row.reference_type,
+    referenceId: row.reference_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -426,6 +641,81 @@ export function mapSalesReturnItem(
   };
 }
 
+function asQuotationStatus(value: string | null | undefined): QuotationStatus {
+  const allowed: QuotationStatus[] = [
+    "draft",
+    "sent",
+    "accepted",
+    "rejected",
+    "expired",
+    "converted",
+    "cancelled",
+  ];
+  return allowed.includes(value as QuotationStatus) ? (value as QuotationStatus) : "draft";
+}
+
+function asQuotationFormat(value: string | null | undefined): QuotationFormat {
+  return value === "formal_proposal" ? "formal_proposal" : "product_service";
+}
+
+export function mapQuotation(row: QuotationRow): QuotationModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    quotationNo: row.quotation_no,
+    customerId: row.customer_id,
+    partyName: row.party_name ?? "",
+    partyGstin: row.party_gstin,
+    partyPhone: row.party_phone,
+    partyEmail: row.party_email,
+    quotationDate: row.quotation_date,
+    validUntil: row.valid_until,
+    status: asQuotationStatus(row.status),
+    format: asQuotationFormat(row.format),
+    templateId: row.template_id,
+    title: row.title,
+    intro: row.intro,
+    scope: row.scope,
+    timeline: row.timeline,
+    assumptions: row.assumptions,
+    termsAndConditions: row.terms_and_conditions,
+    notes: row.notes,
+    subtotal: asNumber(row.subtotal),
+    discount: asNumber(row.discount),
+    taxTotal: asNumber(row.tax_total),
+    total: asNumber(row.total),
+    intraState: row.intra_state ?? true,
+    placeOfSupplyState: row.place_of_supply_state ?? null,
+    gstRegistrationSnapshot:
+      row.gst_registration_snapshot != null
+        ? normalizeGstRegistrationType(row.gst_registration_snapshot)
+        : null,
+    convertedSalesInvoiceId: row.converted_sales_invoice_id,
+    items: [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapQuotationItem(row: QuotationItemRow): QuotationLine {
+  return {
+    productId: row.product_id,
+    name: row.name ?? "",
+    description: row.description,
+    sku: row.sku,
+    hsn: row.hsn,
+    quantity: asNumber(row.quantity),
+    unit: row.unit,
+    unitPrice: asNumber(row.unit_price),
+    gstRate: asNumber(row.gst_rate),
+    discount: asNumber(row.discount),
+    taxableAmount: asNumber(row.taxable_amount),
+    taxAmount: asNumber(row.tax_amount),
+    amount: asNumber(row.amount),
+    gstSupplyType: row.gst_supply_type ? normalizeGstSupplyType(row.gst_supply_type) : null,
+  };
+}
+
 export function mapSalesInvoice(row: SalesInvoice): SalesInvoiceModel {
   return {
     id: row.id,
@@ -503,7 +793,7 @@ export function mapPurchaseInvoice(row: PurchaseInvoice): PurchaseInvoiceModel {
         : null,
     intraState: row.intra_state ?? true,
     reverseCharge: row.reverse_charge ?? false,
-    itcEligible: row.itc_eligible ?? true,
+    itcEligible: row.itc_eligible ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

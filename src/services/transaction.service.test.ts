@@ -3,11 +3,15 @@ import type { Repositories } from "@/repositories/types";
 import type {
   AuditEvent,
   BusinessProfile,
+  GstEinvoiceRecord,
+  GstSupplyType,
   Product,
   ProductBatch,
   PurchaseInvoice,
   PurchaseOrder,
+  Quotation,
   SalesInvoice,
+  Supplier,
 } from "@/types/domain";
 import { allocateReceivedQuantities, receivingStatusForItems } from "@/lib/purchase-receiving";
 import { DOCUMENT_CONTROL_KEY, todayIsoDate } from "@/lib/document-control";
@@ -72,7 +76,10 @@ function memoryRepositories() {
   const purchaseOrders: PurchaseOrder[] = [];
   const purchaseReturns: unknown[] = [];
   const salesReturns: unknown[] = [];
+  const quotations: Quotation[] = [];
   const settings = new Map<string, unknown>();
+  const suppliers: Supplier[] = [];
+  const einvoices: GstEinvoiceRecord[] = [];
   const paymentModes: Array<{ id: string; businessId: string; code: string; name: string; isActive: boolean; sortOrder: number; createdAt: string; updatedAt: string }> = [
     { id: "m-cash", businessId: "b-1", code: "cash", name: "Cash", isActive: true, sortOrder: 10, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: "m-upi", businessId: "b-1", code: "upi", name: "UPI", isActive: true, sortOrder: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
@@ -141,9 +148,12 @@ function memoryRepositories() {
           businessId,
           productId: input.productId,
           batchNo: input.batchNo,
+          manufacturingDate: null,
           expiryDate: input.expiryDate ?? null,
           mrp: input.mrp ?? null,
           purchasePrice: input.purchasePrice ?? null,
+          supplierId: null,
+          purchaseInvoiceId: null,
           createdAt: now,
           updatedAt: now,
         };
@@ -262,6 +272,26 @@ function memoryRepositories() {
       async createLocation() { throw new Error("not used"); },
       async updateLocation() { throw new Error("not used"); },
       async deleteLocation() {},
+      async listWarehouseAssignments() { return []; },
+      async setWarehouseAssignments() { return []; },
+      async listTransfers() { return []; },
+      async getTransfer() { return null; },
+      async createTransfer() { throw new Error("not used"); },
+      async updateTransfer() { throw new Error("not used"); },
+      async listAdjustments() { return []; },
+      async getAdjustment() { return null; },
+      async createAdjustment() { throw new Error("not used"); },
+      async updateAdjustment() { throw new Error("not used"); },
+      async listCounts() { return []; },
+      async getCount() { return null; },
+      async createCount() { throw new Error("not used"); },
+      async updateCount() { throw new Error("not used"); },
+      async listReservations() { return []; },
+      async createReservation() { throw new Error("not used"); },
+      async updateReservationStatus() { throw new Error("not used"); },
+      async listSerials() { return []; },
+      async createSerial() { throw new Error("not used"); },
+      async updateSerial() { throw new Error("not used"); },
     },
     parties: {
       async listCustomers() { return []; },
@@ -269,8 +299,8 @@ function memoryRepositories() {
       async createCustomer() { throw new Error("not used"); },
       async updateCustomer() { throw new Error("not used"); },
       async deleteCustomer() {},
-      async listSuppliers() { return []; },
-      async getSupplier() { return null; },
+      async listSuppliers() { return suppliers; },
+      async getSupplier(_b, id) { return suppliers.find((s) => s.id === id) ?? null; },
       async createSupplier() { throw new Error("not used"); },
       async updateSupplier() { throw new Error("not used"); },
       async deleteSupplier() {},
@@ -296,20 +326,32 @@ function memoryRepositories() {
           paidAmount: header.paidAmount,
           paymentMode: header.paymentMode ?? null,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: item.discount ?? 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice * (1 + item.gstRate / 100),
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+          intraState: header.gst?.intraState ?? true,
+          reverseCharge: header.gst?.reverseCharge ?? false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -332,20 +374,32 @@ function memoryRepositories() {
           paidAmount: header.paidAmount,
           paymentMode: header.paymentMode ?? null,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: item.discount ?? 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice * (1 + item.gstRate / 100),
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType ?? salesInvoices[index].gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? salesInvoices[index].placeOfSupplyState,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? salesInvoices[index].gstRegistrationSnapshot,
+          intraState: header.gst?.intraState ?? salesInvoices[index].intraState,
+          reverseCharge: header.gst?.reverseCharge ?? salesInvoices[index].reverseCharge,
           updatedAt: new Date().toISOString(),
         };
         return salesInvoices[index];
@@ -431,20 +485,34 @@ function memoryRepositories() {
           total: header.total,
           paidAmount: header.paidAmount,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice,
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? null,
+          supplierGstin: header.gst?.supplierGstin ?? null,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? null,
+          intraState: header.gst?.intraState ?? true,
+          reverseCharge: header.gst?.reverseCharge ?? false,
+          itcEligible: header.gst?.itcEligible ?? false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -467,20 +535,34 @@ function memoryRepositories() {
           total: header.total,
           paidAmount: header.paidAmount,
           notes: header.notes ?? null,
-          items: items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            batchId: item.batchId ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            gstRate: item.gstRate,
-            discount: 0,
-            taxableAmount: item.quantity * item.unitPrice,
-            taxAmount: item.quantity * item.unitPrice * (item.gstRate / 100),
-            amount: item.quantity * item.unitPrice,
-            saleUnit: item.saleUnit ?? null,
-            baseQuantity: item.baseQuantity ?? item.quantity,
-          })),
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              batchId: item.batchId ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              saleUnit: item.saleUnit ?? null,
+              baseQuantity: item.baseQuantity ?? item.quantity,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+              hsn: item.hsn ?? null,
+            };
+          }),
+          gstDocumentType: header.gst?.gstDocumentType ?? purchaseInvoices[index].gstDocumentType,
+          placeOfSupplyState: header.gst?.placeOfSupplyState ?? purchaseInvoices[index].placeOfSupplyState,
+          supplierGstin: header.gst?.supplierGstin ?? purchaseInvoices[index].supplierGstin,
+          gstRegistrationSnapshot: header.gst?.gstRegistrationSnapshot ?? purchaseInvoices[index].gstRegistrationSnapshot,
+          intraState: header.gst?.intraState ?? purchaseInvoices[index].intraState,
+          reverseCharge: header.gst?.reverseCharge ?? purchaseInvoices[index].reverseCharge,
+          itcEligible: header.gst?.itcEligible ?? purchaseInvoices[index].itcEligible,
           updatedAt: new Date().toISOString(),
         };
         return purchaseInvoices[index];
@@ -602,6 +684,138 @@ function memoryRepositories() {
       async listSalesReturns() { return salesReturns as never[]; },
       async listSalesInvoicesForSearch() { return []; },
       async listPurchaseInvoicesForSearch() { return []; },
+      async listQuotations(businessId) { return quotations.filter((item) => item.businessId === businessId); },
+      async getQuotation(_b, id) { return quotations.find((item) => item.id === id) ?? null; },
+      async createQuotation(businessId, _u, header, items) {
+        const now = new Date().toISOString();
+        const quotation: Quotation = {
+          id: `qtn-${quotations.length + 1}`,
+          businessId,
+          quotationNo: header.quotationNo,
+          customerId: header.customerId ?? null,
+          partyName: header.partyName,
+          partyGstin: header.partyGstin ?? null,
+          partyPhone: header.partyPhone ?? null,
+          partyEmail: header.partyEmail ?? null,
+          quotationDate: header.quotationDate,
+          validUntil: header.validUntil ?? null,
+          status: header.status,
+          format: header.format,
+          templateId: header.templateId ?? null,
+          title: header.title ?? null,
+          intro: header.intro ?? null,
+          scope: header.scope ?? null,
+          timeline: header.timeline ?? null,
+          assumptions: header.assumptions ?? null,
+          termsAndConditions: header.termsAndConditions ?? null,
+          notes: header.notes ?? null,
+          subtotal: header.subtotal,
+          discount: header.discount,
+          taxTotal: header.taxTotal,
+          total: header.total,
+          intraState: header.intraState ?? true,
+          placeOfSupplyState: header.placeOfSupplyState ?? null,
+          gstRegistrationSnapshot: header.gstRegistrationSnapshot ?? null,
+          convertedSalesInvoiceId: header.convertedSalesInvoiceId ?? null,
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId ?? null,
+              name: item.name,
+              description: item.description ?? null,
+              sku: item.sku ?? null,
+              hsn: item.hsn ?? null,
+              quantity: item.quantity,
+              unit: item.unit ?? null,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+            };
+          }),
+          createdAt: now,
+          updatedAt: now,
+        };
+        quotations.push(quotation);
+        return quotation;
+      },
+      async updateQuotation(_b, quotationId, header, items) {
+        const index = quotations.findIndex((item) => item.id === quotationId);
+        if (index === -1) throw new Error("Quotation not found.");
+        quotations[index] = {
+          ...quotations[index],
+          customerId: header.customerId ?? null,
+          partyName: header.partyName,
+          partyGstin: header.partyGstin ?? null,
+          partyPhone: header.partyPhone ?? null,
+          partyEmail: header.partyEmail ?? null,
+          quotationDate: header.quotationDate,
+          validUntil: header.validUntil ?? null,
+          status: header.status,
+          format: header.format,
+          templateId: header.templateId ?? null,
+          title: header.title ?? null,
+          intro: header.intro ?? null,
+          scope: header.scope ?? null,
+          timeline: header.timeline ?? null,
+          assumptions: header.assumptions ?? null,
+          termsAndConditions: header.termsAndConditions ?? null,
+          notes: header.notes ?? null,
+          subtotal: header.subtotal,
+          discount: header.discount,
+          taxTotal: header.taxTotal,
+          total: header.total,
+          intraState: header.intraState ?? quotations[index].intraState,
+          placeOfSupplyState: header.placeOfSupplyState ?? quotations[index].placeOfSupplyState,
+          gstRegistrationSnapshot: header.gstRegistrationSnapshot ?? quotations[index].gstRegistrationSnapshot,
+          convertedSalesInvoiceId: header.convertedSalesInvoiceId ?? quotations[index].convertedSalesInvoiceId,
+          items: items.map((item) => {
+            const gross = item.quantity * item.unitPrice;
+            const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+            const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+            return {
+              productId: item.productId ?? null,
+              name: item.name,
+              description: item.description ?? null,
+              sku: item.sku ?? null,
+              hsn: item.hsn ?? null,
+              quantity: item.quantity,
+              unit: item.unit ?? null,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount ?? 0,
+              taxableAmount: taxable,
+              taxAmount: tax,
+              amount: item.amount ?? taxable + tax,
+              gstSupplyType: (item.gstSupplyType ?? null) as GstSupplyType | null,
+            };
+          }),
+          updatedAt: new Date().toISOString(),
+        };
+        return quotations[index];
+      },
+      async updateQuotationStatus(_b, quotationId, status, extra) {
+        const index = quotations.findIndex((item) => item.id === quotationId);
+        if (index === -1) throw new Error("Quotation not found.");
+        quotations[index] = {
+          ...quotations[index],
+          status,
+          convertedSalesInvoiceId:
+            extra && "convertedSalesInvoiceId" in extra
+              ? extra.convertedSalesInvoiceId ?? null
+              : quotations[index].convertedSalesInvoiceId,
+          updatedAt: new Date().toISOString(),
+        };
+      },
+      async deleteQuotation(_b, quotationId) {
+        const index = quotations.findIndex((item) => item.id === quotationId);
+        if (index !== -1) quotations.splice(index, 1);
+      },
     },
     notifications: {
       async list() { return []; },
@@ -684,9 +898,44 @@ function memoryRepositories() {
       async removeMember() {},
       async getMemberPermissions() { return [...memberPermissions]; },
     },
+    compliance: {
+      async getCredentialPublic() {
+        return {
+          configured: false,
+          provider: "nic",
+          environment: "sandbox" as const,
+          gstin: null,
+          usernameMasked: null,
+          lastValidatedAt: null,
+          lastError: null,
+        };
+      },
+      async getCredentialSecret() { return null; },
+      async upsertCredentials() {
+        return {
+          configured: true,
+          provider: "nic",
+          environment: "sandbox" as const,
+          gstin: null,
+          usernameMasked: null,
+          lastValidatedAt: null,
+          lastError: null,
+        };
+      },
+      async listEinvoices() { return einvoices; },
+      async getEinvoice(_b: string, documentKind: GstEinvoiceRecord["documentKind"], documentId: string) {
+        return einvoices.find((item) => item.documentKind === documentKind && item.documentId === documentId) ?? null;
+      },
+      async upsertEinvoice() { throw new Error("not used"); },
+      async listEwayBills() { return []; },
+      async getEwayBill() { return null; },
+      async upsertEwayBill() { throw new Error("not used"); },
+      async listAttempts() { return []; },
+      async addAttempt() { throw new Error("not used"); },
+    },
   };
 
-  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions };
+  return { repos, products, ledger, salesInvoices, purchaseInvoices, purchaseOrders, payments, auditLogs, batches, settings, memberPermissions, suppliers, einvoices, quotations };
 }
 
 describe("TransactionService", () => {
@@ -1937,6 +2186,280 @@ describe("TransactionService", () => {
       });
       expect(completed.invoice.status).not.toBe("draft");
       expect(netQty(product.id)).toBe(-1);
+    });
+  });
+
+  describe("GST snapshots", () => {
+    function seedSupplier(overrides: Partial<Supplier> = {}): Supplier {
+      const now = new Date().toISOString();
+      const supplier: Supplier = {
+        id: overrides.id ?? `s-${services.suppliers.length + 1}`,
+        businessId: "b-1",
+        name: overrides.name ?? "Supplier",
+        phone: null,
+        email: null,
+        gstin: overrides.gstin ?? "27AAAAA0000A1Z5",
+        pan: null,
+        address: null,
+        city: null,
+        state: overrides.state ?? "Maharashtra",
+        pincode: null,
+        country: "India",
+        gstRegistrationType: overrides.gstRegistrationType ?? "registered",
+        placeOfSupplyState: overrides.placeOfSupplyState ?? overrides.state ?? "Maharashtra",
+        paymentTerms: null,
+        notes: null,
+        openingBalance: 0,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+        ...overrides,
+      };
+      services.suppliers.push(supplier);
+      return supplier;
+    }
+
+    it("does not apply reverse charge just because the tax setting is on", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      await services.repos.businesses.setSetting("b-1", "tax.defaults", {
+        gstEnabled: true,
+        defaultGstRate: 18,
+        defaultIntraState: true,
+        reverseChargeEnabled: true,
+      }, "u-1");
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-OFF", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(false);
+      expect(invoice.itcEligible).toBe(true);
+      expect(invoice.taxTotal).toBe(18);
+    });
+
+    it("records reverse charge only when the bill is flagged", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-ON", {
+        supplierId: supplier.id,
+        reverseCharge: true,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(true);
+      expect(invoice.itcEligible).toBe(true);
+      expect(invoice.taxTotal).toBe(18);
+    });
+
+    it("records reverse charge when a product is flagged", async () => {
+      const product = await services.repos.products.createProduct("b-1", "u-1", {
+        name: "RCM item",
+        gstRate: 18,
+        purchasePrice: 100,
+        salePrice: 200,
+        reverseCharge: true,
+      });
+      const supplier = seedSupplier({ gstRegistrationType: "registered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-RCM-PROD", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.reverseCharge).toBe(true);
+      expect(invoice.itcEligible).toBe(true);
+    });
+
+    it("does not charge tax on a composition supplier bill", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "composition" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-COMP", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.gstDocumentType).toBe("bill_of_supply");
+      expect(invoice.taxTotal).toBe(0);
+      expect(invoice.total).toBe(100);
+      expect(invoice.itcEligible).toBe(false);
+      expect(invoice.items[0].gstRate).toBe(0);
+    });
+
+    it("does not default ITC on a bill with no tax", async () => {
+      const product = await seedProduct();
+      const supplier = seedSupplier({ gstRegistrationType: "unregistered" });
+      const invoice = await transactions.createPurchaseInvoice("b-1", "u-1", "PUR-GST-ITC", {
+        supplierId: supplier.id,
+        items: [{ productId: product.id, quantity: 1, unitPrice: 100, gstRate: 18 }],
+      });
+      expect(invoice.itcEligible).toBe(false);
+      expect(invoice.taxTotal).toBe(0);
+    });
+
+    it("locks a posted invoice after a generated IRN", async () => {
+      const product = await seedProduct();
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-IRN", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      services.einvoices.push({
+        id: "einvoice-1",
+        businessId: "b-1",
+        documentKind: "sales_invoice",
+        documentId: invoice.id,
+        documentNo: invoice.invoiceNo,
+        documentDate: invoice.invoiceDate,
+        status: "generated",
+        irn: "irn-generated-value",
+        ackNo: "1",
+        ackDate: invoice.invoiceDate,
+        signedQrCode: "qr",
+        cancelReason: null,
+        cancelledAt: null,
+        lastError: null,
+        requestHash: "h1",
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+      });
+      await expect(
+        transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+          items: [{ productId: product.id, quantity: 2, unitPrice: 200, gstRate: 18 }],
+        })
+      ).rejects.toThrow(/generated IRN/i);
+      await expect(transactions.cancelSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/generated IRN/i);
+      await expect(transactions.deleteSalesInvoice("b-1", "u-1", invoice.id)).rejects.toThrow(/generated IRN/i);
+    });
+
+    it("does not lock a posted invoice while the IRN is still pending", async () => {
+      const product = await seedProduct();
+      await transactions.createPurchaseInvoice("b-1", "u-1", "BILL-GST-IRN-P", {
+        items: [{ productId: product.id, quantity: 10, unitPrice: 100, gstRate: 0 }],
+      });
+      const { invoice } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-IRN-P", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      services.einvoices.push({
+        id: "einvoice-pending",
+        businessId: "b-1",
+        documentKind: "sales_invoice",
+        documentId: invoice.id,
+        documentNo: invoice.invoiceNo,
+        documentDate: invoice.invoiceDate,
+        status: "pending",
+        irn: null,
+        ackNo: null,
+        ackDate: null,
+        signedQrCode: null,
+        cancelReason: null,
+        cancelledAt: null,
+        lastError: null,
+        requestHash: "h-pending",
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+      });
+      const updated = await transactions.updateSalesInvoice("b-1", "u-1", invoice.id, {
+        notes: "pending IRN still editable",
+        items: [{ productId: product.id, quantity: 1, unitPrice: 200, gstRate: 18 }],
+        payments: [{ mode: "cash", amount: 236 }],
+      });
+      expect(updated.invoice.notes).toBe("pending IRN still editable");
+    });
+
+    it("snapshots taxable value after discounts on a sale", async () => {
+      const product = await seedProduct();
+      const { invoice, totals } = await transactions.createSalesInvoice("b-1", "u-1", "SAL-GST-SNAP", {
+        items: [{ productId: product.id, quantity: 1, unitPrice: 500, gstRate: 18, discount: 20 }],
+        discount: 30,
+        payments: [{ mode: "cash", amount: 531 }],
+      });
+      expect(invoice.gstDocumentType).toBe("tax_invoice");
+      expect(invoice.items[0].taxableAmount).toBe(450);
+      expect(totals.taxableAmount).toBe(450);
+    });
+  });
+
+  describe("quotations", () => {
+    it("creates a product quotation with GST totals and no stock or payment posting", async () => {
+      const product = await seedProduct();
+      const { quotation, totals } = await transactions.createQuotation("b-1", "u-1", {
+        partyName: "Acme Traders",
+        format: "product_service",
+        items: [{ productId: product.id, name: "Item", quantity: 2, unitPrice: 200, gstRate: 18 }],
+      });
+      expect(quotation.quotationNo).toMatch(/^QTN-/);
+      expect(quotation.format).toBe("product_service");
+      expect(quotation.status).toBe("draft");
+      expect(quotation.total).toBe(472);
+      expect(totals.taxAmount).toBe(72);
+      expect(services.ledger).toHaveLength(0);
+      expect(services.payments).toHaveLength(0);
+      expect(services.salesInvoices).toHaveLength(0);
+    });
+
+    it("creates a formal proposal without posting finance", async () => {
+      const { quotation } = await transactions.createQuotation("b-1", "u-1", {
+        partyName: "Project Client",
+        format: "formal_proposal",
+        title: "Warehouse fit-out",
+        scope: "Rack installation",
+        timeline: "4 weeks",
+        assumptions: "Site access weekdays",
+        items: [{ name: "Installation", quantity: 1, unitPrice: 1000, gstRate: 18 }],
+      });
+      expect(quotation.format).toBe("formal_proposal");
+      expect(quotation.title).toBe("Warehouse fit-out");
+      expect(quotation.scope).toBe("Rack installation");
+      expect(quotation.total).toBe(1180);
+      expect(services.ledger).toHaveLength(0);
+    });
+
+    it("isolates quotations by business id", async () => {
+      await transactions.createQuotation("b-1", "u-1", {
+        partyName: "One",
+        items: [{ name: "A", quantity: 1, unitPrice: 10, gstRate: 0 }],
+      });
+      const other = await services.repos.transactions.createQuotation(
+        "b-2",
+        "u-1",
+        {
+          quotationNo: "QTN-OTHER",
+          partyName: "Two",
+          quotationDate: todayIsoDate(),
+          status: "draft",
+          format: "product_service",
+          subtotal: 10,
+          discount: 0,
+          taxTotal: 0,
+          total: 10,
+        },
+        [{ name: "B", quantity: 1, unitPrice: 10, gstRate: 0 }]
+      );
+      const listed = await transactions.listQuotations("b-1");
+      expect(listed.some((item) => item.partyName === "One")).toBe(true);
+      expect(listed.some((item) => item.id === other.id)).toBe(false);
+    });
+
+    it("converts an accepted quotation to a draft invoice without double-posting", async () => {
+      const product = await seedProduct();
+      const { quotation } = await transactions.createQuotation("b-1", "u-1", {
+        partyName: "Buyer",
+        status: "sent",
+        items: [{ productId: product.id, name: "Item", quantity: 1, unitPrice: 200, gstRate: 18 }],
+      });
+      await transactions.updateQuotationStatus("b-1", "u-1", quotation.id, "accepted");
+      const converted = await transactions.convertQuotationToInvoice("b-1", "u-1", quotation.id, { asDraft: true });
+      expect(converted.quotation.status).toBe("converted");
+      expect(converted.invoice.status).toBe("draft");
+      expect(converted.invoice.total).toBe(236);
+      expect(services.ledger).toHaveLength(0);
+      expect(services.payments).toHaveLength(0);
+      await expect(transactions.convertQuotationToInvoice("b-1", "u-1", quotation.id)).rejects.toThrow(/already been converted/i);
+    });
+
+    it("rejects convert when a line has no catalogue product", async () => {
+      const { quotation } = await transactions.createQuotation("b-1", "u-1", {
+        partyName: "Buyer",
+        status: "sent",
+        items: [{ name: "Custom work", quantity: 1, unitPrice: 500, gstRate: 18 }],
+      });
+      await expect(transactions.convertQuotationToInvoice("b-1", "u-1", quotation.id)).rejects.toThrow(/catalogue product/i);
     });
   });
 });

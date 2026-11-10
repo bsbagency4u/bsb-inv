@@ -74,9 +74,12 @@ const catalog: ReportCatalog = {
       businessId: "b-1",
       productId: "p-1",
       batchNo: "B001",
+      manufacturingDate: null,
       expiryDate: "2026-12-31",
       mrp: 22,
       purchasePrice: 10,
+      supplierId: null,
+      purchaseInvoiceId: null,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     } satisfies ProductBatch,
@@ -88,6 +91,10 @@ const catalog: ReportCatalog = {
       name: "Main",
       code: "MAIN",
       address: null,
+      state: null,
+      pincode: null,
+      phone: null,
+      email: null,
       isActive: true,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -144,6 +151,52 @@ describe("stock report engine", () => {
     expect(result.rows[0]).toMatchObject({ quantity: 78, costPrice: 10, stockValue: 780 });
   });
 
+  it("groups stock value by GST rate with cost vs selling valuation", () => {
+    const extra = product({
+      id: "p-2",
+      name: "Syrup",
+      sku: "SYR-1",
+      gstRate: 18,
+      purchasePrice: 20,
+      salePrice: 30,
+    });
+    const mixed: ReportCatalog = {
+      ...catalog,
+      products: [product(), extra],
+      movements: [
+        ...catalog.movements,
+        movement({
+          id: "m-p2",
+          productId: "p-2",
+          change: 10,
+          movementType: "PURCHASE",
+          createdAt: "2026-03-02T10:00:00.000Z",
+        }),
+      ],
+    };
+    const result = runStockReport(mixed, query("stock-value-by-gst-rate"));
+    expect(result.rows).toEqual([
+      expect.objectContaining({
+        gstRate: 12,
+        productCount: 1,
+        quantity: 78,
+        costValue: 780,
+        sellingValue: 1170,
+        taxEstimate: 140.4,
+      }),
+      expect.objectContaining({
+        gstRate: 18,
+        productCount: 1,
+        quantity: 10,
+        costValue: 200,
+        sellingValue: 300,
+        taxEstimate: 54,
+      }),
+    ]);
+    expect(result.totals.costValue).toBe(980);
+    expect(result.totals.sellingValue).toBe(1470);
+  });
+
   it("flags low stock from product threshold", () => {
     const low = runStockReport(
       { ...catalog, products: [product({ lowStockThreshold: 80 })] },
@@ -170,5 +223,22 @@ describe("stock report engine", () => {
     const result = runStockReport(catalog, query("current-stock", { productId: "missing" }));
     expect(result.rows).toHaveLength(0);
     expect(result.totalCount).toBe(0);
+  });
+
+  it("treats COUNT movements as adjustments, not inward/outward", () => {
+    const withCount: ReportCatalog = {
+      ...catalog,
+      movements: [
+        ...catalog.movements,
+        movement({ change: -5, movementType: "COUNT", createdAt: "2026-03-09T10:00:00.000Z", batchId: "batch-1" }),
+      ],
+    };
+    const flow = accumulateFlow(withCount.movements, "2026-03-01", "2026-03-31");
+    expect(flow.inward).toBe(105);
+    expect(flow.outward).toBe(30);
+    expect(flow.negativeAdj).toBe(5);
+    expect(flow.closing).toBe(73);
+    const adjustments = runStockReport(withCount, query("stock-adjustment"));
+    expect(adjustments.rows.some((row) => row.movementType === "COUNT")).toBe(true);
   });
 });

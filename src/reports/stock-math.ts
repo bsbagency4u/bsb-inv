@@ -21,24 +21,28 @@ export function ledgerDate(movement: Pick<StockMovement, "createdAt">): string {
   return movement.createdAt.slice(0, 10);
 }
 
+function isAdjLike(type: StockMovementType): boolean {
+  return type === "ADJUSTMENT" || type === "COUNT";
+}
+
 export function qtyIn(movement: StockMovement): number {
-  if (movement.movementType === "ADJUSTMENT") return 0;
+  if (isAdjLike(movement.movementType)) return 0;
   if (IN_TYPES.includes(movement.movementType)) return Math.abs(movement.change);
   return 0;
 }
 
 export function qtyOut(movement: StockMovement): number {
-  if (movement.movementType === "ADJUSTMENT") return 0;
+  if (isAdjLike(movement.movementType)) return 0;
   if (OUT_TYPES.includes(movement.movementType)) return Math.abs(movement.change);
   return 0;
 }
 
 export function posAdj(movement: StockMovement): number {
-  return movement.movementType === "ADJUSTMENT" && movement.change > 0 ? movement.change : 0;
+  return isAdjLike(movement.movementType) && movement.change > 0 ? movement.change : 0;
 }
 
 export function negAdj(movement: StockMovement): number {
-  return movement.movementType === "ADJUSTMENT" && movement.change < 0 ? Math.abs(movement.change) : 0;
+  return isAdjLike(movement.movementType) && movement.change < 0 ? Math.abs(movement.change) : 0;
 }
 
 export interface StockFlow {
@@ -108,7 +112,7 @@ export function lastInboundDate(movements: StockMovement[]): string | null {
   for (const movement of movements) {
     const inbound =
       IN_TYPES.includes(movement.movementType) ||
-      (movement.movementType === "ADJUSTMENT" && movement.change > 0);
+      ((movement.movementType === "ADJUSTMENT" || movement.movementType === "COUNT") && movement.change > 0);
     if (!inbound) continue;
     const date = ledgerDate(movement);
     if (!last || date > last) last = date;

@@ -45,8 +45,8 @@ export const PRINT_DOCUMENT_TYPE_META: Record<
   },
   quotation: {
     label: "Quotation",
-    available: false,
-    description: "Layout is stored here. Quotations are not issued in this workspace yet.",
+    available: true,
+    description: "Formal proposals and product or service quotations. Does not post sales, stock or finance.",
   },
   delivery_challan: {
     label: "Delivery challan",
@@ -61,7 +61,7 @@ export const DEFAULT_DOCUMENT_TYPES: Record<PrintDocumentType, InvoiceDocumentTy
   purchase_invoice: { enabled: true },
   purchase_return: { enabled: true },
   payment_receipt: { enabled: true },
-  quotation: { enabled: false },
+  quotation: { enabled: true },
   delivery_challan: { enabled: false },
 };
 
@@ -98,7 +98,7 @@ export const DEFAULT_INVOICE: InvoiceDefaults = {
     purchase_invoice: { enabled: true },
     purchase_return: { enabled: true },
     payment_receipt: { enabled: true },
-    quotation: { enabled: false },
+    quotation: { enabled: true },
     delivery_challan: { enabled: false },
   },
 };
@@ -194,6 +194,7 @@ export function formatShareMessage(
     business: string;
     date: string;
     total: string;
+    validUntil?: string;
   }
 ): string {
   const source = template.trim() || DEFAULT_INVOICE.messageTemplate;
@@ -203,7 +204,8 @@ export function formatShareMessage(
     .replaceAll("{docTitle}", params.docTitle)
     .replaceAll("{business}", params.business)
     .replaceAll("{date}", params.date)
-    .replaceAll("{total}", params.total);
+    .replaceAll("{total}", params.total)
+    .replaceAll("{validUntil}", params.validUntil ?? "");
 }
 
 export function normalizeWhatsAppPhone(phone: string | null | undefined): string {
