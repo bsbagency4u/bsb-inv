@@ -190,7 +190,8 @@ export type DocumentControlKind =
   | "purchase_invoice"
   | "sales_return"
   | "purchase_return"
-  | "payment";
+  | "payment"
+  | "quotation";
 
 export interface DocumentNumberingRule {
   prefix: string;
@@ -254,6 +255,115 @@ export interface InvoiceDefaults {
   whatsappEnabled: boolean;
   messageTemplate: string;
   documentTypes: Record<PrintDocumentType, InvoiceDocumentTypeSetting>;
+}
+
+export type QuotationFormat = "formal_proposal" | "product_service";
+export type QuotationStatus = "draft" | "sent" | "accepted" | "rejected" | "expired" | "converted" | "cancelled";
+export type QuotationWatermarkMode = "text" | "image";
+
+export interface QuotationBankDetails {
+  accountName: string;
+  accountNumber: string;
+  ifsc: string;
+  bankName: string;
+  branch: string;
+  upi: string;
+}
+
+export interface QuotationTemplate {
+  id: string;
+  name: string;
+  format: QuotationFormat;
+  isDefault: boolean;
+  introHtml: string;
+  termsAndConditions: string;
+  footerNote: string;
+  showCover: boolean;
+  showScope: boolean;
+  showTimeline: boolean;
+  showAssumptions: boolean;
+}
+
+export interface QuotationDefaults {
+  defaultFormat: QuotationFormat;
+  validityDays: number;
+  paperSize: InvoicePaperSize;
+  orientation: InvoiceOrientation;
+  showLogo: boolean;
+  showGstin: boolean;
+  showHsn: boolean;
+  showSku: boolean;
+  showDiscount: boolean;
+  showTaxBreakup: boolean;
+  showBankDetails: boolean;
+  showSignature: boolean;
+  showStamp: boolean;
+  signatureLabel: string;
+  watermarkEnabled: boolean;
+  watermarkMode: QuotationWatermarkMode;
+  watermarkText: string;
+  watermarkOpacity: number;
+  watermarkImageUrl: string | null;
+  logoUrl: string | null;
+  signatureImageUrl: string | null;
+  stampImageUrl: string | null;
+  bankDetails: QuotationBankDetails;
+  termsAndConditions: string;
+  footerNote: string;
+  whatsappEnabled: boolean;
+  messageTemplate: string;
+  templates: QuotationTemplate[];
+}
+
+export interface QuotationLine {
+  productId: string | null;
+  name: string;
+  description: string | null;
+  sku: string | null;
+  hsn: string | null;
+  quantity: number;
+  unit: string | null;
+  unitPrice: number;
+  gstRate: number;
+  discount: number;
+  taxableAmount: number;
+  taxAmount: number;
+  amount: number;
+  gstSupplyType?: GstSupplyType | null;
+}
+
+export interface Quotation {
+  id: string;
+  businessId: string;
+  quotationNo: string;
+  customerId: string | null;
+  partyName: string;
+  partyGstin: string | null;
+  partyPhone: string | null;
+  partyEmail: string | null;
+  quotationDate: string;
+  validUntil: string | null;
+  status: QuotationStatus;
+  format: QuotationFormat;
+  templateId: string | null;
+  title: string | null;
+  intro: string | null;
+  scope: string | null;
+  timeline: string | null;
+  assumptions: string | null;
+  termsAndConditions: string | null;
+  notes: string | null;
+  subtotal: number;
+  discount: number;
+  taxTotal: number;
+  total: number;
+  intraState?: boolean;
+  placeOfSupplyState?: string | null;
+  gstRegistrationSnapshot?: GstRegistrationType | null;
+  convertedSalesInvoiceId: string | null;
+  items: QuotationLine[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SessionState {

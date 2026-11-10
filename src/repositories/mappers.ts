@@ -23,6 +23,8 @@ import type {
   PurchaseReceiptItem,
   PurchaseReturn,
   PurchaseReturnItem,
+  Quotation as QuotationRow,
+  QuotationItem as QuotationItemRow,
   Role,
   SalesInvoice,
   SalesReturn,
@@ -65,6 +67,10 @@ import type {
   PurchaseOrder as PurchaseOrderModel,
   PurchaseReceipt as PurchaseReceiptModel,
   PurchaseReturn as PurchaseReturnModel,
+  Quotation as QuotationModel,
+  QuotationFormat,
+  QuotationLine,
+  QuotationStatus,
   Role as RoleModel,
   SalesInvoice as SalesInvoiceModel,
   SalesReturn as SalesReturnModel,
@@ -632,6 +638,81 @@ export function mapSalesReturnItem(
     variantId: row.variant_id,
     quantity: asNumber(row.quantity),
     unitPrice: asNumber(row.unit_price),
+  };
+}
+
+function asQuotationStatus(value: string | null | undefined): QuotationStatus {
+  const allowed: QuotationStatus[] = [
+    "draft",
+    "sent",
+    "accepted",
+    "rejected",
+    "expired",
+    "converted",
+    "cancelled",
+  ];
+  return allowed.includes(value as QuotationStatus) ? (value as QuotationStatus) : "draft";
+}
+
+function asQuotationFormat(value: string | null | undefined): QuotationFormat {
+  return value === "formal_proposal" ? "formal_proposal" : "product_service";
+}
+
+export function mapQuotation(row: QuotationRow): QuotationModel {
+  return {
+    id: row.id,
+    businessId: row.business_id,
+    quotationNo: row.quotation_no,
+    customerId: row.customer_id,
+    partyName: row.party_name ?? "",
+    partyGstin: row.party_gstin,
+    partyPhone: row.party_phone,
+    partyEmail: row.party_email,
+    quotationDate: row.quotation_date,
+    validUntil: row.valid_until,
+    status: asQuotationStatus(row.status),
+    format: asQuotationFormat(row.format),
+    templateId: row.template_id,
+    title: row.title,
+    intro: row.intro,
+    scope: row.scope,
+    timeline: row.timeline,
+    assumptions: row.assumptions,
+    termsAndConditions: row.terms_and_conditions,
+    notes: row.notes,
+    subtotal: asNumber(row.subtotal),
+    discount: asNumber(row.discount),
+    taxTotal: asNumber(row.tax_total),
+    total: asNumber(row.total),
+    intraState: row.intra_state ?? true,
+    placeOfSupplyState: row.place_of_supply_state ?? null,
+    gstRegistrationSnapshot:
+      row.gst_registration_snapshot != null
+        ? normalizeGstRegistrationType(row.gst_registration_snapshot)
+        : null,
+    convertedSalesInvoiceId: row.converted_sales_invoice_id,
+    items: [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapQuotationItem(row: QuotationItemRow): QuotationLine {
+  return {
+    productId: row.product_id,
+    name: row.name ?? "",
+    description: row.description,
+    sku: row.sku,
+    hsn: row.hsn,
+    quantity: asNumber(row.quantity),
+    unit: row.unit,
+    unitPrice: asNumber(row.unit_price),
+    gstRate: asNumber(row.gst_rate),
+    discount: asNumber(row.discount),
+    taxableAmount: asNumber(row.taxable_amount),
+    taxAmount: asNumber(row.tax_amount),
+    amount: asNumber(row.amount),
+    gstSupplyType: row.gst_supply_type ? normalizeGstSupplyType(row.gst_supply_type) : null,
   };
 }
 

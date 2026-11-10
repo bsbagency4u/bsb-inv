@@ -7,6 +7,9 @@ import type {
   PurchaseOrder,
   PurchaseReceipt,
   PurchaseReturn,
+  Quotation,
+  QuotationLine,
+  QuotationStatus,
   SalesInvoice,
   SalesInvoiceStatus,
   SalesReturn,
@@ -15,6 +18,8 @@ import type {
   PaymentInput,
   PurchaseInvoiceHeaderInput,
   PurchaseOrderHeaderInput,
+  QuotationHeaderInput,
+  QuotationLineInput,
   ReceiptItemInput,
   ReturnItemInput,
   SalesHeaderInput,
@@ -33,6 +38,7 @@ const PAYMENT_MODES_KEY = "demo-payment-modes";
 const RECEIPTS_KEY = "demo-purchase-receipts";
 const PURCHASE_RETURNS_KEY = "demo-purchase-returns";
 const SALES_RETURNS_KEY = "demo-sales-returns";
+const QUOTATIONS_KEY = "demo-quotations";
 
 const lineToModel = (item: LineItemInput): LineItem => {
   const gross = item.quantity * item.unitPrice;
@@ -753,5 +759,161 @@ export class LocalTransactionRepository implements TransactionRepository {
         billNo: i.billNo,
         supplierName: i.supplierId ? (names.get(i.supplierId) ?? null) : null,
       }));
+  }
+
+  private readQuotations(): Quotation[] {
+    return readStorage<Quotation[]>(QUOTATIONS_KEY, []);
+  }
+  private saveQuotations(quotations: Quotation[]): void {
+    writeStorage(QUOTATIONS_KEY, quotations);
+  }
+
+  private quotationLineToModel(item: QuotationLineInput): QuotationLine {
+    const gross = item.quantity * item.unitPrice;
+    const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+    const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+    return {
+      productId: item.productId ?? null,
+      name: item.name,
+      description: item.description ?? null,
+      sku: item.sku ?? null,
+      hsn: item.hsn ?? null,
+      quantity: item.quantity,
+      unit: item.unit ?? null,
+      unitPrice: item.unitPrice,
+      gstRate: item.gstRate,
+      discount: item.discount ?? 0,
+      taxableAmount: taxable,
+      taxAmount: tax,
+      amount: item.amount ?? taxable + tax,
+      gstSupplyType: item.gstSupplyType ? (item.gstSupplyType as QuotationLine["gstSupplyType"]) : null,
+    };
+  }
+
+  async listQuotations(businessId: string): Promise<Quotation[]> {
+    return this.readQuotations()
+      .filter((item) => item.businessId === businessId)
+      .sort((a, b) => b.quotationDate.localeCompare(a.quotationDate));
+  }
+
+  async getQuotation(businessId: string, quotationId: string): Promise<Quotation | null> {
+    return this.readQuotations().find((item) => item.businessId === businessId && item.id === quotationId) ?? null;
+  }
+
+  async createQuotation(
+    businessId: string,
+    _userId: string,
+    header: QuotationHeaderInput,
+    items: QuotationLineInput[]
+  ): Promise<Quotation> {
+    const now = new Date().toISOString();
+    const quotation: Quotation = {
+      id: `qtn-${crypto.randomUUID()}`,
+      businessId,
+      quotationNo: header.quotationNo,
+      customerId: header.customerId ?? null,
+      partyName: header.partyName,
+      partyGstin: header.partyGstin ?? null,
+      partyPhone: header.partyPhone ?? null,
+      partyEmail: header.partyEmail ?? null,
+      quotationDate: header.quotationDate,
+      validUntil: header.validUntil ?? null,
+      status: header.status,
+      format: header.format,
+      templateId: header.templateId ?? null,
+      title: header.title ?? null,
+      intro: header.intro ?? null,
+      scope: header.scope ?? null,
+      timeline: header.timeline ?? null,
+      assumptions: header.assumptions ?? null,
+      termsAndConditions: header.termsAndConditions ?? null,
+      notes: header.notes ?? null,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      taxTotal: header.taxTotal,
+      total: header.total,
+      intraState: header.intraState ?? true,
+      placeOfSupplyState: header.placeOfSupplyState ?? null,
+      gstRegistrationSnapshot: header.gstRegistrationSnapshot ?? null,
+      convertedSalesInvoiceId: header.convertedSalesInvoiceId ?? null,
+      items: items.map((item) => this.quotationLineToModel(item)),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const all = this.readQuotations();
+    all.push(quotation);
+    this.saveQuotations(all);
+    return quotation;
+  }
+
+  async updateQuotation(
+    businessId: string,
+    quotationId: string,
+    header: QuotationHeaderInput,
+    items: QuotationLineInput[]
+  ): Promise<Quotation> {
+    const all = this.readQuotations();
+    const index = all.findIndex((item) => item.businessId === businessId && item.id === quotationId);
+    if (index === -1) throw new Error("Quotation not found.");
+    const now = new Date().toISOString();
+    all[index] = {
+      ...all[index],
+      customerId: header.customerId ?? null,
+      partyName: header.partyName,
+      partyGstin: header.partyGstin ?? null,
+      partyPhone: header.partyPhone ?? null,
+      partyEmail: header.partyEmail ?? null,
+      quotationDate: header.quotationDate,
+      validUntil: header.validUntil ?? null,
+      status: header.status,
+      format: header.format,
+      templateId: header.templateId ?? null,
+      title: header.title ?? null,
+      intro: header.intro ?? null,
+      scope: header.scope ?? null,
+      timeline: header.timeline ?? null,
+      assumptions: header.assumptions ?? null,
+      termsAndConditions: header.termsAndConditions ?? null,
+      notes: header.notes ?? null,
+      subtotal: header.subtotal,
+      discount: header.discount,
+      taxTotal: header.taxTotal,
+      total: header.total,
+      intraState: header.intraState ?? true,
+      placeOfSupplyState: header.placeOfSupplyState ?? null,
+      gstRegistrationSnapshot: header.gstRegistrationSnapshot ?? all[index].gstRegistrationSnapshot,
+      convertedSalesInvoiceId: header.convertedSalesInvoiceId ?? all[index].convertedSalesInvoiceId,
+      items: items.map((item) => this.quotationLineToModel(item)),
+      updatedAt: now,
+    };
+    this.saveQuotations(all);
+    return all[index];
+  }
+
+  async updateQuotationStatus(
+    businessId: string,
+    quotationId: string,
+    status: QuotationStatus,
+    extra?: { convertedSalesInvoiceId?: string | null }
+  ): Promise<void> {
+    const all = this.readQuotations();
+    const index = all.findIndex((item) => item.businessId === businessId && item.id === quotationId);
+    if (index === -1) throw new Error("Quotation not found.");
+    all[index] = {
+      ...all[index],
+      status,
+      convertedSalesInvoiceId:
+        extra && "convertedSalesInvoiceId" in extra
+          ? extra.convertedSalesInvoiceId ?? null
+          : all[index].convertedSalesInvoiceId,
+      updatedAt: new Date().toISOString(),
+    };
+    this.saveQuotations(all);
+  }
+
+  async deleteQuotation(businessId: string, quotationId: string): Promise<void> {
+    this.saveQuotations(
+      this.readQuotations().filter((item) => !(item.businessId === businessId && item.id === quotationId))
+    );
   }
 }

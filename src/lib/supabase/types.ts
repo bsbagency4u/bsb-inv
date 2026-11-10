@@ -671,7 +671,61 @@ export type SalesInvoiceItem = {
   base_quantity: number | null;
   gst_supply_type?: string | null;
   hsn?: string | null;
-}
+};
+
+export type Quotation = {
+  id: string;
+  business_id: string;
+  quotation_no: string;
+  customer_id: string | null;
+  party_name: string;
+  party_gstin: string | null;
+  party_phone: string | null;
+  party_email: string | null;
+  quotation_date: string;
+  valid_until: string | null;
+  status: string;
+  format: string;
+  template_id: string | null;
+  title: string | null;
+  intro: string | null;
+  scope: string | null;
+  timeline: string | null;
+  assumptions: string | null;
+  terms_and_conditions: string | null;
+  notes: string | null;
+  subtotal: number;
+  discount: number;
+  tax_total: number;
+  total: number;
+  intra_state: boolean;
+  place_of_supply_state: string | null;
+  gst_registration_snapshot: string | null;
+  converted_sales_invoice_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QuotationItem = {
+  id: string;
+  quotation_id: string;
+  product_id: string | null;
+  name: string;
+  description: string | null;
+  sku: string | null;
+  hsn: string | null;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+  gst_rate: number;
+  discount: number;
+  taxable_amount: number;
+  tax_amount: number;
+  amount: number;
+  gst_supply_type: string | null;
+  sort_order: number;
+};
 
 export type Payment = {
   id: string;
@@ -794,7 +848,7 @@ export type GstComplianceAttempt = {
   created_at: string;
 }
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       roles: {
@@ -963,6 +1017,18 @@ export interface Database {
         Row: SalesInvoiceItem;
         Insert: Partial<SalesInvoiceItem> & { sales_invoice_id: string; product_id: string };
         Update: Partial<SalesInvoiceItem>;
+        Relationships: [];
+      };
+      quotations: {
+        Row: Quotation;
+        Insert: Partial<Quotation> & { business_id: string; quotation_no: string };
+        Update: Partial<Quotation>;
+        Relationships: [];
+      };
+      quotation_items: {
+        Row: QuotationItem;
+        Insert: Partial<QuotationItem> & { quotation_id: string };
+        Update: Partial<QuotationItem>;
         Relationships: [];
       };
       payments: {

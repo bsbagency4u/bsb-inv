@@ -1,5 +1,5 @@
 import type { Repositories, LineItemInput } from "@/repositories/types";
-import type { GstDocumentSnapshot } from "@/repositories/transaction.repository";
+import type { GstDocumentSnapshot, QuotationHeaderInput, QuotationLineInput } from "@/repositories/transaction.repository";
 import type {
   GstDocumentType,
   GstPartyRegistrationType,
@@ -12,6 +12,9 @@ import type {
   PurchaseOrder,
   PurchaseReceipt,
   PurchaseReturn,
+  Quotation,
+  QuotationFormat,
+  QuotationStatus,
   SalesInvoice,
   SalesInvoiceStatus,
   SalesReturn,
@@ -57,8 +60,16 @@ import {
   DocumentControlService,
   isDraftStatus,
   isPostedStatus,
+  isTerminalStatus,
   type DocumentGuardResult,
 } from "./document-control.service";
+import { isoDateOnly, todayIsoDate } from "@/lib/document-control";
+import {
+  QUOTATION_SETTINGS_KEY,
+  addDaysIso,
+  defaultTemplateForFormat,
+  parseQuotationDefaults,
+} from "@/lib/quotation-settings";
 
 export interface CartItemInput {
   productId: string;
@@ -194,6 +205,46 @@ export interface SalesReturnInput {
     unitKind?: "base" | "pack";
     rateBasis?: RateBasis;
   }>;
+}
+
+export interface QuotationLineDraft {
+  productId?: string | null;
+  name: string;
+  description?: string | null;
+  sku?: string | null;
+  hsn?: string | null;
+  quantity: number;
+  unit?: string | null;
+  unitPrice: number;
+  gstRate: number;
+  discount?: number;
+  discountPercent?: number;
+  gstSupplyType?: GstSupplyType | null;
+}
+
+export interface QuotationInput {
+  customerId?: string | null;
+  partyName?: string | null;
+  partyGstin?: string | null;
+  partyPhone?: string | null;
+  partyEmail?: string | null;
+  quotationDate?: string;
+  validUntil?: string | null;
+  status?: "draft" | "sent" | "accepted";
+  format?: QuotationFormat;
+  templateId?: string | null;
+  title?: string | null;
+  intro?: string | null;
+  scope?: string | null;
+  timeline?: string | null;
+  assumptions?: string | null;
+  termsAndConditions?: string | null;
+  notes?: string | null;
+  items: QuotationLineDraft[];
+  intraState?: boolean;
+  discount?: number;
+  discountPercent?: number;
+  pricesIncludeTax?: boolean;
 }
 
 type DocumentKind = "sales" | "purchase_order" | "purchase_invoice" | "sales_return" | "purchase_return";
@@ -559,7 +610,7 @@ export class TransactionService {
 
   async nextControlledDocumentNo(
     businessId: string,
-    kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment"
+    kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment" | "quotation"
   ): Promise<string> {
     return this.documents.allocateNumber(businessId, kind);
   }
@@ -568,7 +619,7 @@ export class TransactionService {
     businessId: string,
     userId: string,
     input: {
-      kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment";
+      kind: "sales_invoice" | "purchase_invoice" | "sales_return" | "purchase_return" | "payment" | "quotation";
       action: "create" | "edit" | "delete" | "cancel";
       documentDate?: string | null;
       createdAt?: string | null;
@@ -1989,5 +2040,425 @@ export class TransactionService {
       metadata: { name: mode.name, isActive: mode.isActive },
     });
     return mode;
+  }
+
+  async listQuotations(businessId: string): Promise<Quotation[]> {
+    return this.repos.transactions.listQuotations(businessId);
+  }
+
+  async getQuotation(businessId: string, quotationId: string): Promise<Quotation | null> {
+    return this.repos.transactions.getQuotation(businessId, quotationId);
+  }
+
+  async createQuotation(
+    businessId: string,
+    userId: string,
+    input: QuotationInput
+  ): Promise<{ quotation: Quotation; totals: InvoiceTotals }> {
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "quotation",
+      action: "create",
+      documentDate: input.quotationDate,
+    });
+    const prepared = await this.prepareQuotation(businessId, input, guard.documentDate);
+    const quotationNo = await this.documents.allocateNumber(businessId, "quotation");
+    const quotation = await this.repos.transactions.createQuotation(
+      businessId,
+      userId,
+      { ...prepared.header, quotationNo },
+      prepared.items
+    );
+    await this.auditDocument(
+      businessId,
+      userId,
+      prepared.header.status === "draft" ? "quotation.drafted" : "quotation.created",
+      "quotation",
+      quotation.id,
+      { quotationNo, total: prepared.totals.total, format: quotation.format, status: quotation.status },
+      guard
+    );
+    return { quotation, totals: prepared.totals };
+  }
+
+  async updateQuotation(
+    businessId: string,
+    userId: string,
+    quotationId: string,
+    input: QuotationInput,
+    options: DocumentMutationOptions = {}
+  ): Promise<{ quotation: Quotation; totals: InvoiceTotals }> {
+    const existing = await this.requireQuotation(businessId, quotationId);
+    this.assertQuotationMutable(existing);
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "quotation",
+      action: "edit",
+      documentDate: input.quotationDate ?? existing.quotationDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    const prepared = await this.prepareQuotation(
+      businessId,
+      { ...input, status: input.status ?? (existing.status === "sent" ? "sent" : "draft") },
+      guard.documentDate,
+      existing
+    );
+    const quotation = await this.repos.transactions.updateQuotation(
+      businessId,
+      quotationId,
+      { ...prepared.header, quotationNo: existing.quotationNo },
+      prepared.items
+    );
+    await this.auditDocument(
+      businessId,
+      userId,
+      "quotation.updated",
+      "quotation",
+      quotation.id,
+      { quotationNo: quotation.quotationNo, total: prepared.totals.total, format: quotation.format },
+      guard
+    );
+    return { quotation, totals: prepared.totals };
+  }
+
+  async updateQuotationStatus(
+    businessId: string,
+    userId: string,
+    quotationId: string,
+    status: QuotationStatus,
+    options: DocumentMutationOptions = {}
+  ): Promise<Quotation> {
+    const existing = await this.requireQuotation(businessId, quotationId);
+    if (existing.status === status) return existing;
+    this.assertQuotationStatusTransition(existing, status);
+    const action: "edit" | "cancel" = status === "cancelled" ? "cancel" : "edit";
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "quotation",
+      action,
+      documentDate: existing.quotationDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    await this.repos.transactions.updateQuotationStatus(businessId, quotationId, status);
+    await this.auditDocument(
+      businessId,
+      userId,
+      `quotation.${status}`,
+      "quotation",
+      quotationId,
+      { quotationNo: existing.quotationNo, from: existing.status, to: status },
+      guard
+    );
+    const next = await this.repos.transactions.getQuotation(businessId, quotationId);
+    if (!next) throw AppError.notFound("Quotation not found.");
+    return next;
+  }
+
+  async deleteQuotation(
+    businessId: string,
+    userId: string,
+    quotationId: string,
+    options: DocumentMutationOptions = {}
+  ): Promise<void> {
+    const existing = await this.requireQuotation(businessId, quotationId);
+    if (existing.status === "converted") {
+      throw AppError.validation("Converted quotations cannot be deleted.");
+    }
+    const guard = await this.guardDocument(businessId, userId, {
+      kind: "quotation",
+      action: "delete",
+      documentDate: existing.quotationDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+    await this.repos.transactions.deleteQuotation(businessId, quotationId);
+    await this.auditDocument(
+      businessId,
+      userId,
+      "quotation.deleted",
+      "quotation",
+      quotationId,
+      { quotationNo: existing.quotationNo },
+      guard
+    );
+  }
+
+  async convertQuotationToInvoice(
+    businessId: string,
+    userId: string,
+    quotationId: string,
+    options: DocumentMutationOptions & { asDraft?: boolean; warehouseId?: string | null } = {}
+  ): Promise<{ quotation: Quotation; invoice: SalesInvoice; totals: InvoiceTotals }> {
+    const existing = await this.requireQuotation(businessId, quotationId);
+    if (existing.status === "converted" || existing.convertedSalesInvoiceId) {
+      throw AppError.conflict("This quotation has already been converted to an invoice.");
+    }
+    if (existing.status === "cancelled" || existing.status === "rejected" || existing.status === "expired") {
+      throw AppError.validation("This quotation cannot be converted.");
+    }
+    if (existing.items.length === 0) {
+      throw AppError.validation("Add at least one line item before converting.");
+    }
+    await this.guardDocument(businessId, userId, {
+      kind: "quotation",
+      action: "edit",
+      documentDate: existing.quotationDate,
+      createdAt: existing.createdAt,
+      status: existing.status,
+      overrideLock: options.overrideLock,
+      overrideReason: options.overrideReason,
+    });
+
+    const missingProduct = existing.items.find((item) => !item.productId);
+    if (missingProduct) {
+      throw AppError.validation(
+        "Every quotation line needs a catalogue product before it can become an invoice."
+      );
+    }
+
+    const invoiceNo = await this.documents.allocateNumber(businessId, "sales_invoice");
+    const { invoice, totals } = await this.createSalesInvoice(businessId, userId, invoiceNo, {
+      customerId: existing.customerId,
+      walkInName: existing.customerId ? null : existing.partyName,
+      warehouseId: options.warehouseId ?? null,
+      invoiceDate: todayIsoDate(),
+      notes: existing.notes,
+      items: existing.items.map((item) => ({
+        productId: item.productId as string,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        gstRate: item.gstRate,
+        discount: item.discount,
+        saleUnit: item.unit,
+        gstSupplyType: item.gstSupplyType ?? null,
+        hsn: item.hsn,
+      })),
+      intraState: existing.intraState,
+      payments: [],
+      asDraft: options.asDraft === true,
+    });
+
+    await this.repos.transactions.updateQuotationStatus(businessId, quotationId, "converted", {
+      convertedSalesInvoiceId: invoice.id,
+    });
+    await this.auditDocument(businessId, userId, "quotation.converted", "quotation", quotationId, {
+      quotationNo: existing.quotationNo,
+      invoiceNo: invoice.invoiceNo,
+      invoiceId: invoice.id,
+    });
+    const quotation = await this.repos.transactions.getQuotation(businessId, quotationId);
+    if (!quotation) throw AppError.notFound("Quotation not found.");
+    return { quotation, invoice, totals };
+  }
+
+  private async requireQuotation(businessId: string, quotationId: string): Promise<Quotation> {
+    const quotation = await this.repos.transactions.getQuotation(businessId, quotationId);
+    if (!quotation) throw AppError.notFound("Quotation not found.");
+    return quotation;
+  }
+
+  private assertQuotationMutable(quotation: Quotation): void {
+    if (quotation.status === "converted") {
+      throw AppError.validation("Converted quotations cannot be edited.");
+    }
+    if (isTerminalStatus(quotation.status)) {
+      throw AppError.validation("This quotation can no longer be changed.");
+    }
+  }
+
+  private assertQuotationStatusTransition(existing: Quotation, next: QuotationStatus): void {
+    if (existing.status === "converted") {
+      throw AppError.validation("Converted quotations cannot change status.");
+    }
+    const allowed: Record<QuotationStatus, QuotationStatus[]> = {
+      draft: ["sent", "cancelled"],
+      sent: ["accepted", "rejected", "expired", "cancelled"],
+      accepted: ["rejected", "expired", "cancelled"],
+      rejected: [],
+      expired: [],
+      converted: [],
+      cancelled: [],
+    };
+    if (!allowed[existing.status].includes(next)) {
+      throw AppError.validation("That status change is not allowed for this quotation.");
+    }
+  }
+
+  private async prepareQuotation(
+    businessId: string,
+    input: QuotationInput,
+    documentDate: string,
+    existing?: Quotation
+  ): Promise<{ header: QuotationHeaderInput; items: QuotationLineInput[]; totals: InvoiceTotals }> {
+    if (!input.items.length) {
+      throw AppError.validation("Add at least one line item.");
+    }
+    for (const item of input.items) {
+      if (!item.name.trim()) throw AppError.validation("Each line needs a description.");
+      if (item.quantity <= 0 || item.unitPrice < 0) {
+        throw AppError.validation("Line items need a positive quantity and a valid price.");
+      }
+    }
+
+    const settings = parseQuotationDefaults(
+      await this.repos.businesses.getSetting(businessId, QUOTATION_SETTINGS_KEY)
+    );
+    const format: QuotationFormat =
+      input.format === "formal_proposal" || input.format === "product_service"
+        ? input.format
+        : existing?.format ?? settings.defaultFormat;
+    const template = defaultTemplateForFormat(settings, format);
+    const templateId = input.templateId ?? existing?.templateId ?? template.id;
+    const status: QuotationStatus =
+      input.status ??
+      (existing?.status === "sent" || existing?.status === "accepted" || existing?.status === "draft"
+        ? existing.status
+        : "draft");
+
+    const cartItems: CartItemInput[] = [];
+    for (const item of input.items) {
+      if (item.productId) {
+        cartItems.push(
+          await this.convertCartItem(
+            businessId,
+            {
+              productId: item.productId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              gstRate: item.gstRate,
+              discount: item.discount,
+              discountPercent: item.discountPercent,
+              saleUnit: item.unit,
+              gstSupplyType: item.gstSupplyType ?? null,
+              hsn: item.hsn ?? null,
+            },
+            "sale"
+          )
+        );
+      } else {
+        cartItems.push({
+          productId: "",
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          gstRate: item.gstRate,
+          discount: item.discount,
+          discountPercent: item.discountPercent,
+          saleUnit: item.unit,
+          gstSupplyType: item.gstSupplyType ?? "taxable",
+          hsn: item.hsn ?? null,
+        });
+      }
+    }
+
+    const gstResolved = await this.resolveGstForDocument(
+      businessId,
+      "sale",
+      await this.gstParty(businessId, "sale", input.customerId ?? existing?.customerId),
+      cartItems,
+      input
+    );
+    const totals = this.gst.computeTotals(gstResolved.items, gstResolved.options);
+
+    const party = await this.resolveQuotationParty(businessId, input, existing);
+    const validUntil =
+      input.validUntil === undefined
+        ? existing?.validUntil ?? addDaysIso(documentDate, settings.validityDays)
+        : input.validUntil
+          ? isoDateOnly(input.validUntil)
+          : null;
+
+    const items: QuotationLineInput[] = input.items.map((item, index) => {
+      const computed = totals.lines[index];
+      const priced = gstResolved.items[index];
+      return {
+        productId: item.productId || null,
+        name: item.name.trim(),
+        description: item.description ?? null,
+        sku: item.sku ?? null,
+        hsn: priced?.hsn ?? item.hsn ?? null,
+        quantity: item.quantity,
+        unit: priced?.saleUnit ?? item.unit ?? null,
+        unitPrice: item.unitPrice,
+        gstRate: priced?.gstRate ?? item.gstRate,
+        discount: computed?.discount ?? item.discount ?? 0,
+        taxableAmount: computed?.taxableAmount,
+        taxAmount: computed?.taxAmount,
+        amount: computed?.amount,
+        gstSupplyType: priced?.gstSupplyType ?? item.gstSupplyType ?? null,
+      };
+    });
+
+    const header: QuotationHeaderInput = {
+      quotationNo: existing?.quotationNo ?? "",
+      customerId: party.customerId,
+      partyName: party.partyName,
+      partyGstin: party.partyGstin,
+      partyPhone: party.partyPhone,
+      partyEmail: party.partyEmail,
+      quotationDate: documentDate,
+      validUntil,
+      status,
+      format,
+      templateId,
+      title: input.title ?? existing?.title ?? (format === "formal_proposal" ? "Proposal" : "Quotation"),
+      intro: input.intro ?? existing?.intro ?? template.introHtml ?? null,
+      scope: input.scope ?? existing?.scope ?? null,
+      timeline: input.timeline ?? existing?.timeline ?? null,
+      assumptions: input.assumptions ?? existing?.assumptions ?? null,
+      termsAndConditions:
+        input.termsAndConditions ?? existing?.termsAndConditions ?? settings.termsAndConditions ?? template.termsAndConditions ?? null,
+      notes: input.notes ?? existing?.notes ?? null,
+      subtotal: totals.subtotal,
+      discount: totals.discount,
+      taxTotal: totals.taxAmount,
+      total: totals.total,
+      intraState: gstResolved.options.intraState,
+      placeOfSupplyState: gstResolved.snapshot.placeOfSupplyState,
+      gstRegistrationSnapshot: gstResolved.snapshot.gstRegistrationSnapshot,
+      convertedSalesInvoiceId: existing?.convertedSalesInvoiceId ?? null,
+    };
+
+    return { header, items, totals };
+  }
+
+  private async resolveQuotationParty(
+    businessId: string,
+    input: QuotationInput,
+    existing?: Quotation
+  ): Promise<{
+    customerId: string | null;
+    partyName: string;
+    partyGstin: string | null;
+    partyPhone: string | null;
+    partyEmail: string | null;
+  }> {
+    const customerId = input.customerId === undefined ? existing?.customerId ?? null : input.customerId;
+    if (customerId) {
+      const customer = await this.repos.parties.getCustomer(businessId, customerId);
+      if (!customer) throw AppError.notFound("Customer not found.");
+      return {
+        customerId,
+        partyName: input.partyName?.trim() || customer.name,
+        partyGstin: input.partyGstin ?? customer.gstin,
+        partyPhone: input.partyPhone ?? customer.phone,
+        partyEmail: input.partyEmail ?? customer.email,
+      };
+    }
+    const partyName = (input.partyName ?? existing?.partyName ?? "").trim();
+    if (!partyName) {
+      throw AppError.validation("Enter a customer or a party name.");
+    }
+    return {
+      customerId: null,
+      partyName,
+      partyGstin: input.partyGstin ?? existing?.partyGstin ?? null,
+      partyPhone: input.partyPhone ?? existing?.partyPhone ?? null,
+      partyEmail: input.partyEmail ?? existing?.partyEmail ?? null,
+    };
   }
 }

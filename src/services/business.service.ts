@@ -9,6 +9,7 @@ import {
   taxDefaultsSchema,
   documentControlDefaultsSchema,
   inventoryDefaultsSchema,
+  quotationDefaultsSchema,
   type BusinessProfileValues,
   type InvoiceDefaultsValues,
   type InvoiceNumberingValues,
@@ -17,6 +18,7 @@ import {
   type TaxDefaultsValues,
   type DocumentControlDefaultsValues,
   type InventoryDefaultsValues,
+  type QuotationDefaultsValues,
 } from "@/lib/validation/schemas";
 import type {
   BusinessProfile,
@@ -24,6 +26,7 @@ import type {
   InventoryDefaults,
   InvoiceDefaults,
   PurchaseDefaults,
+  QuotationDefaults,
   SalesDefaults,
   TaxDefaults,
 } from "@/types/domain";
@@ -38,6 +41,11 @@ import {
   DOCUMENT_CONTROL_KEY,
   parseDocumentControlDefaults,
 } from "@/lib/document-control";
+import {
+  DEFAULT_QUOTATION,
+  QUOTATION_SETTINGS_KEY,
+  parseQuotationDefaults,
+} from "@/lib/quotation-settings";
 import { readStorage, writeStorage } from "@/repositories/local/local-data";
 import { normalizeGstSupplyType } from "@/lib/gst";
 import type { AuditService } from "./audit.service";
@@ -68,7 +76,7 @@ export const DEFAULT_TAX: TaxDefaults = {
   reverseChargeEnabled: false,
 };
 
-export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL, DEFAULT_INVENTORY };
+export { DEFAULT_INVOICE, DEFAULT_DOCUMENT_CONTROL, DEFAULT_INVENTORY, DEFAULT_QUOTATION };
 
 const SALES_KEY = "sales.defaults";
 const PURCHASE_KEY = "purchase.defaults";
@@ -489,6 +497,45 @@ export class BusinessService {
       entityType: "business_settings",
       entityId: businessId,
       metadata: value as unknown as Record<string, unknown>,
+    });
+    return value;
+  }
+
+  async getQuotationDefaults(businessId: string): Promise<QuotationDefaults> {
+    const stored = await this.repos.businesses.getSetting(businessId, QUOTATION_SETTINGS_KEY);
+    return parseQuotationDefaults(stored);
+  }
+
+  async updateQuotationDefaults(
+    userId: string,
+    businessId: string,
+    input: QuotationDefaultsValues
+  ): Promise<QuotationDefaults> {
+    await this.auth.requirePermission(businessId, userId, "settings.manage");
+    const parsed = quotationDefaultsSchema.safeParse(input);
+    if (!parsed.success) {
+      throw AppError.validation(
+        "Please fix the highlighted fields.",
+        parsed.error.flatten().fieldErrors
+      );
+    }
+    const value = parseQuotationDefaults({
+      ...parsed.data,
+      watermarkImageUrl: parsed.data.watermarkImageUrl || null,
+      logoUrl: parsed.data.logoUrl || null,
+      signatureImageUrl: parsed.data.signatureImageUrl || null,
+      stampImageUrl: parsed.data.stampImageUrl || null,
+      signatureLabel: parsed.data.signatureLabel || DEFAULT_QUOTATION.signatureLabel,
+      messageTemplate: parsed.data.messageTemplate || DEFAULT_QUOTATION.messageTemplate,
+    });
+    await this.repos.businesses.setSetting(businessId, QUOTATION_SETTINGS_KEY, value, userId);
+    await this.audits.log({
+      businessId,
+      userId,
+      action: "settings.quotation.updated",
+      entityType: "business_settings",
+      entityId: businessId,
+      metadata: { defaultFormat: value.defaultFormat, validityDays: value.validityDays },
     });
     return value;
   }

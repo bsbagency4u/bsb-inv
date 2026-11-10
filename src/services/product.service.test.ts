@@ -190,6 +190,12 @@ function memoryRepositories() {
       async listSalesReturns() { return []; },
       async listSalesInvoicesForSearch() { return []; },
       async listPurchaseInvoicesForSearch() { return []; },
+      async listQuotations() { return []; },
+      async getQuotation() { return null; },
+      async createQuotation() { throw new Error("not used"); },
+      async updateQuotation() { throw new Error("not used"); },
+      async updateQuotationStatus() {},
+      async deleteQuotation() {},
     },
     notifications: {
       async list() { return []; },

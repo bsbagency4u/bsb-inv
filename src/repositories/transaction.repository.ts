@@ -11,6 +11,10 @@ import type {
   PurchaseOrder,
   PurchaseReceipt,
   PurchaseReturn,
+  Quotation,
+  QuotationFormat,
+  QuotationLine,
+  QuotationStatus,
   SalesInvoice,
   SalesInvoiceStatus,
   SalesReturn,
@@ -30,6 +34,8 @@ import {
   mapPurchaseReceiptItem,
   mapPurchaseReturn,
   mapPurchaseReturnItem,
+  mapQuotation,
+  mapQuotationItem,
   mapSalesInvoice,
   mapSalesReturn,
   mapSalesReturnItem,
@@ -134,6 +140,52 @@ export interface PaymentInput {
   allocations?: PaymentAllocationInput[];
 }
 
+export interface QuotationHeaderInput {
+  quotationNo: string;
+  customerId?: string | null;
+  partyName: string;
+  partyGstin?: string | null;
+  partyPhone?: string | null;
+  partyEmail?: string | null;
+  quotationDate: string;
+  validUntil?: string | null;
+  status: QuotationStatus;
+  format: QuotationFormat;
+  templateId?: string | null;
+  title?: string | null;
+  intro?: string | null;
+  scope?: string | null;
+  timeline?: string | null;
+  assumptions?: string | null;
+  termsAndConditions?: string | null;
+  notes?: string | null;
+  subtotal: number;
+  discount: number;
+  taxTotal: number;
+  total: number;
+  intraState?: boolean;
+  placeOfSupplyState?: string | null;
+  gstRegistrationSnapshot?: GstRegistrationType | null;
+  convertedSalesInvoiceId?: string | null;
+}
+
+export interface QuotationLineInput {
+  productId?: string | null;
+  name: string;
+  description?: string | null;
+  sku?: string | null;
+  hsn?: string | null;
+  quantity: number;
+  unit?: string | null;
+  unitPrice: number;
+  gstRate: number;
+  discount?: number;
+  taxableAmount?: number;
+  taxAmount?: number;
+  amount?: number;
+  gstSupplyType?: string | null;
+}
+
 export interface ReceiptItemInput {
   productId: string;
   variantId?: string | null;
@@ -187,6 +239,17 @@ export interface TransactionRepository {
   listSalesReturns(businessId: string): Promise<SalesReturn[]>;
   listSalesInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; invoiceNo: string; customerName: string | null }>>;
   listPurchaseInvoicesForSearch(businessId: string, query: string): Promise<Array<{ id: string; billNo: string; supplierName: string | null }>>;
+  listQuotations(businessId: string): Promise<Quotation[]>;
+  getQuotation(businessId: string, quotationId: string): Promise<Quotation | null>;
+  createQuotation(businessId: string, userId: string, header: QuotationHeaderInput, items: QuotationLineInput[]): Promise<Quotation>;
+  updateQuotation(businessId: string, quotationId: string, header: QuotationHeaderInput, items: QuotationLineInput[]): Promise<Quotation>;
+  updateQuotationStatus(
+    businessId: string,
+    quotationId: string,
+    status: QuotationStatus,
+    extra?: { convertedSalesInvoiceId?: string | null }
+  ): Promise<void>;
+  deleteQuotation(businessId: string, quotationId: string): Promise<void>;
 }
 
 const GST_SNAPSHOT_COLUMNS = [
@@ -1287,4 +1350,181 @@ export class SupabaseTransactionRepository implements TransactionRepository {
         supplierName: i.supplierId ? (supplierNames.get(i.supplierId) ?? null) : null,
       }));
   }
+
+  private async fetchQuotationItems(quotationId: string): Promise<QuotationLine[]> {
+    const { data, error } = await this.client
+      .from("quotation_items")
+      .select("*")
+      .eq("quotation_id", quotationId)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map(mapQuotationItem);
+  }
+
+  async listQuotations(businessId: string): Promise<Quotation[]> {
+    const { data, error } = await this.client
+      .from("quotations")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("quotation_date", { ascending: false });
+    if (error) throw error;
+    const rows = data ?? [];
+    const quotations: Quotation[] = [];
+    for (const row of rows) {
+      quotations.push({ ...mapQuotation(row), items: await this.fetchQuotationItems(row.id) });
+    }
+    return quotations;
+  }
+
+  async getQuotation(businessId: string, quotationId: string): Promise<Quotation | null> {
+    const { data, error } = await this.client
+      .from("quotations")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", quotationId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { ...mapQuotation(data), items: await this.fetchQuotationItems(data.id) };
+  }
+
+  async createQuotation(
+    businessId: string,
+    userId: string,
+    header: QuotationHeaderInput,
+    items: QuotationLineInput[]
+  ): Promise<Quotation> {
+    const { data, error } = await this.client
+      .from("quotations")
+      .insert(quotationHeaderToRow(businessId, userId, header))
+      .select()
+      .single();
+    if (error) throw error;
+    if (items.length > 0) {
+      const { error: itemError } = await this.client
+        .from("quotation_items")
+        .insert(items.map((item, index) => quotationLineToRow(data.id, item, index)));
+      if (itemError) throw itemError;
+    }
+    return { ...mapQuotation(data), items: await this.fetchQuotationItems(data.id) };
+  }
+
+  async updateQuotation(
+    businessId: string,
+    quotationId: string,
+    header: QuotationHeaderInput,
+    items: QuotationLineInput[]
+  ): Promise<Quotation> {
+    const payload = quotationHeaderToRow(businessId, null, header);
+    delete (payload as { business_id?: string }).business_id;
+    delete (payload as { created_by?: string | null }).created_by;
+    const { data, error } = await this.client
+      .from("quotations")
+      .update(payload)
+      .eq("business_id", businessId)
+      .eq("id", quotationId)
+      .select()
+      .single();
+    if (error) throw error;
+    const { error: deleteError } = await this.client
+      .from("quotation_items")
+      .delete()
+      .eq("quotation_id", quotationId);
+    if (deleteError) throw deleteError;
+    if (items.length > 0) {
+      const { error: itemError } = await this.client
+        .from("quotation_items")
+        .insert(items.map((item, index) => quotationLineToRow(quotationId, item, index)));
+      if (itemError) throw itemError;
+    }
+    return { ...mapQuotation(data), items: await this.fetchQuotationItems(quotationId) };
+  }
+
+  async updateQuotationStatus(
+    businessId: string,
+    quotationId: string,
+    status: QuotationStatus,
+    extra?: { convertedSalesInvoiceId?: string | null }
+  ): Promise<void> {
+    const patch: { status: QuotationStatus; converted_sales_invoice_id?: string | null } = { status };
+    if (extra && "convertedSalesInvoiceId" in extra) {
+      patch.converted_sales_invoice_id = extra.convertedSalesInvoiceId ?? null;
+    }
+    const { error } = await this.client
+      .from("quotations")
+      .update(patch)
+      .eq("business_id", businessId)
+      .eq("id", quotationId);
+    if (error) throw error;
+  }
+
+  async deleteQuotation(businessId: string, quotationId: string): Promise<void> {
+    const { error } = await this.client
+      .from("quotations")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("id", quotationId);
+    if (error) throw error;
+  }
+}
+
+function quotationHeaderToRow(
+  businessId: string,
+  userId: string | null,
+  header: QuotationHeaderInput
+) {
+  return {
+    business_id: businessId,
+    quotation_no: header.quotationNo,
+    customer_id: header.customerId ?? null,
+    party_name: header.partyName,
+    party_gstin: header.partyGstin ?? null,
+    party_phone: header.partyPhone ?? null,
+    party_email: header.partyEmail ?? null,
+    quotation_date: header.quotationDate,
+    valid_until: header.validUntil ?? null,
+    status: header.status,
+    format: header.format,
+    template_id: header.templateId ?? null,
+    title: header.title ?? null,
+    intro: header.intro ?? null,
+    scope: header.scope ?? null,
+    timeline: header.timeline ?? null,
+    assumptions: header.assumptions ?? null,
+    terms_and_conditions: header.termsAndConditions ?? null,
+    notes: header.notes ?? null,
+    subtotal: header.subtotal,
+    discount: header.discount,
+    tax_total: header.taxTotal,
+    total: header.total,
+    intra_state: header.intraState ?? true,
+    place_of_supply_state: header.placeOfSupplyState ?? null,
+    gst_registration_snapshot: header.gstRegistrationSnapshot ?? null,
+    converted_sales_invoice_id: header.convertedSalesInvoiceId ?? null,
+    created_by: userId,
+  };
+}
+
+function quotationLineToRow(quotationId: string, item: QuotationLineInput, sortOrder: number) {
+  const gross = item.quantity * item.unitPrice;
+  const taxable = item.taxableAmount ?? Math.max(0, gross - (item.discount ?? 0));
+  const tax = item.taxAmount ?? (taxable * item.gstRate) / 100;
+  return {
+    quotation_id: quotationId,
+    product_id: item.productId ?? null,
+    name: item.name,
+    description: item.description ?? null,
+    sku: item.sku ?? null,
+    hsn: item.hsn ?? null,
+    quantity: item.quantity,
+    unit: item.unit ?? null,
+    unit_price: item.unitPrice,
+    gst_rate: item.gstRate,
+    discount: item.discount ?? 0,
+    taxable_amount: taxable,
+    tax_amount: tax,
+    amount: item.amount ?? taxable + tax,
+    gst_supply_type: item.gstSupplyType ?? null,
+    sort_order: sortOrder,
+  };
 }

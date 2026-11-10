@@ -48,5 +48,7 @@ export type {
   PurchaseInvoiceHeaderInput,
   PaymentInput,
   LineItemInput,
+  QuotationHeaderInput,
+  QuotationLineInput,
 } from "./transaction.repository";
 export type { InvitationInput } from "./team.repository";

@@ -6,6 +6,7 @@ export const DOCUMENT_CONTROL_KINDS: DocumentControlKind[] = [
   "sales_return",
   "purchase_return",
   "payment",
+  "quotation",
 ];
 
 export const DOCUMENT_CONTROL_KIND_META: Record<
@@ -17,6 +18,7 @@ export const DOCUMENT_CONTROL_KIND_META: Record<
   sales_return: { label: "Sales return", sequenceKind: "sales_return", defaultPrefix: "SRT" },
   purchase_return: { label: "Purchase return", sequenceKind: "purchase_return", defaultPrefix: "PRT" },
   payment: { label: "Payment", sequenceKind: "payment", defaultPrefix: "PAY" },
+  quotation: { label: "Quotation", sequenceKind: "quotation", defaultPrefix: "QTN" },
 };
 
 export const DEFAULT_DOCUMENT_CONTROL: DocumentControlDefaults = {
@@ -37,6 +39,7 @@ export const DEFAULT_DOCUMENT_CONTROL: DocumentControlDefaults = {
     sales_return: { prefix: "SRT" },
     purchase_return: { prefix: "PRT" },
     payment: { prefix: "PAY" },
+    quotation: { prefix: "QTN" },
   },
 };
 

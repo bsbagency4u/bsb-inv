@@ -7,12 +7,16 @@ import type {
   ProductWithStock,
   PurchaseInvoice,
   PurchaseReturn,
+  Quotation,
+  QuotationDefaults,
   SalesInvoice,
   SalesReturn,
   Supplier,
 } from "@/types/domain";
 import type { PrintDocumentModel, PrintLine } from "@/lib/invoice-print";
+import type { QuotationPrintModel } from "@/lib/quotation-print";
 import { gstDocumentHeading } from "@/lib/gst";
+import { DEFAULT_QUOTATION, defaultTemplateForFormat, parseQuotationDefaults } from "@/lib/quotation-settings";
 
 function productLookup(products: ProductWithStock[] | undefined | null) {
   return new Map((products ?? []).map((product) => [product.id, product]));
@@ -253,6 +257,47 @@ export function customerContact(customer: Customer | null | undefined) {
   return {
     partyGstin: customer?.gstin ?? null,
     partyPhone: customer?.phone ?? null,
+  };
+}
+
+export function quotationPrintModel(
+  quotation: Quotation,
+  options: {
+    partyLabel?: string;
+    partyGstin?: string | null;
+    partyPhone?: string | null;
+    partyEmail?: string | null;
+    settings?: QuotationDefaults | Partial<QuotationDefaults> | null;
+  } = {}
+): QuotationPrintModel {
+  const settings = parseQuotationDefaults(options.settings ?? DEFAULT_QUOTATION);
+  const taxTotal = quotation.taxTotal;
+  const intraState = quotation.intraState !== false;
+  const template =
+    settings.templates.find((item) => item.id === quotation.templateId) ??
+    defaultTemplateForFormat(settings, quotation.format);
+  return {
+    quotation,
+    settings,
+    template,
+    partyLabel: options.partyLabel || quotation.partyName,
+    partyGstin: options.partyGstin ?? quotation.partyGstin,
+    partyPhone: options.partyPhone ?? quotation.partyPhone,
+    partyEmail: options.partyEmail ?? quotation.partyEmail,
+    lines: quotation.items.map((item) => ({
+      name: item.name,
+      sku: item.sku,
+      hsn: item.hsn,
+      quantity: item.quantity,
+      unit: item.unit,
+      unitPrice: item.unitPrice,
+      discount: item.discount,
+      gstRate: item.gstRate,
+      amount: item.amount,
+    })),
+    cgst: intraState ? taxTotal / 2 : 0,
+    sgst: intraState ? taxTotal / 2 : 0,
+    igst: intraState ? 0 : taxTotal,
   };
 }
 

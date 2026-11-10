@@ -166,7 +166,7 @@ export default function InvoiceSettingsPage() {
                   Document types
                 </CardTitle>
                 <CardDescription>
-                  Choose which saved documents can print, export PDF or share. Quotations and challans store layout only.
+                  Choose which saved documents can print, export PDF or share. Delivery challans store layout only.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
