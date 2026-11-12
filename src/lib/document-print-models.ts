@@ -286,6 +286,7 @@ export function quotationPrintModel(
     partyEmail: options.partyEmail ?? quotation.partyEmail,
     lines: quotation.items.map((item) => ({
       name: item.name,
+      description: item.description,
       sku: item.sku,
       hsn: item.hsn,
       quantity: item.quantity,

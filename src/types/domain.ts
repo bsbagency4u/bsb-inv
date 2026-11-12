@@ -289,6 +289,8 @@ export interface QuotationDefaults {
   validityDays: number;
   paperSize: InvoicePaperSize;
   orientation: InvoiceOrientation;
+  customWidthMm: number;
+  customHeightMm: number;
   showLogo: boolean;
   showGstin: boolean;
   showHsn: boolean;

@@ -250,11 +250,21 @@ export default function QuotationSettingsPage() {
                 <Field label="Paper" htmlFor="q-paper">
                   <Select
                     id="q-paper"
-                    value={settings.paperSize === "a5" ? "a5" : "a4"}
-                    onChange={(event) => patch({ paperSize: event.target.value === "a5" ? "a5" : "a4" })}
+                    value={settings.paperSize}
+                    onChange={(event) =>
+                      patch({
+                        paperSize:
+                          event.target.value === "a5"
+                            ? "a5"
+                            : event.target.value === "custom"
+                              ? "custom"
+                              : "a4",
+                      })
+                    }
                   >
                     <option value="a4">A4</option>
                     <option value="a5">A5</option>
+                    <option value="custom">Custom</option>
                   </Select>
                 </Field>
                 <Field label="Orientation" htmlFor="q-orient">
@@ -267,6 +277,30 @@ export default function QuotationSettingsPage() {
                     <option value="landscape">Landscape</option>
                   </Select>
                 </Field>
+                {settings.paperSize === "custom" ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Width (mm)" htmlFor="q-paper-w">
+                      <Input
+                        id="q-paper-w"
+                        type="number"
+                        min={40}
+                        max={400}
+                        value={settings.customWidthMm}
+                        onChange={(event) => patch({ customWidthMm: Number(event.target.value) || 210 })}
+                      />
+                    </Field>
+                    <Field label="Height (mm)" htmlFor="q-paper-h">
+                      <Input
+                        id="q-paper-h"
+                        type="number"
+                        min={40}
+                        max={600}
+                        value={settings.customHeightMm}
+                        onChange={(event) => patch({ customHeightMm: Number(event.target.value) || 297 })}
+                      />
+                    </Field>
+                  </div>
+                ) : null}
                 <ToggleRow label="Show logo" hint="Uses the quotation logo, falling back to the business logo." checked={settings.showLogo} onCheckedChange={(checked) => patch({ showLogo: checked })} ariaLabel="Show logo" />
                 <ToggleRow label="Show GSTIN" hint="Prints business and party GSTIN when present." checked={settings.showGstin} onCheckedChange={(checked) => patch({ showGstin: checked })} ariaLabel="Show GSTIN" />
                 <ToggleRow label="Show HSN" hint="HSN/SAC column on itemised quotes." checked={settings.showHsn} onCheckedChange={(checked) => patch({ showHsn: checked })} ariaLabel="Show HSN" />

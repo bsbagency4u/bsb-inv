@@ -598,6 +598,16 @@ export const quotationDefaultsSchema = z.object({
     .pipe(z.number().int().min(1).max(365)),
   paperSize: z.enum(["a4", "a5", "thermal", "custom"]),
   orientation: z.enum(["portrait", "landscape"]).optional(),
+  customWidthMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 210 : Number(v)))
+    .pipe(z.number().min(40).max(400))
+    .optional(),
+  customHeightMm: z
+    .union([z.number(), z.string().trim()])
+    .transform((v) => (typeof v === "string" && v === "" ? 297 : Number(v)))
+    .pipe(z.number().min(40).max(600))
+    .optional(),
   showLogo: z.boolean(),
   showGstin: z.boolean(),
   showHsn: z.boolean(),

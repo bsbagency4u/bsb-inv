@@ -285,7 +285,7 @@ export default function QuotationsPage() {
         onClose={() => setDetail(null)}
         title={detail?.quotationNo ?? "Quotation"}
         description={detail ? `${detail.partyName} · ${formatDate(detail.quotationDate)}` : undefined}
-        size="lg"
+        size="2xl"
         footer={
           detail ? (
             <>
@@ -332,6 +332,7 @@ export default function QuotationsPage() {
                 invoiceDefaults={invoiceDefaults ?? DEFAULT_INVOICE}
                 model={printModel(detail)}
                 currency={business.currency ?? "INR"}
+                showPreview
               />
             ) : null}
           </div>

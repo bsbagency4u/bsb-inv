@@ -11,6 +11,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 
 export interface PrintLine {
   name: string;
+  description?: string | null;
   sku?: string | null;
   hsn?: string | null;
   batchNo?: string | null;
